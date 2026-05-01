@@ -23,7 +23,8 @@ impl TemplateCache {
     ///   exceeded, the least recently used templates are automatically evicted.
     pub fn new(capacity: usize) -> Self {
         Self {
-            inner: Mutex::new(LruCache::new(NonZeroUsize::new(capacity).unwrap())),
+            // Default to a minimum capacity of 1 to prevent a panic if capacity is 0.
+            inner: Mutex::new(LruCache::new(NonZeroUsize::new(capacity.max(1)).unwrap())),
         }
     }
 
@@ -36,21 +37,27 @@ impl TemplateCache {
     /// Returns a `String` describing the syntax error if a cache miss occurs and 
     /// the subsequent compilation fails.
     pub fn get_or_compile(&self, raw: &str) -> Result<Arc<Template>, String> {
-        let mut cache = self.inner.lock().unwrap();
-
-        // 1. Cache Hit: If the template is already compiled, return an Arc pointer to it.
-        // The `lru` crate efficiently updates the access order in O(1) time.
-        if let Some(template) = cache.get(raw) {
+        // First, check if the template is already in the cache, holding the lock briefly.
+        if let Some(template) = self.inner.lock().unwrap().get(raw) {
             return Ok(Arc::clone(template));
         }
 
-        // 2. Cache Miss: Compile the raw string into an AST.
+        // If not, compile it. This is the slow part, and it happens outside the lock
+        // to prevent holding up other threads that might need the cache for other templates.
         let compiled_template = Template::compile(raw)?;
         let arc_template = Arc::new(compiled_template);
 
-        // 3. Store it in the cache for future use.
-        cache.put(raw.to_string(), Arc::clone(&arc_template));
+        // Now, re-acquire the lock to insert the compiled template.
+        let mut cache = self.inner.lock().unwrap();
 
-        Ok(arc_template)
+        // It's possible another thread also had a cache miss and inserted the template
+        // while we were compiling. We check again. If it exists, we use it. If not,
+        // we insert our newly compiled one. This is a common "get or insert" pattern.
+        let final_template = cache.get(raw).map(Arc::clone).unwrap_or_else(|| {
+            cache.put(raw.to_string(), Arc::clone(&arc_template));
+            arc_template
+        });
+
+        Ok(final_template)
     }
 }

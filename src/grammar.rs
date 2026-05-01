@@ -90,11 +90,17 @@ pub fn conjugate_verb<'a>(base_verb: &'a str, is_viewer: bool, is_plural: bool) 
         base_verb
     };
 
+    let is_capitalized = base_verb.chars().next().is_some_and(|c| c.is_uppercase());
+
     // 1st/2nd person (viewer) AND 3rd-person plural subjects use the base uninflected verb,
     // EXCEPT for the highly irregular verb "to be" which becomes "are".
     if is_viewer || is_plural {
         if lower_verb == "be" {
-            return Cow::Borrowed("are");
+            let result = "are";
+            if is_capitalized {
+                return Cow::Owned(capitalize_first(result));
+            }
+            return Cow::Borrowed(result);
         }
         // If you want strict 1st person singular ("I am") you can split `is_viewer` logic later, 
         // but for Actor Stance ("You"), "are" is always correct.
@@ -103,6 +109,9 @@ pub fn conjugate_verb<'a>(base_verb: &'a str, is_viewer: bool, is_plural: bool) 
 
     // 1. Check our static PHF map for irregular overrides (3rd person singular)
     if let Some(&irregular) = IRREGULAR_VERBS.get(lower_verb) {
+        if is_capitalized {
+            return Cow::Owned(capitalize_first(irregular));
+        }
         return Cow::Borrowed(irregular);
     }
 
@@ -114,6 +123,15 @@ pub fn conjugate_verb<'a>(base_verb: &'a str, is_viewer: bool, is_plural: bool) 
         Cow::Owned(format!("{}ies", trimmed))
     } else {
         Cow::Owned(format!("{}s", base_verb))
+    }
+}
+
+/// Capitalizes the first letter of a string slice.
+fn capitalize_first(s: &str) -> String {
+    let mut c = s.chars();
+    match c.next() {
+        None => String::new(),
+        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
     }
 }
 

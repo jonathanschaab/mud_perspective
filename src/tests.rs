@@ -315,6 +315,31 @@ mod tests {
         assert_eq!(verb_err, "Malformed verb tag: [a:b:c]");
     }
 
+    #[test]
+    fn test_capitalized_irregular_verbs() {
+        let player = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+
+        let cache = TemplateCache::new(100);
+
+        // --- TEST 1: "Be" -> "Is" ---
+        // The post-processor will capitalize the 'A' of Aldran. The conjugation logic
+        // should capitalize the 'I' of 'is' because the base verb "Be" is capitalized.
+        let template_be = cache.get_or_compile("{source} [source:Be] here.").unwrap();
+        let director_be = render_msg!("char_3", &template_be, "source" => &player).unwrap();
+        assert_eq!(director_be, "Aldran Is here.");
+
+        // --- TEST 2: "Have" -> "Has" ---
+        let template_have = cache.get_or_compile("{source} [source:Have] a sword.").unwrap();
+        let director_have = render_msg!("char_3", &template_have, "source" => &player).unwrap();
+        assert_eq!(director_have, "Aldran Has a sword.");
+    }
+
     pub struct GroupEntity<'a> {
         pub members: Vec<&'a dyn TemplateEntity>,
     }
