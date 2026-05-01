@@ -281,22 +281,29 @@ impl PerspectiveEngine {
                     // Handle dynamic "a" or "an" injection
                     if let Some(art) = article
                         && !is_viewer
-                        && (!entity.is_proper_noun_for(ctx.viewer_id)
-                            || (entity.is_plural() && art.eq_ignore_ascii_case("the")))
+                        && !entity.is_proper_noun_for(ctx.viewer_id)
                     {
                         let is_capitalized = art.starts_with(|c: char| c.is_uppercase());
 
                         if art.eq_ignore_ascii_case("a") || art.eq_ignore_ascii_case("an") {
-                            let indefinite = get_indefinite_article(name_str);
-                            if is_capitalized {
-                                if indefinite == "a" {
-                                    raw_output.push_str("A ");
+                            if entity.is_plural() {
+                                if is_capitalized {
+                                    raw_output.push_str("Some ");
                                 } else {
-                                    raw_output.push_str("An ");
+                                    raw_output.push_str("some ");
                                 }
                             } else {
-                                raw_output.push_str(indefinite);
-                                raw_output.push(' ');
+                                let indefinite = get_indefinite_article(name_str);
+                                if is_capitalized {
+                                    if indefinite == "a" {
+                                        raw_output.push_str("A ");
+                                    } else {
+                                        raw_output.push_str("An ");
+                                    }
+                                } else {
+                                    raw_output.push_str(indefinite);
+                                    raw_output.push(' ');
+                                }
                             }
                         } else if art.eq_ignore_ascii_case("the") {
                             if is_capitalized {

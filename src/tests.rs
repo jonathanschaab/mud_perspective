@@ -36,6 +36,8 @@ mod tests {
             // If the viewer is a stranger, hide Aldran's real name.
             if viewer_id == "stranger_1" && self.name == "Aldran" {
                 Cow::Borrowed("tall man")
+            } else if viewer_id == "stranger_1" && self.name == "the Avengers" {
+                Cow::Borrowed("masked heroes")
             } else {
                 Cow::Borrowed(&self.name)
             }
@@ -43,7 +45,7 @@ mod tests {
 
         fn is_proper_noun_for(&self, viewer_id: &str) -> bool {
             // If the stranger sees the masked "tall man", it is no longer a proper noun
-            if viewer_id == "stranger_1" && self.name == "Aldran" {
+            if viewer_id == "stranger_1" && (self.name == "Aldran" || self.name == "the Avengers") {
                 false
             } else {
                 self.is_proper_noun
@@ -150,24 +152,83 @@ mod tests {
         assert_eq!(output_the_viewer, "You are here.");
 
         // --- SCENARIO 6: Plural proper nouns (e.g. "The Smiths", "The Avengers") ---
+        // The correct way to handle these is to include "the" in the entity's name
+        // and flag it as a proper noun so the engine doesn't inject redundant articles.
         let avengers = MockEntity {
             id: "mob_2".to_string(),
-            name: "Avengers".to_string(),
+            name: "the Avengers".to_string(),
             gender: Gender::Plural,
             is_plural: true,
             is_proper_noun: true,
         };
 
-        // Indefinite article "a" should STILL be suppressed
+        // Indefinite article "a" is suppressed, leaving the base name "the Avengers" (capitalized by typography)
         let template_a_plural = cache.get_or_compile("{a:source} assemble!").unwrap();
-        let output_a_plural = render_msg!("char_2", &template_a_plural, "source" => &avengers).unwrap();
-        assert_eq!(output_a_plural, "Avengers assemble!");
+        let output_a_plural =
+            render_msg!("char_2", &template_a_plural, "source" => &avengers).unwrap();
+        assert_eq!(output_a_plural, "The Avengers assemble!");
 
-        // Definite article "the" should NOT be suppressed
+        // Definite article "the" is suppressed, leaving the base name "the Avengers"
         let template_the_plural = cache.get_or_compile("{The:source} assemble!").unwrap();
         let output_the_plural =
             render_msg!("char_2", &template_the_plural, "source" => &avengers).unwrap();
         assert_eq!(output_the_plural, "The Avengers assemble!");
+
+        // --- SCENARIO 7: Plural common nouns (e.g. "wolves") ---
+        let wolves = MockEntity {
+            id: "mob_3".to_string(),
+            name: "wolves".to_string(),
+            gender: Gender::Plural,
+            is_plural: true,
+            is_proper_noun: false,
+        };
+
+        // Indefinite article "a" should evaluate to "some" for plural common nouns
+        let template_a_common_plural = cache.get_or_compile("{a:source} howl.").unwrap();
+        let output_a_common_plural =
+            render_msg!("char_2", &template_a_common_plural, "source" => &wolves).unwrap();
+        assert_eq!(output_a_common_plural, "Some wolves howl.");
+
+        // Definite article "the" should NOT be suppressed for plural common nouns
+        let template_the_common_plural = cache.get_or_compile("{The:source} howl.").unwrap();
+        let output_the_common_plural =
+            render_msg!("char_2", &template_the_common_plural, "source" => &wolves).unwrap();
+        assert_eq!(output_the_common_plural, "The wolves howl.");
+    }
+
+    #[test]
+    fn test_disguised_plural_proper_nouns() {
+        let avengers = MockEntity {
+            id: "mob_2".to_string(),
+            name: "the Avengers".to_string(),
+            gender: Gender::Plural,
+            is_plural: true,
+            is_proper_noun: true,
+        };
+
+        let cache = TemplateCache::new(100);
+
+        let template_a = cache.get_or_compile("{a:source} [source:arrive].").unwrap();
+        let template_the = cache
+            .get_or_compile("{the:source} [source:arrive].")
+            .unwrap();
+
+        // 1. Friend's perspective (knows they are The Avengers)
+        let out_friend_a = render_msg!("char_2", &template_a, "source" => &avengers).unwrap();
+        let out_friend_the = render_msg!("char_2", &template_the, "source" => &avengers).unwrap();
+
+        // Suppresses articles natively because they are recognized as a proper noun
+        assert_eq!(out_friend_a, "The Avengers arrive.");
+        assert_eq!(out_friend_the, "The Avengers arrive.");
+
+        // 2. Stranger's perspective (sees "masked heroes")
+        let out_stranger_a = render_msg!("stranger_1", &template_a, "source" => &avengers).unwrap();
+        let out_stranger_the =
+            render_msg!("stranger_1", &template_the, "source" => &avengers).unwrap();
+
+        // Evaluates as a common plural noun, meaning `{a:source}` maps to "Some", and `{the:source}` maps to "The"
+        assert_eq!(out_stranger_a, "Some masked heroes arrive.");
+        assert_eq!(out_stranger_the, "The masked heroes arrive.");
     }
 
     #[test]
