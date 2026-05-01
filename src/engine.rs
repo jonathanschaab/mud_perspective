@@ -19,6 +19,8 @@ pub enum Token {
         force_article: bool,
         /// A flag indicating if the builder explicitly forced the 3rd-person stance (e.g. {+source}).
         force_3rd_person: bool,
+        /// A flag indicating if the builder explicitly forced the possessive form (e.g. {source's}).
+        is_possessive: bool,
     },
     /// e.g., {source:poss}
     PronounRef {
@@ -161,6 +163,7 @@ impl Template {
             // 2-part case: {article:key}
             if is_article {
                 let (p2_str, force_3rd_person) = parse_stance_prefixes(p2);
+                let (p2_str, is_possessive) = parse_possessive_suffix(p2_str);
 
                 if p2_str.is_empty() {
                     return Err(validation_error(
@@ -175,10 +178,13 @@ impl Template {
                     is_capitalized: p2_str.chars().next().is_some_and(char::is_uppercase),
                     force_article,
                     force_3rd_person,
+                    is_possessive,
                 })
             } else {
                 // 2-part case: {key:pronoun}
                 let (p1_str, force_3rd_person) = parse_stance_prefixes(p1);
+                // Strip trailing 's in case someone made a typo like {source's:subj}
+                let (p1_str, _) = parse_possessive_suffix(p1_str);
 
                 if p1_str.is_empty() || p2.is_empty() {
                     return Err(validation_error(
@@ -197,6 +203,7 @@ impl Template {
         } else {
             // 1-part case: {key}
             let (p1_str, force_3rd_person) = parse_stance_prefixes(p1);
+            let (p1_str, is_possessive) = parse_possessive_suffix(p1_str);
 
             if p1_str.is_empty() {
                 return Err(validation_error(
@@ -211,6 +218,7 @@ impl Template {
                 is_capitalized: p1_str.chars().next().is_some_and(char::is_uppercase),
                 force_article: false,
                 force_3rd_person,
+                is_possessive,
             })
         }
     }
@@ -295,10 +303,25 @@ impl PerspectiveEngine {
 
     #[inline]
     fn get_entity<'a>(ctx: &'a RenderContext, key: &str) -> Result<&'a dyn TemplateEntity, String> {
-        ctx.entities.get(key).copied().ok_or_else(|| {
-            tracing::error!("Failed to render template: Missing entity for key '{key}'");
-            format!("Missing entity for key: {key}")
-        })
+        // 1. Try exact match first (e.g., "source")
+        if let Some(entity) = ctx.entities.get(key).copied() {
+            return Ok(entity);
+        }
+
+        // 2. Try dot notation traversal (e.g., "source.left_arm.weapon")
+        if let Some((root_key, prop_path)) = key.split_once('.')
+            && let Some(mut current) = ctx.entities.get(root_key).copied()
+        {
+            for prop in prop_path.split('.') {
+                current = current
+                    .get_property(prop)
+                    .ok_or_else(|| format!("Missing property '{prop}' on entity '{root_key}'"))?;
+            }
+            return Ok(current);
+        }
+
+        tracing::error!("Failed to render template: Missing entity for key '{key}'");
+        Err(format!("Missing entity for key: {key}"))
     }
 
     fn render_entity_ref(
@@ -312,10 +335,13 @@ impl PerspectiveEngine {
             is_capitalized,
             force_article,
             force_3rd_person,
+            is_possessive,
         } = token
         else {
             return Ok(());
         };
+
+        *ctx.last_mentioned.borrow_mut() = Some(key.clone());
 
         let entity = Self::get_entity(ctx, key)?;
         let effective_viewer = if *force_3rd_person {
@@ -326,49 +352,19 @@ impl PerspectiveEngine {
 
         // --- Handle Groups / Distributed Lists ---
         if let Some(members) = entity.group_members() {
-            let (viewer_entity, visible) =
-                crate::models::partition_group(members, effective_viewer);
-
-            let has_viewer = viewer_entity.is_some();
-            let total_visible = visible.len() + usize::from(has_viewer);
-            if total_visible == 0 {
-                return Ok(());
-            }
-
-            let mut formatted_names = Vec::with_capacity(total_visible);
-            if has_viewer {
-                formatted_names.push(std::borrow::Cow::Borrowed("you"));
-            }
-
-            for (m, name) in visible {
-                if let Some(art) = article
-                    && let Some(resolved_art) = resolve_article(
-                        art,
-                        &name,
-                        m.is_proper_noun_for(effective_viewer),
-                        m.is_plural(),
-                        *force_article,
-                    )
-                {
-                    formatted_names.push(std::borrow::Cow::Owned(format!("{resolved_art}{name}")));
-                    continue;
-                }
-                formatted_names.push(name);
-            }
-
-            let list_str = crate::grammar::format_oxford_list(formatted_names);
-
-            if *is_capitalized && list_str.chars().next().is_some_and(char::is_lowercase) {
-                raw_output.push_str(&crate::grammar::capitalize_first(&list_str));
-            } else {
-                raw_output.push_str(&list_str);
-            }
+            Self::render_group_entity(raw_output, entity, members, effective_viewer, token);
             return Ok(());
         }
 
         // --- Handle Single Entity Viewers ---
         if entity.contains_viewer(effective_viewer) {
-            let name_str = if *is_capitalized { "You" } else { "you" };
+            let name_str = if *is_possessive {
+                if *is_capitalized { "Your" } else { "your" }
+            } else if *is_capitalized {
+                "You"
+            } else {
+                "you"
+            };
             raw_output.push_str(name_str);
             return Ok(());
         }
@@ -399,7 +395,85 @@ impl PerspectiveEngine {
         }
 
         raw_output.push_str(name_str);
+
+        if *is_possessive {
+            Self::append_possessive_suffix(raw_output, entity.is_plural());
+        }
         Ok(())
+    }
+
+    fn render_group_entity(
+        raw_output: &mut String,
+        entity: &dyn TemplateEntity,
+        members: &[&dyn TemplateEntity],
+        effective_viewer: &str,
+        token: &Token,
+    ) {
+        let Token::EntityRef {
+            article,
+            is_capitalized,
+            force_article,
+            is_possessive,
+            ..
+        } = token
+        else {
+            return;
+        };
+
+        let (viewer_entity, visible) = crate::models::partition_group(members, effective_viewer);
+
+        let has_viewer = viewer_entity.is_some();
+        let total_visible = visible.len() + usize::from(has_viewer);
+        if total_visible == 0 {
+            return;
+        }
+
+        let mut formatted_names = Vec::with_capacity(total_visible);
+        if has_viewer {
+            formatted_names.push(std::borrow::Cow::Borrowed("you"));
+        }
+
+        for (m, name) in visible {
+            if let Some(art) = article
+                && let Some(resolved_art) = resolve_article(
+                    art,
+                    &name,
+                    m.is_proper_noun_for(effective_viewer),
+                    m.is_plural(),
+                    *force_article,
+                )
+            {
+                formatted_names.push(std::borrow::Cow::Owned(format!("{resolved_art}{name}")));
+                continue;
+            }
+            formatted_names.push(name);
+        }
+
+        let list_str = crate::grammar::format_oxford_list(formatted_names);
+
+        let mut final_str = list_str.into_owned();
+        if *is_possessive {
+            Self::append_possessive_suffix(&mut final_str, entity.is_plural());
+        }
+
+        if *is_capitalized && final_str.chars().next().is_some_and(char::is_lowercase) {
+            raw_output.push_str(&crate::grammar::capitalize_first(&final_str));
+        } else {
+            raw_output.push_str(&final_str);
+        }
+    }
+
+    #[inline]
+    fn append_possessive_suffix(output: &mut String, is_plural: bool) {
+        if output.ends_with('s') || output.ends_with('S') {
+            if is_plural {
+                output.push('\'');
+            } else {
+                output.push_str("'s");
+            }
+        } else {
+            output.push_str("'s");
+        }
     }
 
     fn render_pronoun_ref(
@@ -425,12 +499,44 @@ impl PerspectiveEngine {
         };
 
         let is_viewer = entity.contains_viewer(effective_viewer);
-        let pronoun = resolve_pronoun(entity.gender(), p_type, is_viewer, entity.is_plural())?;
 
-        if *is_capitalized {
-            raw_output.push_str(&crate::grammar::capitalize_first(pronoun));
+        let is_active_subject = ctx.active_subject.borrow().as_deref() == Some(key.as_str());
+
+        // Check if this entity is the current subject of the narrative.
+        // The inner block ensures the borrow is dropped before any recursive calls are made.
+        let already_seen = {
+            let mut last = ctx.last_mentioned.borrow_mut();
+            let seen = last.as_deref() == Some(key.as_str());
+            *last = Some(key.clone()); // Update memory, as we are currently talking about them!
+            seen
+        };
+
+        let is_reflexive = p_type == "reflex";
+
+        if already_seen || is_active_subject || is_viewer || is_reflexive {
+            let pronoun = resolve_pronoun(entity.gender(), p_type, is_viewer, entity.is_plural())?;
+            if *is_capitalized {
+                raw_output.push_str(&crate::grammar::capitalize_first(pronoun));
+            } else {
+                raw_output.push_str(pronoun);
+            }
         } else {
-            raw_output.push_str(pronoun);
+            // Smart Anaphora Resolution: The entity hasn't been introduced yet!
+            // Evaluate it as if the builder had written `{the:key}` instead.
+            let is_possessive = p_type == "poss" || p_type == "abs_poss";
+            let fallback_token = Token::EntityRef {
+                key: key.clone(),
+                article: Some(if *is_capitalized {
+                    "The".to_string()
+                } else {
+                    "the".to_string()
+                }),
+                is_capitalized: false, // The noun shouldn't be force-capitalized just because the pronoun was!
+                force_article: false,
+                force_3rd_person: *force_3rd_person,
+                is_possessive,
+            };
+            Self::render_entity_ref(ctx, raw_output, &fallback_token)?;
         }
         Ok(())
     }
@@ -459,6 +565,7 @@ impl PerspectiveEngine {
             } else {
                 ctx.viewer_id
             };
+            *ctx.active_subject.borrow_mut() = Some(key.clone());
             (entity.contains_viewer(effective_viewer), entity.is_plural())
         } else {
             // Safe default to 3rd-person singular if no subject is bound
@@ -668,6 +775,16 @@ fn validation_error(message: &str, content: &str, open_char: char) -> String {
 #[inline]
 fn parse_stance_prefixes(s: &str) -> (&str, bool) {
     if let Some(stripped) = s.strip_prefix('+') {
+        (stripped, true)
+    } else {
+        (s, false)
+    }
+}
+
+/// Parses possessive suffix `'s`, returning the stripped string and a boolean flag.
+#[inline]
+fn parse_possessive_suffix(s: &str) -> (&str, bool) {
+    if let Some(stripped) = s.strip_suffix("'s") {
         (stripped, true)
     } else {
         (s, false)
