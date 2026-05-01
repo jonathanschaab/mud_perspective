@@ -205,20 +205,13 @@ pub fn get_indefinite_article(word: &str) -> &str {
 /// **Note:** The returned string includes a trailing space (e.g., `"The "`, `"a "`) to ensure
 /// correct formatting when appended directly before the entity name.
 #[must_use]
-#[allow(clippy::fn_params_excessive_bools)]
 pub fn resolve_article(
     article: &str,
     entity_name: &str,
-    is_viewer: bool,
     is_proper_noun: bool,
     is_plural: bool,
     force_article: bool,
 ) -> Option<&'static str> {
-    // The viewer ALWAYS suppresses all articles/demonstratives ("This you" makes no sense)
-    if is_viewer {
-        return None;
-    }
-
     // Suppress articles for proper nouns unless the builder explicitly forced it
     if is_proper_noun && !force_article {
         return None;
@@ -253,5 +246,22 @@ pub fn resolve_article(
         }
     } else {
         None
+    }
+}
+
+/// Formats a list of strings into a grammatically correct, Oxford comma-separated string.
+///
+/// # Panics
+/// Panics if internal vector bounds checks fail (though the function logic guarantees this is impossible).
+#[must_use]
+pub fn format_oxford_list(mut items: Vec<Cow<'_, str>>) -> Cow<'_, str> {
+    match items.len() {
+        0 => Cow::Borrowed(""),
+        1 => items.pop().unwrap(),
+        2 => Cow::Owned(format!("{} and {}", items[0], items[1])),
+        _ => {
+            let last = items.pop().unwrap();
+            Cow::Owned(format!("{}, and {}", items.join(", "), last))
+        }
     }
 }

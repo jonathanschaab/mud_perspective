@@ -1,5 +1,5 @@
 use crate::grammar::{conjugate_verb, resolve_article, resolve_pronoun};
-use crate::models::RenderContext;
+use crate::models::{RenderContext, TemplateEntity};
 use unicode_segmentation::UnicodeSegmentation;
 
 /// Represents a parsed unit of a template string.
@@ -80,7 +80,6 @@ impl Template {
     /// # Panics
     /// Panics if the string `split` iterator fails to yield at least one item, which is
     /// technically impossible under standard Rust string split guarantees.
-    #[allow(clippy::too_many_lines)]
     pub fn compile(raw: &str) -> Result<Self, String> {
         let mut tokens = Vec::new();
         let mut chars = raw.char_indices().peekable();
@@ -126,158 +125,15 @@ impl Template {
                 let tag_name = if is_entity { "entity tag" } else { "verb tag" };
 
                 let end_idx = consume_until_closed(&mut chars, i, close_char, tag_name)?;
-
                 let content = &raw[i + 1..end_idx];
-                let mut parts = content.split(':');
-                let p1 = parts.next().unwrap();
 
-                if is_entity {
-                    if let Some(p2) = parts.next() {
-                        if parts.next().is_some() {
-                            return Err(validation_error("Malformed entity tag", content, '{'));
-                        }
-
-                        let force_article = p1.starts_with('+');
-                        let p1_str = if force_article { &p1[1..] } else { p1 };
-
-                        let is_article = p1_str.eq_ignore_ascii_case("a")
-                            || p1_str.eq_ignore_ascii_case("an")
-                            || p1_str.eq_ignore_ascii_case("the")
-                            || p1_str.eq_ignore_ascii_case("this")
-                            || p1_str.eq_ignore_ascii_case("that");
-
-                        // 2-part case: {article:key}
-                        if is_article {
-                            let force_3rd_person = p2.starts_with('+');
-                            let force_actor = p2.starts_with('-');
-                            let p2_str = if force_3rd_person || force_actor {
-                                &p2[1..]
-                            } else {
-                                p2
-                            };
-
-                            if p2_str.is_empty() {
-                                return Err(validation_error(
-                                    "Entity tag has an article but an empty key",
-                                    content,
-                                    '{',
-                                ));
-                            }
-                            tokens.push(Token::EntityRef {
-                                key: p2_str.to_lowercase(),
-                                article: Some(p1_str.to_string()),
-                                is_capitalized: p2_str
-                                    .chars()
-                                    .next()
-                                    .is_some_and(char::is_uppercase),
-                                force_article,
-                                force_3rd_person,
-                                force_actor,
-                            });
-                        } else {
-                            // 2-part case: {key:pronoun}
-                            let force_3rd_person = p1.starts_with('+');
-                            let force_actor = p1.starts_with('-');
-                            let p1_str = if force_3rd_person || force_actor {
-                                &p1[1..]
-                            } else {
-                                p1
-                            };
-
-                            if p1_str.is_empty() || p2.is_empty() {
-                                return Err(validation_error(
-                                    "Pronoun tag has an empty key or type",
-                                    content,
-                                    '{',
-                                ));
-                            }
-                            tokens.push(Token::PronounRef {
-                                key: p1_str.to_lowercase(),
-                                p_type: p2.to_lowercase(),
-                                is_capitalized: p2.chars().next().is_some_and(char::is_uppercase),
-                                force_3rd_person,
-                                force_actor,
-                            });
-                        }
-                    } else {
-                        // 1-part case: {key}
-                        let force_3rd_person = p1.starts_with('+');
-                        let force_actor = p1.starts_with('-');
-                        let p1_str = if force_3rd_person || force_actor {
-                            &p1[1..]
-                        } else {
-                            p1
-                        };
-
-                        if p1_str.is_empty() {
-                            return Err(validation_error(
-                                "Entity tag has an empty key",
-                                content,
-                                '{',
-                            ));
-                        }
-                        tokens.push(Token::EntityRef {
-                            key: p1_str.to_lowercase(),
-                            article: None,
-                            is_capitalized: p1_str.chars().next().is_some_and(char::is_uppercase),
-                            force_article: false,
-                            force_3rd_person,
-                            force_actor,
-                        });
-                    }
+                let token = if is_entity {
+                    Self::parse_entity_or_pronoun(content)?
                 } else {
-                    let (subject_key, base_verb, force_3rd_person, force_actor) =
-                        if let Some(p2) = parts.next() {
-                            if parts.next().is_some() {
-                                return Err(validation_error("Malformed verb tag", content, '['));
-                            }
+                    Self::parse_verb(content)?
+                };
 
-                            let force_3rd_person = p1.starts_with('+');
-                            let force_actor = p1.starts_with('-');
-                            let p1_str = if force_3rd_person || force_actor {
-                                &p1[1..]
-                            } else {
-                                p1
-                            };
-
-                            if p1_str.is_empty() {
-                                return Err(validation_error(
-                                    "Verb tag has an empty subject key",
-                                    content,
-                                    '[',
-                                ));
-                            }
-                            // p2 (base_verb) can be empty, we warn for that later.
-                            (
-                                Some(p1_str.to_lowercase()),
-                                p2,
-                                force_3rd_person,
-                                force_actor,
-                            )
-                        } else {
-                            (None, p1, false, false)
-                        };
-
-                    let original_verb = base_verb.to_string();
-                    let is_capitalized =
-                        original_verb.chars().next().is_some_and(char::is_uppercase);
-                    let lower_verb = original_verb.to_lowercase();
-
-                    if original_verb.is_empty() {
-                        tracing::warn!(
-                            "Parsed an empty verb tag in template. This will conjugate to just 's'."
-                        );
-                    }
-
-                    tokens.push(Token::VerbRef {
-                        subject_key,
-                        original_verb,
-                        lower_verb,
-                        is_capitalized,
-                        force_3rd_person,
-                        force_actor,
-                    });
-                }
+                tokens.push(token);
                 last_literal_start = end_idx + 1;
             } else {
                 // Move to the next character if it's not a special tag
@@ -293,6 +149,132 @@ impl Template {
         Ok(Template {
             tokens,
             estimated_length: raw.len() + (raw.len() / 5),
+        })
+    }
+
+    fn parse_entity_or_pronoun(content: &str) -> Result<Token, String> {
+        let mut parts = content.split(':');
+        let p1 = parts.next().unwrap();
+
+        if let Some(p2) = parts.next() {
+            if parts.next().is_some() {
+                return Err(validation_error("Malformed entity tag", content, '{'));
+            }
+
+            let (p1_str, force_article, _) = parse_stance_prefixes(p1);
+            let is_article = p1_str.eq_ignore_ascii_case("a")
+                || p1_str.eq_ignore_ascii_case("an")
+                || p1_str.eq_ignore_ascii_case("the")
+                || p1_str.eq_ignore_ascii_case("this")
+                || p1_str.eq_ignore_ascii_case("that");
+
+            // 2-part case: {article:key}
+            if is_article {
+                let (p2_str, force_3rd_person, force_actor) = parse_stance_prefixes(p2);
+
+                if p2_str.is_empty() {
+                    return Err(validation_error(
+                        "Entity tag has an article but an empty key",
+                        content,
+                        '{',
+                    ));
+                }
+                Ok(Token::EntityRef {
+                    key: p2_str.to_lowercase(),
+                    article: Some(p1_str.to_string()),
+                    is_capitalized: p2_str.chars().next().is_some_and(char::is_uppercase),
+                    force_article,
+                    force_3rd_person,
+                    force_actor,
+                })
+            } else {
+                // 2-part case: {key:pronoun}
+                let (p1_str, force_3rd_person, force_actor) = parse_stance_prefixes(p1);
+
+                if p1_str.is_empty() || p2.is_empty() {
+                    return Err(validation_error(
+                        "Pronoun tag has an empty key or type",
+                        content,
+                        '{',
+                    ));
+                }
+                Ok(Token::PronounRef {
+                    key: p1_str.to_lowercase(),
+                    p_type: p2.to_lowercase(),
+                    is_capitalized: p2.chars().next().is_some_and(char::is_uppercase),
+                    force_3rd_person,
+                    force_actor,
+                })
+            }
+        } else {
+            // 1-part case: {key}
+            let (p1_str, force_3rd_person, force_actor) = parse_stance_prefixes(p1);
+
+            if p1_str.is_empty() {
+                return Err(validation_error(
+                    "Entity tag has an empty key",
+                    content,
+                    '{',
+                ));
+            }
+            Ok(Token::EntityRef {
+                key: p1_str.to_lowercase(),
+                article: None,
+                is_capitalized: p1_str.chars().next().is_some_and(char::is_uppercase),
+                force_article: false,
+                force_3rd_person,
+                force_actor,
+            })
+        }
+    }
+
+    fn parse_verb(content: &str) -> Result<Token, String> {
+        let mut parts = content.split(':');
+        let p1 = parts.next().unwrap();
+
+        let (subject_key, base_verb, force_3rd_person, force_actor) = if let Some(p2) = parts.next()
+        {
+            if parts.next().is_some() {
+                return Err(validation_error("Malformed verb tag", content, '['));
+            }
+
+            let (p1_str, force_3rd_person, force_actor) = parse_stance_prefixes(p1);
+
+            if p1_str.is_empty() {
+                return Err(validation_error(
+                    "Verb tag has an empty subject key",
+                    content,
+                    '[',
+                ));
+            }
+            (
+                Some(p1_str.to_lowercase()),
+                p2,
+                force_3rd_person,
+                force_actor,
+            )
+        } else {
+            let (p1_str, force_3rd_person, force_actor) = parse_stance_prefixes(p1);
+            (None, p1_str, force_3rd_person, force_actor)
+        };
+
+        let original_verb = base_verb.to_string();
+        let is_capitalized = original_verb.chars().next().is_some_and(char::is_uppercase);
+        let lower_verb = original_verb.to_lowercase();
+
+        if original_verb.is_empty() {
+            tracing::warn!(
+                "Parsed an empty verb tag in template. This will conjugate to just 's'."
+            );
+        }
+
+        Ok(Token::VerbRef {
+            subject_key,
+            original_verb,
+            lower_verb,
+            is_capitalized,
+            force_3rd_person,
+            force_actor,
         })
     }
 }
@@ -313,138 +295,224 @@ impl PerspectiveEngine {
     ///
     /// # Errors
     /// Returns a `String` error if the template references a key not provided in the `ctx`.
-    #[allow(clippy::too_many_lines)]
     #[tracing::instrument(level = "trace", skip_all, fields(viewer_id = %ctx.viewer_id))]
     pub fn render(template: &Template, ctx: &RenderContext) -> Result<String, String> {
         // 1. Pre-allocate buffer to prevent continuous heap allocations
         let mut raw_output = String::with_capacity(template.estimated_length);
 
-        let get_entity = |key: &str| {
-            ctx.entities.get(key).copied().ok_or_else(|| {
-                tracing::error!(
-                    "Failed to render template: Missing entity for key '{}'",
-                    key
-                );
-                format!("Missing entity for key: {key}")
-            })
-        };
-
         for token in &template.tokens {
             match token {
-                Token::Literal(text) => {
-                    raw_output.push_str(text);
-                }
-                Token::EntityRef {
-                    key,
-                    article,
-                    is_capitalized,
-                    force_article,
-                    force_3rd_person,
-                    force_actor,
-                } => {
-                    let entity = get_entity(key)?;
-                    let effective_viewer = if *force_3rd_person {
-                        "\0"
-                    } else {
-                        ctx.viewer_id
-                    };
-
-                    let is_viewer = *force_actor || entity.contains_viewer(effective_viewer);
-                    let name = if *force_actor {
-                        std::borrow::Cow::Borrowed("you")
-                    } else {
-                        entity.display_name_for(effective_viewer)
-                    };
-
-                    // Capitalize the name if explicitly requested and it isn't already
-                    let name_buf;
-                    let name_str =
-                        if *is_capitalized && name.chars().next().is_some_and(char::is_lowercase) {
-                            name_buf = crate::grammar::capitalize_first(&name);
-                            name_buf.as_str()
-                        } else {
-                            name.as_ref()
-                        };
-
-                    // Handle dynamic "a" or "an" injection
-                    if let Some(art) = article
-                        && let Some(resolved_art) = resolve_article(
-                            art,
-                            name_str,
-                            is_viewer,
-                            entity.is_proper_noun_for(effective_viewer),
-                            entity.is_plural(),
-                            *force_article,
-                        )
-                    {
-                        raw_output.push_str(resolved_art);
-                    }
-
-                    raw_output.push_str(name_str);
-                }
-                Token::PronounRef {
-                    key,
-                    p_type,
-                    is_capitalized,
-                    force_3rd_person,
-                    force_actor,
-                } => {
-                    let entity = get_entity(key)?;
-                    let effective_viewer = if *force_3rd_person {
-                        "\0"
-                    } else {
-                        ctx.viewer_id
-                    };
-
-                    let is_viewer = *force_actor || entity.contains_viewer(effective_viewer);
-                    let pronoun =
-                        resolve_pronoun(entity.gender(), p_type, is_viewer, entity.is_plural())?;
-
-                    if *is_capitalized {
-                        raw_output.push_str(&crate::grammar::capitalize_first(pronoun));
-                    } else {
-                        raw_output.push_str(pronoun);
-                    }
-                }
-                Token::VerbRef {
-                    subject_key,
-                    original_verb,
-                    lower_verb,
-                    is_capitalized,
-                    force_3rd_person,
-                    force_actor,
-                } => {
-                    // Explicitly bind the verb to its subject to solve passive voice / compound subjects
-                    let (is_viewer, is_plural) = if let Some(key) = subject_key {
-                        let entity = get_entity(key)?;
-                        let effective_viewer = if *force_3rd_person {
-                            "\0"
-                        } else {
-                            ctx.viewer_id
-                        };
-                        (
-                            *force_actor || entity.contains_viewer(effective_viewer),
-                            entity.is_plural(),
-                        )
-                    } else {
-                        // Safe default to 3rd-person singular if no subject is bound
-                        (false, false)
-                    };
-
-                    let conjugated = conjugate_verb(
-                        original_verb,
-                        lower_verb,
-                        *is_capitalized,
-                        is_viewer,
-                        is_plural,
-                    );
-                    raw_output.push_str(&conjugated);
-                }
+                Token::Literal(text) => raw_output.push_str(text),
+                Token::EntityRef { .. } => Self::render_entity_ref(ctx, &mut raw_output, token)?,
+                Token::PronounRef { .. } => Self::render_pronoun_ref(ctx, &mut raw_output, token)?,
+                Token::VerbRef { .. } => Self::render_verb_ref(ctx, &mut raw_output, token)?,
             }
         }
 
         // 2. Pass the fully assembled base-case string to the typography post-processor
         Ok(Self::post_process_typography(&raw_output))
+    }
+
+    #[inline]
+    fn get_entity<'a>(ctx: &'a RenderContext, key: &str) -> Result<&'a dyn TemplateEntity, String> {
+        ctx.entities.get(key).copied().ok_or_else(|| {
+            tracing::error!("Failed to render template: Missing entity for key '{key}'");
+            format!("Missing entity for key: {key}")
+        })
+    }
+
+    fn render_entity_ref(
+        ctx: &RenderContext,
+        raw_output: &mut String,
+        token: &Token,
+    ) -> Result<(), String> {
+        let Token::EntityRef {
+            key,
+            article,
+            is_capitalized,
+            force_article,
+            force_3rd_person,
+            force_actor,
+        } = token
+        else {
+            return Ok(());
+        };
+
+        let entity = Self::get_entity(ctx, key)?;
+        let effective_viewer = if *force_3rd_person {
+            "\0"
+        } else {
+            ctx.viewer_id
+        };
+
+        // --- Handle Groups / Distributed Lists ---
+        if let Some(members) = entity.group_members() {
+            let mut flat_members = Vec::new();
+            crate::models::flatten_group(members, &mut flat_members);
+
+            let mut has_viewer = false;
+            let mut visible = Vec::new();
+
+            for &m in &flat_members {
+                if *force_actor || m.contains_viewer(effective_viewer) {
+                    has_viewer = true;
+                } else {
+                    let name = m.display_name_for(effective_viewer);
+                    if !name.is_empty() {
+                        visible.push((m, name));
+                    }
+                }
+            }
+
+            let total_visible = visible.len() + usize::from(has_viewer);
+            if total_visible == 0 {
+                return Ok(());
+            }
+
+            let mut formatted_names = Vec::with_capacity(total_visible);
+            if has_viewer {
+                formatted_names.push(std::borrow::Cow::Borrowed("you"));
+            }
+
+            for (m, name) in visible {
+                if let Some(art) = article
+                    && let Some(resolved_art) = resolve_article(
+                        art,
+                        &name,
+                        m.is_proper_noun_for(effective_viewer),
+                        m.is_plural(),
+                        *force_article,
+                    )
+                {
+                    formatted_names.push(std::borrow::Cow::Owned(format!("{resolved_art}{name}")));
+                    continue;
+                }
+                formatted_names.push(name);
+            }
+
+            let list_str = crate::grammar::format_oxford_list(formatted_names);
+
+            if *is_capitalized && list_str.chars().next().is_some_and(char::is_lowercase) {
+                raw_output.push_str(&crate::grammar::capitalize_first(&list_str));
+            } else {
+                raw_output.push_str(&list_str);
+            }
+            return Ok(());
+        }
+
+        // --- Handle Single Entity Viewers ---
+        if *force_actor || entity.contains_viewer(effective_viewer) {
+            let name_str = if *is_capitalized { "You" } else { "you" };
+            raw_output.push_str(name_str);
+            return Ok(());
+        }
+
+        // --- Single Entity Fallback ---
+        let name = entity.display_name_for(effective_viewer);
+
+        // Capitalize the name if explicitly requested and it isn't already
+        let name_buf;
+        let name_str = if *is_capitalized && name.chars().next().is_some_and(char::is_lowercase) {
+            name_buf = crate::grammar::capitalize_first(&name);
+            name_buf.as_str()
+        } else {
+            name.as_ref()
+        };
+
+        // Handle dynamic "a" or "an" injection
+        if let Some(art) = article
+            && let Some(resolved_art) = resolve_article(
+                art,
+                name_str,
+                entity.is_proper_noun_for(effective_viewer),
+                entity.is_plural(),
+                *force_article,
+            )
+        {
+            raw_output.push_str(resolved_art);
+        }
+
+        raw_output.push_str(name_str);
+        Ok(())
+    }
+
+    fn render_pronoun_ref(
+        ctx: &RenderContext,
+        raw_output: &mut String,
+        token: &Token,
+    ) -> Result<(), String> {
+        let Token::PronounRef {
+            key,
+            p_type,
+            is_capitalized,
+            force_3rd_person,
+            force_actor,
+        } = token
+        else {
+            return Ok(());
+        };
+
+        let entity = Self::get_entity(ctx, key)?;
+        let effective_viewer = if *force_3rd_person {
+            "\0"
+        } else {
+            ctx.viewer_id
+        };
+
+        let is_viewer = *force_actor || entity.contains_viewer(effective_viewer);
+        let pronoun = resolve_pronoun(entity.gender(), p_type, is_viewer, entity.is_plural())?;
+
+        if *is_capitalized {
+            raw_output.push_str(&crate::grammar::capitalize_first(pronoun));
+        } else {
+            raw_output.push_str(pronoun);
+        }
+        Ok(())
+    }
+
+    fn render_verb_ref(
+        ctx: &RenderContext,
+        raw_output: &mut String,
+        token: &Token,
+    ) -> Result<(), String> {
+        let Token::VerbRef {
+            subject_key,
+            original_verb,
+            lower_verb,
+            is_capitalized,
+            force_3rd_person,
+            force_actor,
+        } = token
+        else {
+            return Ok(());
+        };
+
+        // Explicitly bind the verb to its subject to solve passive voice / compound subjects
+        let (is_viewer, is_plural) = if let Some(key) = subject_key {
+            let entity = Self::get_entity(ctx, key)?;
+            let effective_viewer = if *force_3rd_person {
+                "\0"
+            } else {
+                ctx.viewer_id
+            };
+            (
+                *force_actor || entity.contains_viewer(effective_viewer),
+                entity.is_plural(),
+            )
+        } else {
+            // Safe default to 3rd-person singular if no subject is bound, unless actor stance is forced
+            (*force_actor, false)
+        };
+
+        let conjugated = conjugate_verb(
+            original_verb,
+            lower_verb,
+            *is_capitalized,
+            is_viewer,
+            is_plural,
+        );
+        raw_output.push_str(&conjugated);
+        Ok(())
     }
 
     /// Segments the text by true sentence boundaries and capitalizes the first letter.
@@ -632,4 +700,17 @@ fn validation_error(message: &str, content: &str, open_char: char) -> String {
     let formatted_message = format!("{message}: {open_char}{content}{close_char}");
     tracing::error!("{}", formatted_message);
     formatted_message
+}
+
+/// Parses prefix modifiers `+` and `-` used to force perspectives, returning the
+/// stripped string alongside booleans for `force_3rd_person`/`force_article` and `force_actor`.
+#[inline]
+fn parse_stance_prefixes(s: &str) -> (&str, bool, bool) {
+    if let Some(stripped) = s.strip_prefix('+') {
+        (stripped, true, false)
+    } else if let Some(stripped) = s.strip_prefix('-') {
+        (stripped, false, true)
+    } else {
+        (s, false, false)
+    }
 }

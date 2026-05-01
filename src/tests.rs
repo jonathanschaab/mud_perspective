@@ -428,7 +428,7 @@ mod tests {
             members: vec![&player, &enemy],
         };
         let template_mixed = cache
-            .get_or_compile("{source} [source:prepare] for battle.")
+            .get_or_compile("{the:source} [source:prepare] for battle.")
             .unwrap();
 
         let observer_mixed =
@@ -1025,7 +1025,9 @@ mod tests {
         };
 
         let cache = TemplateCache::new(100);
-        let template = cache.get_or_compile("{source} [source:prepare].").unwrap();
+        let template = cache
+            .get_or_compile("{the:source} [source:prepare].")
+            .unwrap();
 
         // 1. Director Stance (bystander sees everyone)
         // Expects empty group to be completely ignored.
@@ -1199,5 +1201,23 @@ mod tests {
             out_forced,
             "You fly into the room. You are looking for your master."
         );
+    }
+
+    #[test]
+    fn test_unbound_forced_verbs() {
+        let cache = TemplateCache::new(100);
+        let ctx = RenderContext::new("viewer");
+
+        // [-smile] should output "smile" (actor stance) instead of "-smiles"
+        let out_actor =
+            PerspectiveEngine::render(&cache.get_or_compile("you [-smile].").unwrap(), &ctx)
+                .unwrap();
+        assert_eq!(out_actor, "You smile.");
+
+        // [+smile] should output "smiles" (director stance, which is default anyway, but tests parser stripping)
+        let out_director =
+            PerspectiveEngine::render(&cache.get_or_compile("he [+smile].").unwrap(), &ctx)
+                .unwrap();
+        assert_eq!(out_director, "He smiles.");
     }
 }

@@ -55,9 +55,6 @@ fn is_proper_noun_for(&self, _viewer_id: &str) -> bool {
 }
 
 fn display_name_for<'a>(&'a self, viewer_id: &str) -> Cow<'a, str> {  
-    if self.contains_viewer(viewer_id) {
-        return Cow::Borrowed("you");
-    }
     // You can implement disguise logic or recognition checks here  
     Cow::Borrowed(&self.name)  
 }
@@ -91,7 +88,7 @@ let output_director = render_msg!("char_3", &template, "source" => &player, "tar
 
 ### 3. Handling Groups and Swarms
 
-The library provides a built-in `GroupEntity` to easily represent dynamic groups of characters or objects. It automatically handles Oxford comma formatting, injects "you" if the viewer is in the group, and evaluates as plural so verbs and pronouns automatically conjugate correctly ("attack" instead of "attacks", "themselves", etc.).
+The library provides a built-in `GroupEntity` to easily represent dynamic groups of characters or objects. It handles Oxford comma formatting, injects "you" if the viewer is in the group, and evaluates as plural so verbs correctly conjugate. **Any article specified in the template (e.g. `{the:party}`) will automatically be distributed to the members of the group.**
 
 ```rust
 use mud_perspective::models::GroupEntity;
