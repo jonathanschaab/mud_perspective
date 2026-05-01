@@ -125,35 +125,33 @@ impl TemplateEntity for GroupEntity<'_> {
     }
 
     fn display_name_for<'b>(&'b self, viewer_id: &str) -> Cow<'b, str> {
-        let has_viewer = self.contains_viewer(viewer_id);
         let mut names: Vec<Cow<'b, str>> = Vec::with_capacity(self.members.len());
+        let mut has_viewer = false;
+
+        for &m in &self.members {
+            if m.contains_viewer(viewer_id) {
+                has_viewer = true;
+            } else {
+                let name = m.display_name_for(viewer_id);
+                // Dynamically prepend "the " if it is a common noun!
+                if let Some(art) = resolve_article(
+                    "the",
+                    &name,
+                    false, // We already filtered the viewer out
+                    m.is_proper_noun_for(viewer_id),
+                    m.is_plural(),
+                ) {
+                    names.push(Cow::Owned(format!("{art}{name}")));
+                } else {
+                    names.push(name);
+                }
+            }
+        }
 
         // If the viewer is in this group, they are always listed first as "you"
         if has_viewer {
-            names.push(Cow::Borrowed("you"));
+            names.insert(0, Cow::Borrowed("you"));
         }
-
-        names.extend(
-            self.members
-                .iter()
-                .copied()
-                .filter(|m| !m.contains_viewer(viewer_id))
-                .map(|m| {
-                    let name = m.display_name_for(viewer_id);
-                    // Dynamically prepend "the " if it is a common noun!
-                    if let Some(art) = resolve_article(
-                        "the",
-                        &name,
-                        false, // We already filtered the viewer out
-                        m.is_proper_noun_for(viewer_id),
-                        m.is_plural(),
-                    ) {
-                        Cow::Owned(format!("{art}{name}"))
-                    } else {
-                        name
-                    }
-                }),
-        );
 
         match names.len() {
             0 => Cow::Borrowed(""),
