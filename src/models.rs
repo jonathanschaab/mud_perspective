@@ -1,6 +1,9 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 
+/// The highly unique sentinel string used by the engine to temporarily force the Director Stance.
+pub const NULL_VIEWER: &str = "\0__MUD_PERSPECTIVE_NULL_VIEWER__\0";
+
 /// Represents the grammatical gender of an entity for correct pronoun resolution.
 ///
 /// The `Plural` variant is critical for supporting both literal swarms (e.g., "a pack of wolves")
@@ -26,7 +29,7 @@ pub enum Gender {
 ///
 /// **Note on Forced Perspectives:** When a template forces the Director Stance
 /// (e.g., `{+source}`), the engine temporarily passes a highly unique sentinel string
-/// (`"\0__MUD_PERSPECTIVE_NULL_VIEWER__\0"`) as the `viewer_id` to bypass recognition.
+/// ([`NULL_VIEWER`]) as the `viewer_id` to bypass recognition.
 /// Ensure your actual entity IDs do not match this sentinel.
 pub trait TemplateEntity {
     /// Evaluates whether the given `viewer_id` represents this entity or
@@ -117,9 +120,9 @@ impl<'a> RenderContext<'a> {
 /// A built-in helper for representing a dynamic group of entities.
 ///
 /// `GroupEntity` automatically aggregates a collection of `TemplateEntity` references.
-/// It seamlessly handles Oxford comma formatting, injects "you" if the viewer is in the group,
-/// evaluates as plural for verb conjugation, and resolves internal definite articles
-/// for common nouns (e.g. outputting "Aldran and the goblin" instead of "Aldran and goblin").
+/// It delegates Oxford comma formatting, article distribution, and "you" injection to the
+/// rendering engine, while evaluating as plural so verbs automatically conjugate correctly
+/// (unless the group shrinks to a single member, in which case it evaluates as singular).
 pub struct GroupEntity<'a> {
     /// The list of entities comprising this group.
     pub members: Vec<&'a dyn TemplateEntity>,

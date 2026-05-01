@@ -1,5 +1,5 @@
 use crate::grammar::{conjugate_verb, resolve_article, resolve_pronoun};
-use crate::models::{RenderContext, TemplateEntity};
+use crate::models::{NULL_VIEWER, RenderContext, TemplateEntity};
 use unicode_segmentation::UnicodeSegmentation;
 
 /// Represents a parsed unit of a template string.
@@ -258,9 +258,6 @@ impl Template {
         })
     }
 }
-
-/// The highly unique sentinel string used to temporarily force the Director Stance.
-const NULL_VIEWER: &str = "\0__MUD_PERSPECTIVE_NULL_VIEWER__\0";
 
 /// The core processor responsible for evaluating compiled templates against contexts.
 pub struct PerspectiveEngine;
