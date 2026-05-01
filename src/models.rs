@@ -125,12 +125,16 @@ impl TemplateEntity for GroupEntity<'_> {
     }
 
     fn display_name_for<'b>(&'b self, viewer_id: &str) -> Cow<'b, str> {
-        let mut names: Vec<String> = self
+        let (viewers, others): (Vec<&dyn TemplateEntity>, Vec<&dyn TemplateEntity>) = self
             .members
             .iter()
-            .filter(|m| !m.contains_viewer(viewer_id))
+            .copied()
+            .partition(|m| m.contains_viewer(viewer_id));
+
+        let mut names: Vec<Cow<'b, str>> = others
+            .into_iter()
             .map(|m| {
-                let name = m.display_name_for(viewer_id).into_owned();
+                let name = m.display_name_for(viewer_id);
                 // Dynamically prepend "the " if it is a common noun!
                 if let Some(art) = resolve_article(
                     "the",
@@ -139,7 +143,7 @@ impl TemplateEntity for GroupEntity<'_> {
                     m.is_proper_noun_for(viewer_id),
                     m.is_plural(),
                 ) {
-                    format!("{art}{name}")
+                    Cow::Owned(format!("{art}{name}"))
                 } else {
                     name
                 }
@@ -147,21 +151,19 @@ impl TemplateEntity for GroupEntity<'_> {
             .collect();
 
         // If the viewer is in this group, they are always listed first as "you"
-        if self.contains_viewer(viewer_id) {
-            names.insert(0, "you".to_string());
+        if !viewers.is_empty() {
+            names.insert(0, Cow::Borrowed("you"));
         }
 
-        let output = match names.len() {
-            0 => String::new(),
-            1 => names[0].clone(),
-            2 => format!("{} and {}", names[0], names[1]),
+        match names.len() {
+            0 => Cow::Owned(String::new()),
+            1 => names.pop().unwrap(),
+            2 => Cow::Owned(format!("{} and {}", names[0], names[1])),
             _ => {
                 let last = names.pop().unwrap();
-                format!("{}, and {}", names.join(", "), last) // Oxford comma for 3+ items
+                Cow::Owned(format!("{}, and {}", names.join(", "), last)) // Oxford comma for 3+ items
             }
-        };
-
-        Cow::Owned(output)
+        }
     }
 
     fn is_proper_noun_for(&self, _viewer_id: &str) -> bool {
