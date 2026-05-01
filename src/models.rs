@@ -200,7 +200,12 @@ impl TemplateEntity for GroupEntity<'_> {
 
         let mut has_viewer = false;
         let mut visible_others = Vec::new();
-        collect_visible(&self.members, viewer_id, &mut has_viewer, &mut visible_others);
+        collect_visible(
+            &self.members,
+            viewer_id,
+            &mut has_viewer,
+            &mut visible_others,
+        );
 
         let total_visible = visible_others.len() + usize::from(has_viewer);
 
@@ -231,6 +236,7 @@ impl TemplateEntity for GroupEntity<'_> {
                 false, // Viewer is handled separately
                 m.is_proper_noun_for(viewer_id),
                 m.is_plural(),
+                false, // Do not force articles for proper nouns
             ) {
                 names.push(Cow::Owned(format!("{art}{name}")));
             } else {

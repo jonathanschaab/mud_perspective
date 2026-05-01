@@ -10,6 +10,7 @@ static IRREGULAR_VERBS: phf::Map<&'static str, &'static str> = phf_map! {
     "do" => "does",
     "go" => "goes",
     "say" => "says",
+    "was" => "was",
 
     // Modal verbs mapped to themselves to prevent "s" suffixes
     "can" => "can",
@@ -204,6 +205,7 @@ pub fn get_indefinite_article(word: &str) -> &str {
 /// **Note:** The returned string includes a trailing space (e.g., `"The "`, `"a "`) to ensure
 /// correct formatting when appended directly before the entity name.
 #[must_use]
+#[allow(clippy::fn_params_excessive_bools)]
 pub fn resolve_article(
     article: &str,
     entity_name: &str,

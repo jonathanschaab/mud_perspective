@@ -150,7 +150,11 @@ impl Template {
                         if is_article {
                             let force_3rd_person = p2.starts_with('+');
                             let force_actor = p2.starts_with('-');
-                            let p2_str = if force_3rd_person || force_actor { &p2[1..] } else { p2 };
+                            let p2_str = if force_3rd_person || force_actor {
+                                &p2[1..]
+                            } else {
+                                p2
+                            };
 
                             if p2_str.is_empty() {
                                 return Err(validation_error(
@@ -162,7 +166,10 @@ impl Template {
                             tokens.push(Token::EntityRef {
                                 key: p2_str.to_lowercase(),
                                 article: Some(p1_str.to_string()),
-                                is_capitalized: p2_str.chars().next().is_some_and(char::is_uppercase),
+                                is_capitalized: p2_str
+                                    .chars()
+                                    .next()
+                                    .is_some_and(char::is_uppercase),
                                 force_article,
                                 force_3rd_person,
                                 force_actor,
@@ -171,7 +178,11 @@ impl Template {
                             // 2-part case: {key:pronoun}
                             let force_3rd_person = p1.starts_with('+');
                             let force_actor = p1.starts_with('-');
-                            let p1_str = if force_3rd_person || force_actor { &p1[1..] } else { p1 };
+                            let p1_str = if force_3rd_person || force_actor {
+                                &p1[1..]
+                            } else {
+                                p1
+                            };
 
                             if p1_str.is_empty() || p2.is_empty() {
                                 return Err(validation_error(
@@ -192,7 +203,11 @@ impl Template {
                         // 1-part case: {key}
                         let force_3rd_person = p1.starts_with('+');
                         let force_actor = p1.starts_with('-');
-                        let p1_str = if force_3rd_person || force_actor { &p1[1..] } else { p1 };
+                        let p1_str = if force_3rd_person || force_actor {
+                            &p1[1..]
+                        } else {
+                            p1
+                        };
 
                         if p1_str.is_empty() {
                             return Err(validation_error(
@@ -211,27 +226,37 @@ impl Template {
                         });
                     }
                 } else {
-                    let (subject_key, base_verb, force_3rd_person, force_actor) = if let Some(p2) = parts.next() {
-                        if parts.next().is_some() {
-                            return Err(validation_error("Malformed verb tag", content, '['));
-                        }
-                        
-                        let force_3rd_person = p1.starts_with('+');
-                        let force_actor = p1.starts_with('-');
-                        let p1_str = if force_3rd_person || force_actor { &p1[1..] } else { p1 };
+                    let (subject_key, base_verb, force_3rd_person, force_actor) =
+                        if let Some(p2) = parts.next() {
+                            if parts.next().is_some() {
+                                return Err(validation_error("Malformed verb tag", content, '['));
+                            }
 
-                        if p1_str.is_empty() {
-                            return Err(validation_error(
-                                "Verb tag has an empty subject key",
-                                content,
-                                '[',
-                            ));
-                        }
-                        // p2 (base_verb) can be empty, we warn for that later.
-                        (Some(p1_str.to_lowercase()), p2, force_3rd_person, force_actor)
-                    } else {
-                        (None, p1, false, false)
-                    };
+                            let force_3rd_person = p1.starts_with('+');
+                            let force_actor = p1.starts_with('-');
+                            let p1_str = if force_3rd_person || force_actor {
+                                &p1[1..]
+                            } else {
+                                p1
+                            };
+
+                            if p1_str.is_empty() {
+                                return Err(validation_error(
+                                    "Verb tag has an empty subject key",
+                                    content,
+                                    '[',
+                                ));
+                            }
+                            // p2 (base_verb) can be empty, we warn for that later.
+                            (
+                                Some(p1_str.to_lowercase()),
+                                p2,
+                                force_3rd_person,
+                                force_actor,
+                            )
+                        } else {
+                            (None, p1, false, false)
+                        };
 
                     let original_verb = base_verb.to_string();
                     let is_capitalized =
@@ -288,6 +313,7 @@ impl PerspectiveEngine {
     ///
     /// # Errors
     /// Returns a `String` error if the template references a key not provided in the `ctx`.
+    #[allow(clippy::too_many_lines)]
     #[tracing::instrument(level = "trace", skip_all, fields(viewer_id = %ctx.viewer_id))]
     pub fn render(template: &Template, ctx: &RenderContext) -> Result<String, String> {
         // 1. Pre-allocate buffer to prevent continuous heap allocations
@@ -317,7 +343,11 @@ impl PerspectiveEngine {
                     force_actor,
                 } => {
                     let entity = get_entity(key)?;
-                    let effective_viewer = if *force_3rd_person { "\0" } else { ctx.viewer_id };
+                    let effective_viewer = if *force_3rd_person {
+                        "\0"
+                    } else {
+                        ctx.viewer_id
+                    };
 
                     let is_viewer = *force_actor || entity.contains_viewer(effective_viewer);
                     let name = if *force_actor {
@@ -360,7 +390,11 @@ impl PerspectiveEngine {
                     force_actor,
                 } => {
                     let entity = get_entity(key)?;
-                    let effective_viewer = if *force_3rd_person { "\0" } else { ctx.viewer_id };
+                    let effective_viewer = if *force_3rd_person {
+                        "\0"
+                    } else {
+                        ctx.viewer_id
+                    };
 
                     let is_viewer = *force_actor || entity.contains_viewer(effective_viewer);
                     let pronoun =
@@ -383,8 +417,15 @@ impl PerspectiveEngine {
                     // Explicitly bind the verb to its subject to solve passive voice / compound subjects
                     let (is_viewer, is_plural) = if let Some(key) = subject_key {
                         let entity = get_entity(key)?;
-                        let effective_viewer = if *force_3rd_person { "\0" } else { ctx.viewer_id };
-                        (*force_actor || entity.contains_viewer(effective_viewer), entity.is_plural())
+                        let effective_viewer = if *force_3rd_person {
+                            "\0"
+                        } else {
+                            ctx.viewer_id
+                        };
+                        (
+                            *force_actor || entity.contains_viewer(effective_viewer),
+                            entity.is_plural(),
+                        )
                     } else {
                         // Safe default to 3rd-person singular if no subject is bound
                         (false, false)
