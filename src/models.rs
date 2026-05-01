@@ -64,6 +64,15 @@ pub trait TemplateEntity {
     /// # Arguments
     /// * `viewer_id` - The unique identifier of the observing entity.
     fn is_proper_noun_for(&self, viewer_id: &str) -> bool;
+
+    /// Attempts to downcast this entity to a `GroupEntity`.
+    ///
+    /// This is used internally by the engine to automatically flatten nested
+    /// groups when rendering comma-separated lists.
+    #[must_use]
+    fn as_group(&self) -> Option<&GroupEntity<'_>> {
+        None
+    }
 }
 
 /// The context environment passed to the rendering engine for a specific view generation.
@@ -112,39 +121,119 @@ pub struct GroupEntity<'a> {
 }
 
 impl TemplateEntity for GroupEntity<'_> {
+    fn as_group(&self) -> Option<&GroupEntity<'_>> {
+        Some(self)
+    }
+
     fn contains_viewer(&self, viewer_id: &str) -> bool {
         self.members.iter().any(|m| m.contains_viewer(viewer_id))
     }
 
     fn gender(&self) -> Gender {
-        Gender::Plural // Forces 'they/them' for bystanders
+        fn check(members: &[&dyn TemplateEntity], count: &mut usize, single_gender: &mut Gender) {
+            for &m in members {
+                if let Some(group) = m.as_group() {
+                    check(&group.members, count, single_gender);
+                } else {
+                    *count += 1;
+                    if *count == 1 {
+                        *single_gender = m.gender();
+                    }
+                }
+            }
+        }
+
+        let mut count = 0;
+        let mut single_gender = Gender::Plural;
+
+        check(&self.members, &mut count, &mut single_gender);
+
+        if count == 1 {
+            single_gender
+        } else {
+            Gender::Plural
+        }
     }
 
     fn is_plural(&self) -> bool {
-        true // Forces base verbs like "attack"
+        fn check(members: &[&dyn TemplateEntity], count: &mut usize, single_is_plural: &mut bool) {
+            for &m in members {
+                if let Some(group) = m.as_group() {
+                    check(&group.members, count, single_is_plural);
+                } else {
+                    *count += 1;
+                    if *count == 1 {
+                        *single_is_plural = m.is_plural();
+                    }
+                }
+            }
+        }
+
+        let mut count = 0;
+        let mut single_is_plural = false;
+
+        check(&self.members, &mut count, &mut single_is_plural);
+
+        count != 1 || single_is_plural
     }
 
     fn display_name_for<'b>(&'b self, viewer_id: &str) -> Cow<'b, str> {
-        let mut names: Vec<Cow<'b, str>> = Vec::with_capacity(self.members.len());
-        let mut has_viewer = false;
-
-        for &m in &self.members {
-            if m.contains_viewer(viewer_id) {
-                has_viewer = true;
-            } else {
-                let name = m.display_name_for(viewer_id);
-                // Dynamically prepend "the " if it is a common noun!
-                if let Some(art) = resolve_article(
-                    "the",
-                    &name,
-                    false, // We already filtered the viewer out
-                    m.is_proper_noun_for(viewer_id),
-                    m.is_plural(),
-                ) {
-                    names.push(Cow::Owned(format!("{art}{name}")));
+        fn flatten_members<'c>(
+            members: &[&'c dyn TemplateEntity],
+            flat_list: &mut Vec<&'c dyn TemplateEntity>,
+        ) {
+            for &m in members {
+                if let Some(group) = m.as_group() {
+                    flatten_members(&group.members, flat_list);
                 } else {
-                    names.push(name);
+                    flat_list.push(m);
                 }
+            }
+        }
+
+        let mut flat_members: Vec<&dyn TemplateEntity> = Vec::new();
+        flatten_members(&self.members, &mut flat_members);
+
+        let mut has_viewer = false;
+        let mut visible_others = Vec::new();
+
+        for &m in &flat_members {
+            let name = m.display_name_for(viewer_id);
+            if name == "you" {
+                has_viewer = true;
+            } else if !name.is_empty() {
+                visible_others.push((m, name));
+            }
+        }
+
+        let total_visible = visible_others.len() + usize::from(has_viewer);
+
+        if total_visible == 0 {
+            return Cow::Borrowed("");
+        }
+
+        if total_visible == 1 {
+            if has_viewer {
+                return Cow::Borrowed("you");
+            }
+            // Return the single member's raw name so the engine can handle articles properly
+            return visible_others.pop().unwrap().1;
+        }
+
+        let mut names: Vec<Cow<'b, str>> = Vec::with_capacity(total_visible);
+
+        for (m, name) in visible_others {
+            // Dynamically prepend "the " if it is a common noun!
+            if let Some(art) = resolve_article(
+                "the",
+                &name,
+                false, // Viewer is handled separately
+                m.is_proper_noun_for(viewer_id),
+                m.is_plural(),
+            ) {
+                names.push(Cow::Owned(format!("{art}{name}")));
+            } else {
+                names.push(name);
             }
         }
 
@@ -153,18 +242,38 @@ impl TemplateEntity for GroupEntity<'_> {
             names.insert(0, Cow::Borrowed("you"));
         }
 
-        match names.len() {
-            0 => Cow::Borrowed(""),
-            1 => names.pop().unwrap(),
-            2 => Cow::Owned(format!("{} and {}", names[0], names[1])),
-            _ => {
-                let last = names.pop().unwrap();
-                Cow::Owned(format!("{}, and {}", names.join(", "), last)) // Oxford comma for 3+ items
-            }
+        if names.len() == 2 {
+            Cow::Owned(format!("{} and {}", names[0], names[1]))
+        } else {
+            let last = names.pop().unwrap();
+            Cow::Owned(format!("{}, and {}", names.join(", "), last)) // Oxford comma for 3+ items
         }
     }
 
-    fn is_proper_noun_for(&self, _viewer_id: &str) -> bool {
-        true
+    fn is_proper_noun_for(&self, viewer_id: &str) -> bool {
+        fn check(
+            members: &[&dyn TemplateEntity],
+            viewer_id: &str,
+            count: &mut usize,
+            single_is_proper: &mut bool,
+        ) {
+            for &m in members {
+                if let Some(group) = m.as_group() {
+                    check(&group.members, viewer_id, count, single_is_proper);
+                } else {
+                    *count += 1;
+                    if *count == 1 {
+                        *single_is_proper = m.is_proper_noun_for(viewer_id);
+                    }
+                }
+            }
+        }
+
+        let mut count = 0;
+        let mut single_is_proper = true;
+
+        check(&self.members, viewer_id, &mut count, &mut single_is_proper);
+
+        count != 1 || single_is_proper
     }
 }

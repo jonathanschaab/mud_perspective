@@ -982,4 +982,114 @@ mod tests {
         let out3 = render_msg!("stranger_1", &template3, "source" => &disguised).unwrap();
         assert_eq!(out3, "They say the tall man Smiles often.");
     }
+
+    #[test]
+    fn test_nested_and_empty_group_entities() {
+        let player = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+        let ally1 = MockEntity {
+            id: "char_2".to_string(),
+            name: "Bob".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+        let ally2 = MockEntity {
+            id: "char_3".to_string(),
+            name: "Charlie".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+        let ally3 = MockEntity {
+            id: "char_4".to_string(),
+            name: "Dave".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+
+        let empty_group = GroupEntity { members: vec![] };
+        let sub_group = GroupEntity {
+            members: vec![&player, &ally1],
+        };
+
+        // top_group contains a nested group, an empty group, and regular entities
+        let top_group = GroupEntity {
+            members: vec![&sub_group, &empty_group, &ally2, &ally3],
+        };
+
+        let cache = TemplateCache::new(100);
+        let template = cache.get_or_compile("{source} [source:prepare].").unwrap();
+
+        // 1. Director Stance (bystander sees everyone)
+        // Expects empty group to be completely ignored.
+        // Nested group is flattened so it prints as a single cohesive list.
+        let out_director = render_msg!("stranger_1", &template, "source" => &top_group).unwrap();
+        assert_eq!(
+            out_director,
+            "The tall man, Bob, Charlie, and Dave prepare."
+        );
+
+        // 2. Actor Stance (Player is the viewer)
+        // Expects "You" to be pulled to the front of the flattened list cleanly.
+        let out_actor = render_msg!("char_1", &template, "source" => &top_group).unwrap();
+        assert_eq!(out_actor, "You, Bob, Charlie, and Dave prepare.");
+    }
+
+    #[test]
+    fn test_single_member_group_grammar() {
+        let aldran = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+
+        let solo_group = GroupEntity {
+            members: vec![&aldran],
+        };
+
+        let cache = TemplateCache::new(100);
+
+        // 1. Verb Conjugation
+        // Because Aldran is singular, the verb "open" must conjugate to "opens"
+        let template_verb = cache
+            .get_or_compile("{source} [source:open] the door.")
+            .unwrap();
+        let out_verb = render_msg!("char_2", &template_verb, "source" => &solo_group).unwrap();
+        assert_eq!(out_verb, "Aldran opens the door.");
+
+        // 2. Pronoun Resolution
+        // Because Aldran is male, the pronoun must be "his" instead of "their"
+        let template_pronoun = cache
+            .get_or_compile("{source} [source:open] {source:poss} door.")
+            .unwrap();
+        let out_pronoun =
+            render_msg!("char_2", &template_pronoun, "source" => &solo_group).unwrap();
+        assert_eq!(out_pronoun, "Aldran opens his door.");
+
+        // 3. Articles for common noun wrapped in a group
+        let goblin = MockEntity {
+            id: "mob_1".to_string(),
+            name: "goblin".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+        let goblin_group = GroupEntity {
+            members: vec![&goblin],
+        };
+        let template_art = cache
+            .get_or_compile("{the:source} [source:attack].")
+            .unwrap();
+        let out_art = render_msg!("char_2", &template_art, "source" => &goblin_group).unwrap();
+        assert_eq!(out_art, "The goblin attacks.");
+    }
 }
