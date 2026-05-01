@@ -6,16 +6,16 @@ use crate::engine::Template;
 /// A thread-safe Least Recently Used (LRU) cache for compiled text templates.
 ///
 /// Because MUDs process high volumes of text concurrently, this cache wraps the 
-/// underlying ASTs in an `Arc`. This allows multiple network threads to safely 
-/// read and render the same compiled template simultaneously without incurring 
-/// cloning costs.
-pub struct TemplateCache<'a> {
+/// underlying owned ASTs in an `Arc`. This allows multiple network threads to safely 
+/// read and render the same compiled template simultaneously without incurring cloning costs,
+/// and safely stores templates regardless of the lifetime of the original raw database strings.
+pub struct TemplateCache {
     // We use Arc<Template> so multiple threads can read the same compiled AST 
     // simultaneously without having to clone the underlying Vec of Tokens.
-    inner: Mutex<LruCache<String, Arc<Template<'a>>>>,
+    inner: Mutex<LruCache<String, Arc<Template>>>,
 }
 
-impl<'a> TemplateCache<'a> {
+impl TemplateCache {
     /// Initializes a new thread-safe template cache.
     ///
     /// # Arguments
@@ -35,7 +35,7 @@ impl<'a> TemplateCache<'a> {
     /// # Errors
     /// Returns a `String` describing the syntax error if a cache miss occurs and 
     /// the subsequent compilation fails.
-    pub fn get_or_compile(&self, raw: &'a str) -> Result<Arc<Template<'a>>, String> {
+    pub fn get_or_compile(&self, raw: &str) -> Result<Arc<Template>, String> {
         let mut cache = self.inner.lock().unwrap();
 
         // 1. Cache Hit: If the template is already compiled, return an Arc pointer to it.

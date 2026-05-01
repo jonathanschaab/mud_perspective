@@ -81,7 +81,14 @@ pub fn resolve_pronoun(gender: Gender, p_type: &str, is_viewer: bool, is_plural:
 
 /// Conjugates a base verb into the appropriate person and number.
 pub fn conjugate_verb<'a>(base_verb: &'a str, is_viewer: bool, is_plural: bool) -> Cow<'a, str> {
-    let lower_verb = base_verb.to_lowercase();
+    // Avoid allocating a new String if the verb is already fully lowercase
+    let lower_verb_owned;
+    let lower_verb = if base_verb.chars().any(char::is_uppercase) {
+        lower_verb_owned = base_verb.to_lowercase();
+        lower_verb_owned.as_str()
+    } else {
+        base_verb
+    };
 
     // 1st/2nd person (viewer) AND 3rd-person plural subjects use the base uninflected verb,
     // EXCEPT for the highly irregular verb "to be" which becomes "are".
@@ -95,14 +102,14 @@ pub fn conjugate_verb<'a>(base_verb: &'a str, is_viewer: bool, is_plural: bool) 
     }
 
     // 1. Check our static PHF map for irregular overrides (3rd person singular)
-    if let Some(&irregular) = IRREGULAR_VERBS.get(lower_verb.as_str()) {
+    if let Some(&irregular) = IRREGULAR_VERBS.get(lower_verb) {
         return Cow::Borrowed(irregular);
     }
 
     // 2. Fallback algorithmic suffix rules for standard verbs
     if lower_verb.ends_with("ch") || lower_verb.ends_with("sh") || lower_verb.ends_with('s') || lower_verb.ends_with('x') || lower_verb.ends_with('z') {
         Cow::Owned(format!("{}es", base_verb))
-    } else if lower_verb.ends_with('y') && !is_vowel_before_y(&lower_verb) {
+    } else if lower_verb.ends_with('y') && !is_vowel_before_y(lower_verb) {
         let trimmed = &base_verb[..base_verb.len() - 1];
         Cow::Owned(format!("{}ies", trimmed))
     } else {
@@ -111,9 +118,7 @@ pub fn conjugate_verb<'a>(base_verb: &'a str, is_viewer: bool, is_plural: bool) 
 }
 
 fn is_vowel_before_y(verb: &str) -> bool {
-    let chars: Vec<char> = verb.chars().collect();
-    if chars.len() < 2 { return false; }
-    matches!(chars[chars.len() - 2], 'a' | 'e' | 'i' | 'o' | 'u')
+    matches!(verb.chars().rev().nth(1), Some('a' | 'e' | 'i' | 'o' | 'u'))
 }
 
 /// Dynamically returns "a" or "an" based on the phonetic pronunciation of the following word.

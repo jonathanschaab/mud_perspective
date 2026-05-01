@@ -297,6 +297,15 @@ mod tests {
         assert_eq!(observer_should, "Aldran should be careful, or the pack of wolves might attack.");
     }
 
+    #[test]
+    fn test_unclosed_tags_return_errors() {
+        let entity_err = Template::compile("The {source approaches.").unwrap_err();
+        assert_eq!(entity_err, "Unclosed entity tag starting at index 4");
+
+        let verb_err = Template::compile("The goblin [attack").unwrap_err();
+        assert_eq!(verb_err, "Unclosed verb tag starting at index 11");
+    }
+
     pub struct GroupEntity<'a> {
         pub members: Vec<&'a dyn TemplateEntity>,
     }
