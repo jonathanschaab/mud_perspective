@@ -267,6 +267,17 @@ impl Template {
     }
 }
 
+/// Parameters extracted from a token or fallback logic to render an entity.
+#[allow(clippy::struct_excessive_bools)]
+struct EntityRefParams<'a> {
+    key: &'a str,
+    article: Option<&'a str>,
+    is_capitalized: bool,
+    force_article: bool,
+    force_3rd_person: bool,
+    is_possessive: bool,
+}
+
 /// The core processor responsible for evaluating compiled templates against contexts.
 pub struct PerspectiveEngine;
 
@@ -291,7 +302,25 @@ impl PerspectiveEngine {
         for token in &template.tokens {
             match token {
                 Token::Literal(text) => raw_output.push_str(text),
-                Token::EntityRef { .. } => Self::render_entity_ref(ctx, &mut raw_output, token)?,
+                Token::EntityRef {
+                    key,
+                    article,
+                    is_capitalized,
+                    force_article,
+                    force_3rd_person,
+                    is_possessive,
+                } => Self::render_entity_ref(
+                    ctx,
+                    &mut raw_output,
+                    &EntityRefParams {
+                        key,
+                        article: article.as_deref(),
+                        is_capitalized: *is_capitalized,
+                        force_article: *force_article,
+                        force_3rd_person: *force_3rd_person,
+                        is_possessive: *is_possessive,
+                    },
+                )?,
                 Token::PronounRef { .. } => Self::render_pronoun_ref(ctx, &mut raw_output, token)?,
                 Token::VerbRef { .. } => Self::render_verb_ref(ctx, &mut raw_output, token)?,
             }
@@ -312,10 +341,13 @@ impl PerspectiveEngine {
         if let Some((root_key, prop_path)) = key.split_once('.')
             && let Some(mut current) = ctx.entities.get(root_key).copied()
         {
+            let mut current_path_end = root_key.len();
             for prop in prop_path.split('.') {
-                current = current
-                    .get_property(prop)
-                    .ok_or_else(|| format!("Missing property '{prop}' on entity '{root_key}'"))?;
+                let current_path = &key[..current_path_end];
+                current = current.get_property(prop).ok_or_else(|| {
+                    format!("Missing property '{prop}' on entity '{current_path}'")
+                })?;
+                current_path_end += prop.len() + 1; // +1 to step over the dot
             }
             return Ok(current);
         }
@@ -327,24 +359,12 @@ impl PerspectiveEngine {
     fn render_entity_ref(
         ctx: &RenderContext,
         raw_output: &mut String,
-        token: &Token,
+        params: &EntityRefParams<'_>,
     ) -> Result<(), String> {
-        let Token::EntityRef {
-            key,
-            article,
-            is_capitalized,
-            force_article,
-            force_3rd_person,
-            is_possessive,
-        } = token
-        else {
-            return Ok(());
-        };
+        *ctx.last_mentioned.borrow_mut() = Some(params.key.to_string());
 
-        *ctx.last_mentioned.borrow_mut() = Some(key.clone());
-
-        let entity = Self::get_entity(ctx, key)?;
-        let effective_viewer = if *force_3rd_person {
+        let entity = Self::get_entity(ctx, params.key)?;
+        let effective_viewer = if params.force_3rd_person {
             NULL_VIEWER
         } else {
             ctx.viewer_id
@@ -352,15 +372,19 @@ impl PerspectiveEngine {
 
         // --- Handle Groups / Distributed Lists ---
         if let Some(members) = entity.group_members() {
-            Self::render_group_entity(raw_output, entity, members, effective_viewer, token);
+            Self::render_group_entity(raw_output, entity, members, effective_viewer, params);
             return Ok(());
         }
 
         // --- Handle Single Entity Viewers ---
         if entity.contains_viewer(effective_viewer) {
-            let name_str = if *is_possessive {
-                if *is_capitalized { "Your" } else { "your" }
-            } else if *is_capitalized {
+            let name_str = if params.is_possessive {
+                if params.is_capitalized {
+                    "Your"
+                } else {
+                    "your"
+                }
+            } else if params.is_capitalized {
                 "You"
             } else {
                 "you"
@@ -374,29 +398,30 @@ impl PerspectiveEngine {
 
         // Capitalize the name if explicitly requested and it isn't already
         let name_buf;
-        let name_str = if *is_capitalized && name.chars().next().is_some_and(char::is_lowercase) {
-            name_buf = crate::grammar::capitalize_first(&name);
-            name_buf.as_str()
-        } else {
-            name.as_ref()
-        };
+        let name_str =
+            if params.is_capitalized && name.chars().next().is_some_and(char::is_lowercase) {
+                name_buf = crate::grammar::capitalize_first(&name);
+                name_buf.as_str()
+            } else {
+                name.as_ref()
+            };
 
         // Handle dynamic "a" or "an" injection
-        if let Some(art) = article
-            && let Some(resolved_art) = resolve_article(
+        if let Some(resolved_art) = params.article.and_then(|art| {
+            resolve_article(
                 art,
                 name_str,
                 entity.is_proper_noun_for(effective_viewer),
                 entity.is_plural(),
-                *force_article,
+                params.force_article,
             )
-        {
+        }) {
             raw_output.push_str(resolved_art);
         }
 
         raw_output.push_str(name_str);
 
-        if *is_possessive {
+        if params.is_possessive {
             Self::append_possessive_suffix(raw_output, entity.is_plural());
         }
         Ok(())
@@ -407,19 +432,8 @@ impl PerspectiveEngine {
         entity: &dyn TemplateEntity,
         members: &[&dyn TemplateEntity],
         effective_viewer: &str,
-        token: &Token,
+        params: &EntityRefParams<'_>,
     ) {
-        let Token::EntityRef {
-            article,
-            is_capitalized,
-            force_article,
-            is_possessive,
-            ..
-        } = token
-        else {
-            return;
-        };
-
         let (viewer_entity, visible) = crate::models::partition_group(members, effective_viewer);
 
         let has_viewer = viewer_entity.is_some();
@@ -434,15 +448,15 @@ impl PerspectiveEngine {
         }
 
         for (m, name) in visible {
-            if let Some(art) = article
-                && let Some(resolved_art) = resolve_article(
+            if let Some(resolved_art) = params.article.and_then(|art| {
+                resolve_article(
                     art,
                     &name,
                     m.is_proper_noun_for(effective_viewer),
                     m.is_plural(),
-                    *force_article,
+                    params.force_article,
                 )
-            {
+            }) {
                 formatted_names.push(std::borrow::Cow::Owned(format!("{resolved_art}{name}")));
                 continue;
             }
@@ -452,11 +466,11 @@ impl PerspectiveEngine {
         let list_str = crate::grammar::format_oxford_list(formatted_names);
 
         let mut final_str = list_str.into_owned();
-        if *is_possessive {
+        if params.is_possessive {
             Self::append_possessive_suffix(&mut final_str, entity.is_plural());
         }
 
-        if *is_capitalized && final_str.chars().next().is_some_and(char::is_lowercase) {
+        if params.is_capitalized && final_str.chars().next().is_some_and(char::is_lowercase) {
             raw_output.push_str(&crate::grammar::capitalize_first(&final_str));
         } else {
             raw_output.push_str(&final_str);
@@ -524,19 +538,15 @@ impl PerspectiveEngine {
             // Smart Anaphora Resolution: The entity hasn't been introduced yet!
             // Evaluate it as if the builder had written `{the:key}` instead.
             let is_possessive = p_type == "poss" || p_type == "abs_poss";
-            let fallback_token = Token::EntityRef {
-                key: key.clone(),
-                article: Some(if *is_capitalized {
-                    "The".to_string()
-                } else {
-                    "the".to_string()
-                }),
+            let fallback_params = EntityRefParams {
+                key,
+                article: Some(if *is_capitalized { "The" } else { "the" }),
                 is_capitalized: false, // The noun shouldn't be force-capitalized just because the pronoun was!
                 force_article: false,
                 force_3rd_person: *force_3rd_person,
                 is_possessive,
             };
-            Self::render_entity_ref(ctx, raw_output, &fallback_token)?;
+            Self::render_entity_ref(ctx, raw_output, &fallback_params)?;
         }
         Ok(())
     }
@@ -637,9 +647,7 @@ impl PerspectiveEngine {
 
                 // If the last real character was a sentence terminator, the tag might have
                 // hidden the sentence boundary from the unicode segmenter. Force a reset.
-                if let Some(lrc) = last_real_char
-                    && (lrc == '.' || lrc == '!' || lrc == '?')
-                {
+                if matches!(last_real_char, Some('.' | '!' | '?')) {
                     capitalized = false;
                 }
                 continue;
@@ -713,17 +721,13 @@ fn consume_until_closed(
 #[inline]
 fn find_skipped_tag_end(remainder: &str) -> Option<usize> {
     #[cfg(feature = "mxp")]
-    if remainder.starts_with('<')
-        && let Some(end_offset) = remainder.find('>')
-    {
-        return Some(end_offset);
+    if remainder.starts_with('<') {
+        return remainder.find('>');
     }
 
     #[cfg(feature = "msp")]
-    if (remainder.starts_with("!!SOUND(") || remainder.starts_with("!!MUSIC("))
-        && let Some(end_offset) = remainder.find(')')
-    {
-        return Some(end_offset);
+    if remainder.starts_with("!!SOUND(") || remainder.starts_with("!!MUSIC(") {
+        return remainder.find(')');
     }
 
     #[cfg(feature = "ansi")]

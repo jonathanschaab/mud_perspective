@@ -1527,5 +1527,19 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err_output, "Missing property 'shield' on entity 'source'");
+
+        // Verify multi-level error handling tracks the traversed path accurately
+        let err_template_multi = cache
+            .get_or_compile("{source.weapon.edge} is sharp.")
+            .unwrap();
+        let err_output_multi = PerspectiveEngine::render(
+            &err_template_multi,
+            &RenderContext::new("char_1").with_entity("source", &player),
+        )
+        .unwrap_err();
+        assert_eq!(
+            err_output_multi,
+            "Missing property 'edge' on entity 'source.weapon'"
+        );
     }
 }
