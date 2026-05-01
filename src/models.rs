@@ -178,33 +178,29 @@ impl TemplateEntity for GroupEntity<'_> {
     }
 
     fn display_name_for<'b>(&'b self, viewer_id: &str) -> Cow<'b, str> {
-        fn flatten_members<'c>(
+        fn collect_visible<'c>(
             members: &[&'c dyn TemplateEntity],
-            flat_list: &mut Vec<&'c dyn TemplateEntity>,
+            viewer_id: &str,
+            has_viewer: &mut bool,
+            visible_others: &mut Vec<(&'c dyn TemplateEntity, Cow<'c, str>)>,
         ) {
             for &m in members {
                 if let Some(group) = m.as_group() {
-                    flatten_members(&group.members, flat_list);
+                    collect_visible(&group.members, viewer_id, has_viewer, visible_others);
                 } else {
-                    flat_list.push(m);
+                    let name = m.display_name_for(viewer_id);
+                    if name == "you" {
+                        *has_viewer = true;
+                    } else if !name.is_empty() {
+                        visible_others.push((m, name));
+                    }
                 }
             }
         }
 
-        let mut flat_members: Vec<&dyn TemplateEntity> = Vec::new();
-        flatten_members(&self.members, &mut flat_members);
-
         let mut has_viewer = false;
         let mut visible_others = Vec::new();
-
-        for &m in &flat_members {
-            let name = m.display_name_for(viewer_id);
-            if name == "you" {
-                has_viewer = true;
-            } else if !name.is_empty() {
-                visible_others.push((m, name));
-            }
-        }
+        collect_visible(&self.members, viewer_id, &mut has_viewer, &mut visible_others);
 
         let total_visible = visible_others.len() + usize::from(has_viewer);
 
@@ -222,6 +218,11 @@ impl TemplateEntity for GroupEntity<'_> {
 
         let mut names: Vec<Cow<'b, str>> = Vec::with_capacity(total_visible);
 
+        // If the viewer is in this group, they are always listed first as "you"
+        if has_viewer {
+            names.push(Cow::Borrowed("you"));
+        }
+
         for (m, name) in visible_others {
             // Dynamically prepend "the " if it is a common noun!
             if let Some(art) = resolve_article(
@@ -235,11 +236,6 @@ impl TemplateEntity for GroupEntity<'_> {
             } else {
                 names.push(name);
             }
-        }
-
-        // If the viewer is in this group, they are always listed first as "you"
-        if has_viewer {
-            names.insert(0, Cow::Borrowed("you"));
         }
 
         if names.len() == 2 {

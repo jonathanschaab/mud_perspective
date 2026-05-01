@@ -131,6 +131,9 @@ pub fn conjugate_verb<'a>(
         if lower_verb == "be" {
             return format_verb("are", is_capitalized);
         }
+        if lower_verb == "was" {
+            return format_verb("were", is_capitalized);
+        }
         // If you want strict 1st person singular ("I am") you can split `is_viewer` logic later,
         // but for Actor Stance ("You"), "are" is always correct.
         return Cow::Borrowed(original_verb);
@@ -207,13 +210,19 @@ pub fn resolve_article(
     is_viewer: bool,
     is_proper_noun: bool,
     is_plural: bool,
+    force_article: bool,
 ) -> Option<&'static str> {
-    // Suppress articles if the entity is the viewer or a proper noun
-    if is_viewer || is_proper_noun {
+    // The viewer ALWAYS suppresses all articles/demonstratives ("This you" makes no sense)
+    if is_viewer {
         return None;
     }
 
-    let is_capitalized = article.starts_with(|c: char| c.is_uppercase());
+    // Suppress articles for proper nouns unless the builder explicitly forced it
+    if is_proper_noun && !force_article {
+        return None;
+    }
+
+    let is_capitalized = article.starts_with(char::is_uppercase);
 
     if article.eq_ignore_ascii_case("a") || article.eq_ignore_ascii_case("an") {
         if is_plural {
@@ -228,6 +237,18 @@ pub fn resolve_article(
         }
     } else if article.eq_ignore_ascii_case("the") {
         Some(if is_capitalized { "The " } else { "the " })
+    } else if article.eq_ignore_ascii_case("this") {
+        if is_plural {
+            Some(if is_capitalized { "These " } else { "these " })
+        } else {
+            Some(if is_capitalized { "This " } else { "this " })
+        }
+    } else if article.eq_ignore_ascii_case("that") {
+        if is_plural {
+            Some(if is_capitalized { "Those " } else { "those " })
+        } else {
+            Some(if is_capitalized { "That " } else { "that " })
+        }
     } else {
         None
     }

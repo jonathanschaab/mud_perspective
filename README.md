@@ -105,13 +105,22 @@ let template = cache.get_or_compile("{source} [source:open] the door.").unwrap()
 
 ### **4. Syntax Reference**
 
-* **Entities:** {key} inserts the entity's display name. Use {Key} to force capitalization mid-sentence.  
-* **Articles:** {a:key} or {the:key} prepends the appropriate article. Use {A:key} or {The:key} to force capitalization mid-sentence. These are automatically suppressed if the entity evaluates to the viewer ("you") or is flagged as a proper noun.  
+* **Entities:** {key} inserts the entity's display name. Use {Key} to force capitalization mid-sentence.
+* **Articles:** {a:key} or {the:key} prepends the appropriate article. Use {A:key} or {The:key} to force capitalization mid-sentence. These are automatically suppressed if the entity evaluates to the viewer ("you") or is flagged as a proper noun.
 * **Pronouns:** {key:type}. Supported types include subj (he/she/it/they), obj (him/her/it/them), poss (his/her/their), abs_poss (his/hers/theirs), and reflex (himself/themselves). Capitalize the type (e.g., {key:Subj}) to force capitalization mid-sentence.
 
 * **Verbs:** [key:verb] explicitly binds a base verb to a subject to ensure correct conjugation. Capitalize the verb (e.g., [key:Verb]) to force capitalization mid-sentence. This prevents grammatical errors during compound subjects or passive voice structures.
 
 * **Escaping:** Use a backslash (`\`) to escape special characters if you need to output literal braces or brackets (e.g., `\{`, `\}`, `\[`, `\]`). You can also escape a backslash itself (`\\`).
+
+### 5. Forced Perspectives (+ and -)
+
+You can explicitly override the engine's natural perspective shifting by prepending a `+` or `-` to any entity, pronoun, or verb tag.
+
+* **Forced Director Stance (`+`):** Forces the engine to evaluate the tag in the 3rd-person (e.g., `{+source}`, `{+source:subj}`, `[+source:attack]`), even if the viewer *is* the entity. You can also use this to force an article onto a proper noun (e.g., `{+the:source}`).
+  * *Use cases:* Global leaderboards, objective logs, or system broadcasts where a player should read their own name rather than "you" (e.g., `"Aldran has captured the flag!"`).
+* **Forced Actor Stance (`-`):** Forces the engine to evaluate the tag in the 2nd-person (e.g., `{-source}`, `{-source:subj}`, `[-source:attack]`), treating the entity as "you" even if the viewer is just a bystander.
+  * *Use cases:* Mind control spells, viewing a memory, or looking through the eyes of a magical familiar (e.g., `"You fly into the room."` when the viewer is looking through the eyes of a raven).
 
 ## **Cargo Features**
 

@@ -15,6 +15,12 @@ pub enum Token {
         article: Option<String>,
         /// A flag indicating if the entity key was capitalized (e.g. {Source}).
         is_capitalized: bool,
+        /// A flag indicating if the builder explicitly forced the article to render (e.g. {+the:source}).
+        force_article: bool,
+        /// A flag indicating if the builder explicitly forced the 3rd-person stance (e.g. {+source}).
+        force_3rd_person: bool,
+        /// A flag indicating if the builder explicitly forced the Actor Stance (e.g. {-source}).
+        force_actor: bool,
     },
     /// e.g., {source:poss}
     PronounRef {
@@ -24,6 +30,10 @@ pub enum Token {
         p_type: String,
         /// A flag indicating if the pronoun type was capitalized (e.g. {source:Subj}).
         is_capitalized: bool,
+        /// A flag indicating if the builder explicitly forced the 3rd-person stance (e.g. {+source:poss}).
+        force_3rd_person: bool,
+        /// A flag indicating if the builder explicitly forced the Actor Stance (e.g. {-source:poss}).
+        force_actor: bool,
     },
     /// e.g., [source:pulse]
     VerbRef {
@@ -35,6 +45,10 @@ pub enum Token {
         lower_verb: String,
         /// A pre-calculated flag indicating if the original verb was capitalized.
         is_capitalized: bool,
+        /// A flag indicating if the builder explicitly forced 3rd-person conjugation (e.g. [+source:pulse]).
+        force_3rd_person: bool,
+        /// A flag indicating if the builder explicitly forced 2nd-person conjugation (e.g. [-source:pulse]).
+        force_actor: bool,
     },
 }
 
@@ -123,12 +137,22 @@ impl Template {
                             return Err(validation_error("Malformed entity tag", content, '{'));
                         }
 
-                        // 2-part case
-                        if p1.eq_ignore_ascii_case("a")
-                            || p1.eq_ignore_ascii_case("an")
-                            || p1.eq_ignore_ascii_case("the")
-                        {
-                            if p2.is_empty() {
+                        let force_article = p1.starts_with('+');
+                        let p1_str = if force_article { &p1[1..] } else { p1 };
+
+                        let is_article = p1_str.eq_ignore_ascii_case("a")
+                            || p1_str.eq_ignore_ascii_case("an")
+                            || p1_str.eq_ignore_ascii_case("the")
+                            || p1_str.eq_ignore_ascii_case("this")
+                            || p1_str.eq_ignore_ascii_case("that");
+
+                        // 2-part case: {article:key}
+                        if is_article {
+                            let force_3rd_person = p2.starts_with('+');
+                            let force_actor = p2.starts_with('-');
+                            let p2_str = if force_3rd_person || force_actor { &p2[1..] } else { p2 };
+
+                            if p2_str.is_empty() {
                                 return Err(validation_error(
                                     "Entity tag has an article but an empty key",
                                     content,
@@ -136,12 +160,20 @@ impl Template {
                                 ));
                             }
                             tokens.push(Token::EntityRef {
-                                key: p2.to_lowercase(),
-                                article: Some(p1.to_string()),
-                                is_capitalized: p2.chars().next().is_some_and(char::is_uppercase),
+                                key: p2_str.to_lowercase(),
+                                article: Some(p1_str.to_string()),
+                                is_capitalized: p2_str.chars().next().is_some_and(char::is_uppercase),
+                                force_article,
+                                force_3rd_person,
+                                force_actor,
                             });
                         } else {
-                            if p1.is_empty() || p2.is_empty() {
+                            // 2-part case: {key:pronoun}
+                            let force_3rd_person = p1.starts_with('+');
+                            let force_actor = p1.starts_with('-');
+                            let p1_str = if force_3rd_person || force_actor { &p1[1..] } else { p1 };
+
+                            if p1_str.is_empty() || p2.is_empty() {
                                 return Err(validation_error(
                                     "Pronoun tag has an empty key or type",
                                     content,
@@ -149,14 +181,20 @@ impl Template {
                                 ));
                             }
                             tokens.push(Token::PronounRef {
-                                key: p1.to_lowercase(),
+                                key: p1_str.to_lowercase(),
                                 p_type: p2.to_lowercase(),
                                 is_capitalized: p2.chars().next().is_some_and(char::is_uppercase),
+                                force_3rd_person,
+                                force_actor,
                             });
                         }
                     } else {
-                        // 1-part case
-                        if p1.is_empty() {
+                        // 1-part case: {key}
+                        let force_3rd_person = p1.starts_with('+');
+                        let force_actor = p1.starts_with('-');
+                        let p1_str = if force_3rd_person || force_actor { &p1[1..] } else { p1 };
+
+                        if p1_str.is_empty() {
                             return Err(validation_error(
                                 "Entity tag has an empty key",
                                 content,
@@ -164,17 +202,25 @@ impl Template {
                             ));
                         }
                         tokens.push(Token::EntityRef {
-                            key: p1.to_lowercase(),
+                            key: p1_str.to_lowercase(),
                             article: None,
-                            is_capitalized: p1.chars().next().is_some_and(char::is_uppercase),
+                            is_capitalized: p1_str.chars().next().is_some_and(char::is_uppercase),
+                            force_article: false,
+                            force_3rd_person,
+                            force_actor,
                         });
                     }
                 } else {
-                    let (subject_key, base_verb) = if let Some(p2) = parts.next() {
+                    let (subject_key, base_verb, force_3rd_person, force_actor) = if let Some(p2) = parts.next() {
                         if parts.next().is_some() {
                             return Err(validation_error("Malformed verb tag", content, '['));
                         }
-                        if p1.is_empty() {
+                        
+                        let force_3rd_person = p1.starts_with('+');
+                        let force_actor = p1.starts_with('-');
+                        let p1_str = if force_3rd_person || force_actor { &p1[1..] } else { p1 };
+
+                        if p1_str.is_empty() {
                             return Err(validation_error(
                                 "Verb tag has an empty subject key",
                                 content,
@@ -182,9 +228,9 @@ impl Template {
                             ));
                         }
                         // p2 (base_verb) can be empty, we warn for that later.
-                        (Some(p1.to_lowercase()), p2)
+                        (Some(p1_str.to_lowercase()), p2, force_3rd_person, force_actor)
                     } else {
-                        (None, p1)
+                        (None, p1, false, false)
                     };
 
                     let original_verb = base_verb.to_string();
@@ -203,6 +249,8 @@ impl Template {
                         original_verb,
                         lower_verb,
                         is_capitalized,
+                        force_3rd_person,
+                        force_actor,
                     });
                 }
                 last_literal_start = end_idx + 1;
@@ -264,11 +312,19 @@ impl PerspectiveEngine {
                     key,
                     article,
                     is_capitalized,
+                    force_article,
+                    force_3rd_person,
+                    force_actor,
                 } => {
                     let entity = get_entity(key)?;
+                    let effective_viewer = if *force_3rd_person { "\0" } else { ctx.viewer_id };
 
-                    let is_viewer = entity.contains_viewer(ctx.viewer_id);
-                    let name = entity.display_name_for(ctx.viewer_id);
+                    let is_viewer = *force_actor || entity.contains_viewer(effective_viewer);
+                    let name = if *force_actor {
+                        std::borrow::Cow::Borrowed("you")
+                    } else {
+                        entity.display_name_for(effective_viewer)
+                    };
 
                     // Capitalize the name if explicitly requested and it isn't already
                     let name_buf;
@@ -286,8 +342,9 @@ impl PerspectiveEngine {
                             art,
                             name_str,
                             is_viewer,
-                            entity.is_proper_noun_for(ctx.viewer_id),
+                            entity.is_proper_noun_for(effective_viewer),
                             entity.is_plural(),
+                            *force_article,
                         )
                     {
                         raw_output.push_str(resolved_art);
@@ -299,10 +356,13 @@ impl PerspectiveEngine {
                     key,
                     p_type,
                     is_capitalized,
+                    force_3rd_person,
+                    force_actor,
                 } => {
                     let entity = get_entity(key)?;
+                    let effective_viewer = if *force_3rd_person { "\0" } else { ctx.viewer_id };
 
-                    let is_viewer = entity.contains_viewer(ctx.viewer_id);
+                    let is_viewer = *force_actor || entity.contains_viewer(effective_viewer);
                     let pronoun =
                         resolve_pronoun(entity.gender(), p_type, is_viewer, entity.is_plural())?;
 
@@ -317,11 +377,14 @@ impl PerspectiveEngine {
                     original_verb,
                     lower_verb,
                     is_capitalized,
+                    force_3rd_person,
+                    force_actor,
                 } => {
                     // Explicitly bind the verb to its subject to solve passive voice / compound subjects
                     let (is_viewer, is_plural) = if let Some(key) = subject_key {
                         let entity = get_entity(key)?;
-                        (entity.contains_viewer(ctx.viewer_id), entity.is_plural())
+                        let effective_viewer = if *force_3rd_person { "\0" } else { ctx.viewer_id };
+                        (*force_actor || entity.contains_viewer(effective_viewer), entity.is_plural())
                     } else {
                         // Safe default to 3rd-person singular if no subject is bound
                         (false, false)

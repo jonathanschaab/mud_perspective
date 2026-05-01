@@ -1092,4 +1092,94 @@ mod tests {
         let out_art = render_msg!("char_2", &template_art, "source" => &goblin_group).unwrap();
         assert_eq!(out_art, "The goblin attacks.");
     }
+
+    #[test]
+    fn test_demonstratives_and_past_tense() {
+        let goblin = MockEntity {
+            id: "mob_1".to_string(),
+            name: "goblin".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+        let wolves = MockEntity {
+            id: "mob_2".to_string(),
+            name: "wolves".to_string(),
+            gender: Gender::Plural,
+            is_plural: true,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+
+        // 1. Demonstratives (this -> these) combined with Past Tense "To Be" (was -> were)
+        let template = cache.get_or_compile("{This:source} [source:was] angry.").unwrap();
+        
+        let out_singular = render_msg!("char_2", &template, "source" => &goblin).unwrap();
+        assert_eq!(out_singular, "This goblin was angry.");
+
+        let out_plural = render_msg!("char_2", &template, "source" => &wolves).unwrap();
+        assert_eq!(out_plural, "These wolves were angry.");
+        
+        // 2. Automatically suppresses the demonstrative for the viewer just like an article
+        let out_viewer = render_msg!("mob_2", &template, "source" => &wolves).unwrap();
+        assert_eq!(out_viewer, "You were angry.");
+
+        // 3. Forcing an article for a proper noun using the `+` prefix
+        let template_force = cache.get_or_compile("{+This:source} [source:be] angry.").unwrap();
+        let aldran = MockEntity { id: "char_1".to_string(), name: "Aldran".to_string(), gender: Gender::Male, is_plural: false, is_proper_noun: true };
+        let out_forced = render_msg!("char_2", &template_force, "source" => &aldran).unwrap();
+        assert_eq!(out_forced, "This Aldran is angry.");
+    }
+
+    #[test]
+    fn test_force_director_stance() {
+        let player = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+
+        let goblin = MockEntity {
+            id: "mob_1".to_string(),
+            name: "goblin".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+
+        let template_forced = cache.get_or_compile("{+source} [+source:attack] {the:target} with {+source:poss} sword.").unwrap();
+
+        // The player is the viewer, so normally this would render "You attack the goblin with your sword."
+        // Because of the `+` prefix on the keys, it forces 3rd person logic even for the viewer!
+        let out_forced = render_msg!("char_1", &template_forced, "source" => &player, "target" => &goblin).unwrap();
+        assert_eq!(out_forced, "Aldran attacks the goblin with his sword.");
+
+        // Can even force an article onto a forced-3rd-person proper noun (e.g. {+the:+source})
+        let template_double_force = cache.get_or_compile("{+the:+source} is here.").unwrap();
+        let out_double_force = render_msg!("char_1", &template_double_force, "source" => &player).unwrap();
+        assert_eq!(out_double_force, "The Aldran is here.");
+    }
+
+    #[test]
+    fn test_force_actor_stance() {
+        let raven = MockEntity {
+            id: "mob_familiar".to_string(),
+            name: "raven".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+        let template = cache.get_or_compile("{-source} [-source:fly] into the room. {-source:Subj} [-source:be] looking for {-source:poss} master.").unwrap();
+
+        // Using the mind-control / familiar stance, force the player to view the text as the raven!
+        let out_forced = render_msg!("char_1", &template, "source" => &raven).unwrap();
+        assert_eq!(out_forced, "You fly into the room. You are looking for your master.");
+    }
 }
