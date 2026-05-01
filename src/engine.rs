@@ -64,6 +64,16 @@ impl Template {
         let mut last_literal_start = 0;
 
         while let Some(&(i, c)) = chars.peek() {
+            #[allow(unused_variables)]
+            let remainder = &raw[i..];
+
+            #[cfg(any(feature = "mxp", feature = "msp"))]
+            if let Some(end_offset) = find_skipped_tag_end(remainder) {
+                advance_chars_until(&mut chars, i + end_offset);
+                continue;
+            }
+
+            #[cfg(feature = "ansi")]
             if c == '\x1b' {
                 chars.next();
                 if let Some(&(_, next_c)) = chars.peek()
@@ -71,111 +81,89 @@ impl Template {
                 {
                     chars.next(); // Consume the `[` so it isn't mistakenly parsed as a verb tag
                 }
-            } else if c == '{' {
+                continue;
+            }
+
+            if c == '{' || c == '[' {
                 // Push any preceding literal text
                 if i > last_literal_start {
                     tokens.push(Token::Literal(raw[last_literal_start..i].to_string()));
                 }
-                chars.next(); // Consume '{'
+                chars.next(); // Consume the opening brace or bracket
 
-                let mut end_idx = i + 1;
-                let mut closed = false;
-                while let Some(&(j, ch)) = chars.peek() {
-                    chars.next();
-                    if ch == '}' {
-                        end_idx = j;
-                        closed = true;
-                        break;
-                    }
-                }
+                let is_entity = c == '{';
+                let close_char = if is_entity { '}' } else { ']' };
+                let tag_name = if is_entity { "entity tag" } else { "verb tag" };
 
-                if !closed {
-                    return Err(format!("Unclosed entity tag starting at index {}", i));
-                }
+                let end_idx = consume_until_closed(&mut chars, i, close_char, tag_name)?;
 
                 let content = &raw[i + 1..end_idx];
                 let mut parts = content.split(':');
-
                 let p1 = parts.next().unwrap();
-                if let Some(p2) = parts.next() {
-                    if parts.next().is_some() {
-                        return Err(format!("Malformed entity tag: {{{}}}", content));
-                    }
 
-                    // 2-part case
-                    if p1 == "a" || p1 == "an" {
-                        tokens.push(Token::EntityRef {
-                            key: p2.to_string(),
-                            article: Some("a".to_string()),
-                        });
-                    } else if p1 == "the" {
-                        tokens.push(Token::EntityRef {
-                            key: p2.to_string(),
-                            article: Some("the".to_string()),
-                        });
+                if is_entity {
+                    if let Some(p2) = parts.next() {
+                        if parts.next().is_some() {
+                            tracing::error!("Malformed entity tag: {{{}}}", content);
+                            return Err(format!("Malformed entity tag: {{{}}}", content));
+                        }
+
+                        // 2-part case
+                        if p1 == "a" || p1 == "an" {
+                            tokens.push(Token::EntityRef {
+                                key: p2.to_string(),
+                                article: Some("a".to_string()),
+                            });
+                        } else if p1 == "the" {
+                            tokens.push(Token::EntityRef {
+                                key: p2.to_string(),
+                                article: Some("the".to_string()),
+                            });
+                        } else {
+                            // Otherwise, it's a pronoun like {source:poss}
+                            tokens.push(Token::PronounRef {
+                                key: p1.to_string(),
+                                p_type: p2.to_string(),
+                            });
+                        }
                     } else {
-                        // Otherwise, it's a pronoun like {source:poss}
-                        tokens.push(Token::PronounRef {
+                        // 1-part case
+                        tokens.push(Token::EntityRef {
                             key: p1.to_string(),
-                            p_type: p2.to_string(),
+                            article: None,
                         });
                     }
                 } else {
-                    // 1-part case
-                    tokens.push(Token::EntityRef {
-                        key: p1.to_string(),
-                        article: None,
+                    let (subject_key, base_verb) = if let Some(p2) = parts.next() {
+                        if parts.next().is_some() {
+                            tracing::error!("Malformed verb tag: [{}]", content);
+                            return Err(format!("Malformed verb tag: [{}]", content));
+                        }
+                        (Some(p1.to_string()), p2)
+                    } else {
+                        (None, p1)
+                    };
+
+                    let original_verb = base_verb.to_string();
+                    let is_capitalized = original_verb
+                        .chars()
+                        .next()
+                        .is_some_and(|c| c.is_uppercase());
+                    let lower_verb = original_verb.to_lowercase();
+
+                    if original_verb.is_empty() {
+                        tracing::warn!(
+                            "Parsed an empty verb tag in template. This will conjugate to just 's'."
+                        );
+                    }
+
+                    tokens.push(Token::VerbRef {
+                        subject_key,
+                        original_verb,
+                        lower_verb,
+                        is_capitalized,
                     });
                 }
-                last_literal_start = end_idx + 1;
-            } else if c == '[' {
-                // Push any preceding literal text
-                if i > last_literal_start {
-                    tokens.push(Token::Literal(raw[last_literal_start..i].to_string()));
-                }
-                chars.next(); // Consume '['
-
-                let mut end_idx = i + 1;
-                let mut closed = false;
-                while let Some(&(j, ch)) = chars.peek() {
-                    chars.next();
-                    if ch == ']' {
-                        end_idx = j;
-                        closed = true;
-                        break;
-                    }
-                }
-
-                if !closed {
-                    return Err(format!("Unclosed verb tag starting at index {}", i));
-                }
-
-                let content = &raw[i + 1..end_idx];
-                let mut parts = content.split(':');
-
-                let p1 = parts.next().unwrap();
-                let (subject_key, base_verb) = if let Some(p2) = parts.next() {
-                    if parts.next().is_some() {
-                        return Err(format!("Malformed verb tag: [{}]", content));
-                    }
-                    (Some(p1.to_string()), p2)
-                } else {
-                    (None, p1)
-                };
-
-                let original_verb = base_verb.to_string();
-                let is_capitalized = original_verb
-                    .chars()
-                    .next()
-                    .is_some_and(|c| c.is_uppercase());
-                let lower_verb = original_verb.to_lowercase();
-
-                tokens.push(Token::VerbRef {
-                    subject_key,
-                    original_verb,
-                    lower_verb,
-                    is_capitalized,
-                });
                 last_literal_start = end_idx + 1;
             } else {
                 // Move to the next character if it's not a special tag
@@ -211,9 +199,20 @@ impl PerspectiveEngine {
     ///
     /// # Errors
     /// Returns a `String` error if the template references a key not provided in the `ctx`.
+    #[tracing::instrument(level = "trace", skip_all, fields(viewer_id = %ctx.viewer_id))]
     pub fn render(template: &Template, ctx: &RenderContext) -> Result<String, String> {
         // 1. Pre-allocate buffer to prevent continuous heap allocations
         let mut raw_output = String::with_capacity(template.estimated_length);
+
+        let get_entity = |key: &str| {
+            ctx.entities.get(key).copied().ok_or_else(|| {
+                tracing::error!(
+                    "Failed to render template: Missing entity for key '{}'",
+                    key
+                );
+                format!("Missing entity for key: {}", key)
+            })
+        };
 
         for token in &template.tokens {
             match token {
@@ -221,38 +220,29 @@ impl PerspectiveEngine {
                     raw_output.push_str(text);
                 }
                 Token::EntityRef { key, article } => {
-                    let entity = ctx
-                        .entities
-                        .get(key.as_str())
-                        .ok_or_else(|| format!("Missing entity for key: {}", key))?;
+                    let entity = get_entity(key)?;
 
                     let is_viewer = entity.contains_viewer(ctx.viewer_id);
                     let name = entity.display_name_for(ctx.viewer_id);
 
                     // Handle dynamic "a" or "an" injection
-                    if let Some(art) = article {
-                        // Suppress articles if the viewer is part of this group
-                        // OR if it's a proper noun
-                        if is_viewer || entity.is_proper_noun_for(ctx.viewer_id) {
-                            raw_output.push_str(&name);
-                        } else if art == "a" || art == "an" {
+                    if let Some(art) = article
+                        && !is_viewer
+                        && !entity.is_proper_noun_for(ctx.viewer_id)
+                    {
+                        if art == "a" || art == "an" {
                             let indefinite = get_indefinite_article(&name);
                             raw_output.push_str(indefinite);
                             raw_output.push(' ');
-                            raw_output.push_str(&name);
                         } else if art == "the" {
                             raw_output.push_str("the ");
-                            raw_output.push_str(&name);
                         }
-                    } else {
-                        raw_output.push_str(&name);
                     }
+
+                    raw_output.push_str(&name);
                 }
                 Token::PronounRef { key, p_type } => {
-                    let entity = ctx
-                        .entities
-                        .get(key.as_str())
-                        .ok_or_else(|| format!("Missing entity for key: {}", key))?;
+                    let entity = get_entity(key)?;
 
                     let is_viewer = entity.contains_viewer(ctx.viewer_id);
                     let pronoun =
@@ -267,10 +257,7 @@ impl PerspectiveEngine {
                 } => {
                     // Explicitly bind the verb to its subject to solve passive voice / compound subjects
                     let (is_viewer, is_plural) = if let Some(key) = subject_key {
-                        let entity = ctx
-                            .entities
-                            .get(key.as_str())
-                            .ok_or_else(|| format!("Missing entity for key: {}", key))?;
+                        let entity = get_entity(key)?;
                         (entity.contains_viewer(ctx.viewer_id), entity.is_plural())
                     } else {
                         // Safe default to 3rd-person singular if no subject is bound
@@ -303,52 +290,43 @@ impl PerspectiveEngine {
         let mut capitalized = false;
         let mut last_real_char = None;
 
-        let mut chars = input.char_indices().peekable();
-
-        while let Some(&(i, c)) = chars.peek() {
-            // If we cross into a new sentence boundary, reset the capitalization flag
-            while let Some(next_start) = next_sentence_start {
-                if i >= next_start {
-                    capitalized = false;
-                    next_sentence_start = bounds.next().map(|(idx, _)| idx);
+        let mut catch_up_bounds = |target_idx: usize, next_start: &mut Option<usize>| -> bool {
+            let mut advanced = false;
+            while let Some(ns) = *next_start {
+                if ns <= target_idx {
+                    *next_start = bounds.next().map(|(idx, _)| idx);
+                    advanced = true;
                 } else {
                     break;
                 }
             }
+            advanced
+        };
 
+        let mut chars = input.char_indices().peekable();
+
+        while let Some(&(i, c)) = chars.peek() {
+            // If we cross into a new sentence boundary, reset the capitalization flag
+            if catch_up_bounds(i, &mut next_sentence_start) {
+                capitalized = false;
+            }
+
+            #[allow(unused_variables)]
             let remainder = &input[i..];
+            #[allow(unused_mut)]
             let mut skipped_tag = false;
 
-            // 1. Skip MXP Tags (e.g., <SEND HREF="..."> or <COLOR red>)
-            if c == '<'
-                && let Some(end_offset) = remainder.find('>')
-            {
+            // 1 & 2. Skip MXP Tags and MSP Triggers
+            #[cfg(any(feature = "mxp", feature = "msp"))]
+            if let Some(end_offset) = find_skipped_tag_end(remainder) {
                 output.push_str(&remainder[..=end_offset]);
-                let target_i = i + end_offset;
-                while let Some(&(curr_i, _)) = chars.peek() {
-                    if curr_i <= target_i {
-                        chars.next();
-                    } else {
-                        break;
-                    }
-                }
+                advance_chars_until(&mut chars, i + end_offset);
                 skipped_tag = true;
-            } else if (remainder.starts_with("!!SOUND(") || remainder.starts_with("!!MUSIC("))
-                && let Some(end_offset) = remainder.find(')')
-            {
-                // 2. Skip MSP Triggers (e.g., !!SOUND(...) or !!MUSIC(...))
-                output.push_str(&remainder[..=end_offset]);
-                let target_i = i + end_offset;
-                while let Some(&(curr_i, _)) = chars.peek() {
-                    if curr_i <= target_i {
-                        chars.next();
-                    } else {
-                        break;
-                    }
-                }
-                skipped_tag = true;
-            } else if c == '\x1b' {
-                // 3. Skip ANSI Escape Sequences
+            }
+
+            // 3. Skip ANSI Escape Sequences
+            #[cfg(feature = "ansi")]
+            if !skipped_tag && c == '\x1b' {
                 chars.next(); // Consume ESC
                 output.push('\x1b');
 
@@ -395,6 +373,13 @@ impl PerspectiveEngine {
             }
 
             if skipped_tag {
+                // Discard any sentence boundaries that fell inside the tag we just skipped.
+                // Otherwise, crossing them will falsely trigger the capitalization flag
+                // on the next visible word.
+                if let Some(&(curr_i, _)) = chars.peek() {
+                    catch_up_bounds(curr_i, &mut next_sentence_start);
+                }
+
                 // If the last real character was a sentence terminator, the tag might have
                 // hidden the sentence boundary from the unicode segmenter. Force a reset.
                 if let Some(lrc) = last_real_char
@@ -426,4 +411,68 @@ impl PerspectiveEngine {
 
         output
     }
+}
+
+#[cfg(any(feature = "mxp", feature = "msp"))]
+#[inline]
+fn advance_chars_until(
+    chars: &mut std::iter::Peekable<std::str::CharIndices<'_>>,
+    target_i: usize,
+) {
+    while let Some(&(curr_i, _)) = chars.peek() {
+        if curr_i <= target_i {
+            chars.next();
+        } else {
+            break;
+        }
+    }
+}
+
+#[inline]
+fn consume_until_closed(
+    chars: &mut std::iter::Peekable<std::str::CharIndices<'_>>,
+    start_idx: usize,
+    close_char: char,
+    tag_type: &str,
+) -> Result<usize, String> {
+    let mut end_idx = start_idx + 1;
+    let mut closed = false;
+    while let Some(&(j, ch)) = chars.peek() {
+        chars.next();
+        if ch == close_char {
+            end_idx = j;
+            closed = true;
+            break;
+        }
+    }
+
+    if !closed {
+        tracing::error!("Unclosed {} starting at index {}", tag_type, start_idx);
+        return Err(format!(
+            "Unclosed {} starting at index {}",
+            tag_type, start_idx
+        ));
+    }
+
+    Ok(end_idx)
+}
+
+#[cfg(any(feature = "mxp", feature = "msp"))]
+#[inline]
+fn find_skipped_tag_end(remainder: &str) -> Option<usize> {
+    #[cfg(feature = "mxp")]
+    if remainder.starts_with('<')
+        && let Some(end_offset) = remainder.find('>')
+    {
+        return Some(end_offset);
+    }
+
+    #[cfg(feature = "msp")]
+    if (remainder.starts_with("!!SOUND(") || remainder.starts_with("!!MUSIC("))
+        && let Some(end_offset) = remainder.find(')')
+    {
+        return Some(end_offset);
+    }
+
+    None
 }

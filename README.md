@@ -11,7 +11,7 @@ The primary goal of this crate is to provide a reliable, thread-safe templating 
 * **Subject-Verb Agreement:** Conjugating verbs correctly based on the grammatical number and person of the subject.  
 * **Irregular Verb Handling:** Utilizing a static dictionary to safely conjugate common irregular and modal verbs without relying strictly on algorithmic suffixes.  
 * **Epistemological Masking:** Allowing the underlying game logic to obscure entity names (e.g., using disguises or recognition systems) based on the specific observer viewing the text.
-* **Memory Efficiency:** Using a thread-safe AST cache backed by an LRU eviction strategy and Cow (Clone-on-Write) strings to minimize heap allocations during high-frequency combat loops.
+* **Memory Efficiency:** Using a highly concurrent AST cache backed by a TinyLFU eviction strategy and Cow (Clone-on-Write) strings to minimize heap allocations and lock contention during high-frequency combat loops.
 
 ## **API Usage**
 

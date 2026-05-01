@@ -407,6 +407,27 @@ mod tests {
     }
 
     #[test]
+    fn test_exceptionally_short_verbs() {
+        let player = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+
+        let cache = TemplateCache::new(100);
+
+        let template_y = cache.get_or_compile("{source} [source:y].").unwrap();
+        let output_y = render_msg!("char_3", &template_y, "source" => &player).unwrap();
+        assert_eq!(output_y, "Aldran ys.");
+
+        let template_empty = cache.get_or_compile("{source} [source:].").unwrap();
+        let output_empty = render_msg!("char_3", &template_empty, "source" => &player).unwrap();
+        assert_eq!(output_empty, "Aldran s.");
+    }
+
+    #[test]
     fn test_reflexive_plural_pronouns() {
         let player = MockEntity {
             id: "char_1".to_string(),
@@ -438,10 +459,11 @@ mod tests {
     }
 
     #[test]
-    fn test_typography_skips_tags() {
+    #[cfg(feature = "ansi")]
+    fn test_typography_skips_ansi() {
         let goblin = MockEntity {
             id: "mob_1".to_string(),
-            name: "goblin".to_string(), // lowercase common noun
+            name: "goblin".to_string(),
             gender: Gender::Neutral,
             is_plural: false,
             is_proper_noun: false,
@@ -449,28 +471,87 @@ mod tests {
 
         let cache = TemplateCache::new(100);
 
-        // 1. ANSI escape sequence
         let template_ansi = cache
             .get_or_compile("\x1b[31mthe {source} [source:attack].")
             .unwrap();
         let output_ansi = render_msg!("char_2", &template_ansi, "source" => &goblin).unwrap();
         assert_eq!(output_ansi, "\x1b[31mThe goblin attacks.");
+    }
 
-        // 2. MXP tags
+    #[test]
+    #[cfg(feature = "mxp")]
+    fn test_typography_skips_mxp() {
+        let goblin = MockEntity {
+            id: "mob_1".to_string(),
+            name: "goblin".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+
         let template_mxp = cache
             .get_or_compile("<COLOR red>a {source} [source:approach].")
             .unwrap();
         let output_mxp = render_msg!("char_2", &template_mxp, "source" => &goblin).unwrap();
         assert_eq!(output_mxp, "<COLOR red>A goblin approaches.");
+    }
 
-        // 3. MSP triggers
+    #[test]
+    #[cfg(feature = "mxp")]
+    fn test_typography_mxp_with_periods() {
+        let goblin = MockEntity {
+            id: "mob_1".to_string(),
+            name: "goblin".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+
+        // The period inside `red.blue` should be safely ignored and not trigger a sentence boundary.
+        let template_mxp = cache
+            .get_or_compile("a <COLOR red.blue>fierce {source} [source:approach].")
+            .unwrap();
+        let output_mxp = render_msg!("char_2", &template_mxp, "source" => &goblin).unwrap();
+        assert_eq!(output_mxp, "A <COLOR red.blue>fierce goblin approaches.");
+    }
+
+    #[test]
+    #[cfg(feature = "msp")]
+    fn test_typography_skips_msp() {
+        let goblin = MockEntity {
+            id: "mob_1".to_string(),
+            name: "goblin".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+
         let template_msp = cache
             .get_or_compile("!!SOUND(roar.wav){the:source} [source:roar].")
             .unwrap();
         let output_msp = render_msg!("char_2", &template_msp, "source" => &goblin).unwrap();
         assert_eq!(output_msp, "!!SOUND(roar.wav)The goblin roars.");
+    }
 
-        // 4. Mixed tags across multiple sentences
+    #[test]
+    #[cfg(all(feature = "ansi", feature = "mxp"))]
+    fn test_typography_skips_mixed() {
+        let goblin = MockEntity {
+            id: "mob_1".to_string(),
+            name: "goblin".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+
         let template_mixed = cache
             .get_or_compile(
                 "\x1b[1;32m<SEND href=\"look\">{the:source} [source:wave].\x1b[0m <COLOR blue>it [source:smile].",
@@ -481,6 +562,32 @@ mod tests {
         assert_eq!(
             output_mixed,
             "\x1b[1;32m<SEND href=\"look\">The goblin waves.\x1b[0m <COLOR blue>It smiles."
+        );
+    }
+
+    #[test]
+    #[cfg(all(feature = "mxp", feature = "msp"))]
+    fn test_compiler_skips_tags() {
+        let goblin = MockEntity {
+            id: "mob_1".to_string(),
+            name: "goblin".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+
+        // If the compiler doesn't skip the MXP and MSP tags, it will mistakenly parse
+        // the `[` and `{` inside them as verb or entity tags, resulting in a syntax error.
+        let template = cache
+            .get_or_compile("<SEND HREF=\"[look]\">{the:source} triggers a !!SOUND({roar})!")
+            .unwrap();
+
+        let output = render_msg!("char_2", &template, "source" => &goblin).unwrap();
+        assert_eq!(
+            output,
+            "<SEND HREF=\"[look]\">The goblin triggers a !!SOUND({roar})!"
         );
     }
 

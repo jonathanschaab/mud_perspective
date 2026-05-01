@@ -23,6 +23,62 @@ static IRREGULAR_VERBS: phf::Map<&'static str, &'static str> = phf_map! {
     "must" => "must",
 };
 
+struct PronounSet {
+    subj: &'static str,
+    obj: &'static str,
+    poss: &'static str,
+    abs_poss: &'static str,
+    reflex: &'static str,
+}
+
+static MALE_PRONOUNS: PronounSet = PronounSet {
+    subj: "he",
+    obj: "him",
+    poss: "his",
+    abs_poss: "his",
+    reflex: "himself",
+};
+
+static FEMALE_PRONOUNS: PronounSet = PronounSet {
+    subj: "she",
+    obj: "her",
+    poss: "her",
+    abs_poss: "hers",
+    reflex: "herself",
+};
+
+static NEUTRAL_PRONOUNS: PronounSet = PronounSet {
+    subj: "it",
+    obj: "it",
+    poss: "its",
+    abs_poss: "its",
+    reflex: "itself",
+};
+
+static PLURAL_PRONOUNS: PronounSet = PronounSet {
+    subj: "they",
+    obj: "them",
+    poss: "their",
+    abs_poss: "theirs",
+    reflex: "themselves",
+};
+
+static VIEWER_SINGULAR_PRONOUNS: PronounSet = PronounSet {
+    subj: "you",
+    obj: "you",
+    poss: "your",
+    abs_poss: "yours",
+    reflex: "yourself",
+};
+
+static VIEWER_PLURAL_PRONOUNS: PronounSet = PronounSet {
+    subj: "you",
+    obj: "you",
+    poss: "your",
+    abs_poss: "yours",
+    reflex: "yourselves",
+};
+
 /// Returns the correct pronoun based on gender, type, and perspective.
 pub fn resolve_pronoun(
     gender: Gender,
@@ -30,51 +86,30 @@ pub fn resolve_pronoun(
     is_viewer: bool,
     is_plural: bool,
 ) -> Result<&'static str, String> {
-    if is_viewer {
-        // Actor Stance (2nd Person)
-        return match p_type {
-            "subj" | "obj" => Ok("you"),
-            "poss" => Ok("your"),
-            "abs_poss" => Ok("yours"),
-            "reflex" => {
-                if is_plural {
-                    Ok("yourselves")
-                } else {
-                    Ok("yourself")
-                }
-            }
-            _ => Err(format!("Unknown pronoun type: {}", p_type)),
+    let (pronoun_set, context) = if is_viewer {
+        let set = if is_plural {
+            &VIEWER_PLURAL_PRONOUNS
+        } else {
+            &VIEWER_SINGULAR_PRONOUNS
         };
-    }
+        (set, "Actor Stance")
+    } else {
+        let set = match gender {
+            Gender::Male => &MALE_PRONOUNS,
+            Gender::Female => &FEMALE_PRONOUNS,
+            Gender::Neutral => &NEUTRAL_PRONOUNS,
+            Gender::Plural => &PLURAL_PRONOUNS,
+        };
+        (set, "3rd Person")
+    };
 
-    // Comprehensive 5-case pronoun matrix
-    match (gender, p_type) {
-        (Gender::Male, "subj") => Ok("he"),
-        (Gender::Male, "obj") => Ok("him"),
-        (Gender::Male, "poss") => Ok("his"),
-        (Gender::Male, "abs_poss") => Ok("his"),
-        (Gender::Male, "reflex") => Ok("himself"),
-
-        (Gender::Female, "subj") => Ok("she"),
-        (Gender::Female, "obj") => Ok("her"),
-        (Gender::Female, "poss") => Ok("her"),
-        (Gender::Female, "abs_poss") => Ok("hers"),
-        (Gender::Female, "reflex") => Ok("herself"),
-
-        (Gender::Neutral, "subj") => Ok("it"),
-        (Gender::Neutral, "obj") => Ok("it"),
-        (Gender::Neutral, "poss") => Ok("its"),
-        (Gender::Neutral, "abs_poss") => Ok("its"),
-        (Gender::Neutral, "reflex") => Ok("itself"),
-
-        // This naturally supports swarms and non-binary characters
-        (Gender::Plural, "subj") => Ok("they"),
-        (Gender::Plural, "obj") => Ok("them"),
-        (Gender::Plural, "poss") => Ok("their"),
-        (Gender::Plural, "abs_poss") => Ok("theirs"),
-        (Gender::Plural, "reflex") => Ok("themselves"),
-
-        _ => Err(format!("Unknown pronoun type: {}", p_type)),
+    match p_type {
+        "subj" => Ok(pronoun_set.subj),
+        "obj" => Ok(pronoun_set.obj),
+        "poss" => Ok(pronoun_set.poss),
+        "abs_poss" => Ok(pronoun_set.abs_poss),
+        "reflex" => Ok(pronoun_set.reflex),
+        _ => Err(unknown_pronoun_error(p_type, context)),
     }
 }
 
@@ -90,11 +125,7 @@ pub fn conjugate_verb<'a>(
     // EXCEPT for the highly irregular verb "to be" which becomes "are".
     if is_viewer || is_plural {
         if lower_verb == "be" {
-            let result = "are";
-            if is_capitalized {
-                return Cow::Owned(capitalize_first(result));
-            }
-            return Cow::Borrowed(result);
+            return format_verb("are", is_capitalized);
         }
         // If you want strict 1st person singular ("I am") you can split `is_viewer` logic later,
         // but for Actor Stance ("You"), "are" is always correct.
@@ -103,10 +134,7 @@ pub fn conjugate_verb<'a>(
 
     // 1. Check our static PHF map for irregular overrides (3rd person singular)
     if let Some(&irregular) = IRREGULAR_VERBS.get(lower_verb) {
-        if is_capitalized {
-            return Cow::Owned(capitalize_first(irregular));
-        }
-        return Cow::Borrowed(irregular);
+        return format_verb(irregular, is_capitalized);
     }
 
     // 2. Fallback algorithmic suffix rules for standard verbs
@@ -115,11 +143,20 @@ pub fn conjugate_verb<'a>(
         || lower_verb.ends_with(['s', 'x', 'z'])
     {
         Cow::Owned(format!("{}es", original_verb))
-    } else if lower_verb.ends_with('y') && !is_vowel_before_y(lower_verb) {
+    } else if lower_verb.len() > 1 && lower_verb.ends_with('y') && !is_vowel_before_y(lower_verb) {
         let trimmed = &original_verb[..original_verb.len() - 1];
         Cow::Owned(format!("{}ies", trimmed))
     } else {
         Cow::Owned(format!("{}s", original_verb))
+    }
+}
+
+#[inline]
+fn format_verb<'a>(verb: &'a str, is_capitalized: bool) -> Cow<'a, str> {
+    if is_capitalized {
+        Cow::Owned(capitalize_first(verb))
+    } else {
+        Cow::Borrowed(verb)
     }
 }
 
@@ -134,6 +171,12 @@ fn capitalize_first(s: &str) -> String {
 
 fn is_vowel_before_y(verb: &str) -> bool {
     matches!(verb.chars().rev().nth(1), Some('a' | 'e' | 'i' | 'o' | 'u'))
+}
+
+#[cold]
+fn unknown_pronoun_error(p_type: &str, context: &str) -> String {
+    tracing::error!("Unknown pronoun type requested for {}: {}", context, p_type);
+    format!("Unknown pronoun type: {}", p_type)
 }
 
 /// Dynamically returns "a" or "an" based on the phonetic pronunciation of the following word.
