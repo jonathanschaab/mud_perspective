@@ -1541,5 +1541,13 @@ mod tests {
             err_output_multi,
             "Missing property 'edge' on entity 'source.weapon'"
         );
+
+        // Verify malformed double-dot paths safely ignore the empty segment
+        let double_dot_template = cache
+            .get_or_compile("{a:source..weapon} is drawn.")
+            .unwrap();
+        let double_dot_out =
+            render_msg!("char_2", &double_dot_template, "source" => &player).unwrap();
+        assert_eq!(double_dot_out, "A rusty sword is drawn.");
     }
 }

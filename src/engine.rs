@@ -89,18 +89,20 @@ impl Template {
 
             if c == '\\' {
                 chars.next();
-                if let Some(&(next_i, next_c)) = chars.peek()
-                    && (next_c == '{'
+                #[allow(clippy::collapsible_if)]
+                if let Some(&(next_i, next_c)) = chars.peek() {
+                    if next_c == '{'
                         || next_c == '['
                         || next_c == '}'
                         || next_c == ']'
-                        || next_c == '\\')
-                {
-                    if i > last_literal_start {
-                        tokens.push(Token::Literal(raw[last_literal_start..i].to_string()));
+                        || next_c == '\\'
+                    {
+                        if i > last_literal_start {
+                            tokens.push(Token::Literal(raw[last_literal_start..i].to_string()));
+                        }
+                        last_literal_start = next_i;
+                        chars.next();
                     }
-                    last_literal_start = next_i;
-                    chars.next();
                 }
                 continue;
             }
@@ -338,18 +340,24 @@ impl PerspectiveEngine {
         }
 
         // 2. Try dot notation traversal (e.g., "source.left_arm.weapon")
-        if let Some((root_key, prop_path)) = key.split_once('.')
-            && let Some(mut current) = ctx.entities.get(root_key).copied()
-        {
-            let mut current_path_end = root_key.len();
-            for prop in prop_path.split('.') {
-                let current_path = &key[..current_path_end];
-                current = current.get_property(prop).ok_or_else(|| {
-                    format!("Missing property '{prop}' on entity '{current_path}'")
-                })?;
-                current_path_end += prop.len() + 1; // +1 to step over the dot
+        if let Some((root_key, prop_path)) = key.split_once('.') {
+            #[allow(clippy::collapsible_if)]
+            if let Some(mut current) = ctx.entities.get(root_key).copied() {
+                let mut current_path_end = root_key.len();
+                for prop in prop_path.split('.') {
+                    if prop.is_empty() {
+                        current_path_end += 1; // Step over the extra dot
+                        continue;
+                    }
+
+                    let current_path = &key[..current_path_end];
+                    current = current.get_property(prop).ok_or_else(|| {
+                        format!("Missing property '{prop}' on entity '{current_path}'")
+                    })?;
+                    current_path_end += prop.len() + 1; // +1 to step over the dot
+                }
+                return Ok(current);
             }
-            return Ok(current);
         }
 
         tracing::error!("Failed to render template: Missing entity for key '{key}'");
