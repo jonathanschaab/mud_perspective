@@ -155,6 +155,35 @@ pub(crate) fn flatten_group<'c>(
     }
 }
 
+/// A type alias representing an evaluated group member and its resolved display name.
+pub(crate) type EvaluatedMember<'a> = (&'a dyn TemplateEntity, Cow<'a, str>);
+
+/// Flattens a group and partitions the members into the active viewer (if present)
+/// and a list of other visible members alongside their evaluated display names.
+pub(crate) fn partition_group<'a>(
+    members: &[&'a dyn TemplateEntity],
+    viewer_id: &str,
+) -> (Option<&'a dyn TemplateEntity>, Vec<EvaluatedMember<'a>>) {
+    let mut flat_members = Vec::with_capacity(members.len());
+    flatten_group(members, &mut flat_members, 0);
+
+    let mut viewer = None;
+    let mut others = Vec::with_capacity(flat_members.len());
+
+    for &m in &flat_members {
+        if m.contains_viewer(viewer_id) {
+            viewer = Some(m);
+        } else {
+            let name = m.display_name_for(viewer_id);
+            if !name.is_empty() {
+                others.push((m, name));
+            }
+        }
+    }
+
+    (viewer, others)
+}
+
 impl GroupEntity<'_> {
     /// Returns the single underlying member of this group if it contains exactly one leaf entity.
     /// Returns `None` if the group is empty or contains multiple members.
@@ -214,44 +243,27 @@ impl TemplateEntity for GroupEntity<'_> {
     }
 
     fn display_name_for<'b>(&'b self, viewer_id: &str) -> Cow<'b, str> {
-        let mut flat_members = Vec::with_capacity(self.members.len());
-        flatten_group(&self.members, &mut flat_members, 0);
+        let (viewer, others) = partition_group(&self.members, viewer_id);
 
-        let mut has_viewer = false;
-        let mut visible_others = Vec::with_capacity(flat_members.len());
+        let mut names = Vec::with_capacity(others.len() + usize::from(viewer.is_some()));
 
-        for &m in &flat_members {
-            if m.contains_viewer(viewer_id) {
-                has_viewer = true;
-            } else {
-                let name = m.display_name_for(viewer_id);
-                if !name.is_empty() {
-                    visible_others.push(name);
-                }
+        if let Some(v) = viewer {
+            let name = v.display_name_for(viewer_id);
+            if !name.is_empty() {
+                names.push(name);
             }
         }
 
-        let total_visible = visible_others.len() + usize::from(has_viewer);
+        names.extend(others.into_iter().map(|(_, name)| name));
 
-        if total_visible == 0 {
+        if names.is_empty() {
             return Cow::Borrowed("");
         }
 
-        if total_visible == 1 {
-            if has_viewer {
-                return Cow::Borrowed("you");
-            }
-            return visible_others.pop().unwrap_or_default();
+        if names.len() == 1 {
+            return names.pop().unwrap_or_default();
         }
 
-        let mut names: Vec<Cow<'b, str>> = Vec::with_capacity(total_visible);
-
-        // If the viewer is in this group, they are always listed first as "you"
-        if has_viewer {
-            names.push(Cow::Borrowed("you"));
-        }
-
-        names.extend(visible_others);
         crate::grammar::format_oxford_list(names)
     }
 

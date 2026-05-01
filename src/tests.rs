@@ -1184,36 +1184,9 @@ mod tests {
     }
 
     #[test]
-    fn test_force_actor_stance() {
-        let raven = MockEntity {
-            id: "mob_familiar".to_string(),
-            name: "raven".to_string(),
-            gender: Gender::Neutral,
-            is_plural: false,
-            is_proper_noun: false,
-        };
-
-        let cache = TemplateCache::new(100);
-        let template = cache.get_or_compile("{-source} [-source:fly] into the room. {-source:Subj} [-source:be] looking for {-source:poss} master.").unwrap();
-
-        // Using the mind-control / familiar stance, force the player to view the text as the raven!
-        let out_forced = render_msg!("char_1", &template, "source" => &raven).unwrap();
-        assert_eq!(
-            out_forced,
-            "You fly into the room. You are looking for your master."
-        );
-    }
-
-    #[test]
-    fn test_unbound_forced_verbs() {
+    fn test_unbound_forced_director_verbs() {
         let cache = TemplateCache::new(100);
         let ctx = RenderContext::new("viewer");
-
-        // [-smile] should output "smile" (actor stance) instead of "-smiles"
-        let out_actor =
-            PerspectiveEngine::render(&cache.get_or_compile("you [-smile].").unwrap(), &ctx)
-                .unwrap();
-        assert_eq!(out_actor, "You smile.");
 
         // [+smile] should output "smiles" (director stance, which is default anyway, but tests parser stripping)
         let out_director =

@@ -19,8 +19,6 @@ pub enum Token {
         force_article: bool,
         /// A flag indicating if the builder explicitly forced the 3rd-person stance (e.g. {+source}).
         force_3rd_person: bool,
-        /// A flag indicating if the builder explicitly forced the Actor Stance (e.g. {-source}).
-        force_actor: bool,
     },
     /// e.g., {source:poss}
     PronounRef {
@@ -32,8 +30,6 @@ pub enum Token {
         is_capitalized: bool,
         /// A flag indicating if the builder explicitly forced the 3rd-person stance (e.g. {+source:poss}).
         force_3rd_person: bool,
-        /// A flag indicating if the builder explicitly forced the Actor Stance (e.g. {-source:poss}).
-        force_actor: bool,
     },
     /// e.g., [source:pulse]
     VerbRef {
@@ -47,8 +43,6 @@ pub enum Token {
         is_capitalized: bool,
         /// A flag indicating if the builder explicitly forced 3rd-person conjugation (e.g. [+source:pulse]).
         force_3rd_person: bool,
-        /// A flag indicating if the builder explicitly forced 2nd-person conjugation (e.g. [-source:pulse]).
-        force_actor: bool,
     },
 }
 
@@ -157,7 +151,7 @@ impl Template {
                 return Err(validation_error("Malformed entity tag", content, '{'));
             }
 
-            let (p1_str, force_article, _) = parse_stance_prefixes(p1);
+            let (p1_str, force_article) = parse_stance_prefixes(p1);
             let is_article = p1_str.eq_ignore_ascii_case("a")
                 || p1_str.eq_ignore_ascii_case("an")
                 || p1_str.eq_ignore_ascii_case("the")
@@ -166,7 +160,7 @@ impl Template {
 
             // 2-part case: {article:key}
             if is_article {
-                let (p2_str, force_3rd_person, force_actor) = parse_stance_prefixes(p2);
+                let (p2_str, force_3rd_person) = parse_stance_prefixes(p2);
 
                 if p2_str.is_empty() {
                     return Err(validation_error(
@@ -181,11 +175,10 @@ impl Template {
                     is_capitalized: p2_str.chars().next().is_some_and(char::is_uppercase),
                     force_article,
                     force_3rd_person,
-                    force_actor,
                 })
             } else {
                 // 2-part case: {key:pronoun}
-                let (p1_str, force_3rd_person, force_actor) = parse_stance_prefixes(p1);
+                let (p1_str, force_3rd_person) = parse_stance_prefixes(p1);
 
                 if p1_str.is_empty() || p2.is_empty() {
                     return Err(validation_error(
@@ -199,12 +192,11 @@ impl Template {
                     p_type: p2.to_lowercase(),
                     is_capitalized: p2.chars().next().is_some_and(char::is_uppercase),
                     force_3rd_person,
-                    force_actor,
                 })
             }
         } else {
             // 1-part case: {key}
-            let (p1_str, force_3rd_person, force_actor) = parse_stance_prefixes(p1);
+            let (p1_str, force_3rd_person) = parse_stance_prefixes(p1);
 
             if p1_str.is_empty() {
                 return Err(validation_error(
@@ -219,7 +211,6 @@ impl Template {
                 is_capitalized: p1_str.chars().next().is_some_and(char::is_uppercase),
                 force_article: false,
                 force_3rd_person,
-                force_actor,
             })
         }
     }
@@ -228,13 +219,12 @@ impl Template {
         let mut parts = content.split(':');
         let p1 = parts.next().unwrap_or_default();
 
-        let (subject_key, base_verb, force_3rd_person, force_actor) = if let Some(p2) = parts.next()
-        {
+        let (subject_key, base_verb, force_3rd_person) = if let Some(p2) = parts.next() {
             if parts.next().is_some() {
                 return Err(validation_error("Malformed verb tag", content, '['));
             }
 
-            let (p1_str, force_3rd_person, force_actor) = parse_stance_prefixes(p1);
+            let (p1_str, force_3rd_person) = parse_stance_prefixes(p1);
 
             if p1_str.is_empty() {
                 return Err(validation_error(
@@ -243,15 +233,10 @@ impl Template {
                     '[',
                 ));
             }
-            (
-                Some(p1_str.to_lowercase()),
-                p2,
-                force_3rd_person,
-                force_actor,
-            )
+            (Some(p1_str.to_lowercase()), p2, force_3rd_person)
         } else {
-            let (p1_str, force_3rd_person, force_actor) = parse_stance_prefixes(p1);
-            (None, p1_str, force_3rd_person, force_actor)
+            let (p1_str, force_3rd_person) = parse_stance_prefixes(p1);
+            (None, p1_str, force_3rd_person)
         };
 
         let original_verb = base_verb.to_string();
@@ -270,7 +255,6 @@ impl Template {
             lower_verb,
             is_capitalized,
             force_3rd_person,
-            force_actor,
         })
     }
 }
@@ -331,7 +315,6 @@ impl PerspectiveEngine {
             is_capitalized,
             force_article,
             force_3rd_person,
-            force_actor,
         } = token
         else {
             return Ok(());
@@ -346,23 +329,10 @@ impl PerspectiveEngine {
 
         // --- Handle Groups / Distributed Lists ---
         if let Some(members) = entity.group_members() {
-            let mut flat_members = Vec::with_capacity(members.len());
-            crate::models::flatten_group(members, &mut flat_members, 0);
+            let (viewer_entity, visible) =
+                crate::models::partition_group(members, effective_viewer);
 
-            let mut has_viewer = false;
-            let mut visible = Vec::with_capacity(flat_members.len());
-
-            for &m in &flat_members {
-                if *force_actor || m.contains_viewer(effective_viewer) {
-                    has_viewer = true;
-                } else {
-                    let name = m.display_name_for(effective_viewer);
-                    if !name.is_empty() {
-                        visible.push((m, name));
-                    }
-                }
-            }
-
+            let has_viewer = viewer_entity.is_some();
             let total_visible = visible.len() + usize::from(has_viewer);
             if total_visible == 0 {
                 return Ok(());
@@ -400,7 +370,7 @@ impl PerspectiveEngine {
         }
 
         // --- Handle Single Entity Viewers ---
-        if *force_actor || entity.contains_viewer(effective_viewer) {
+        if entity.contains_viewer(effective_viewer) {
             let name_str = if *is_capitalized { "You" } else { "you" };
             raw_output.push_str(name_str);
             return Ok(());
@@ -445,7 +415,6 @@ impl PerspectiveEngine {
             p_type,
             is_capitalized,
             force_3rd_person,
-            force_actor,
         } = token
         else {
             return Ok(());
@@ -458,7 +427,7 @@ impl PerspectiveEngine {
             ctx.viewer_id
         };
 
-        let is_viewer = *force_actor || entity.contains_viewer(effective_viewer);
+        let is_viewer = entity.contains_viewer(effective_viewer);
         let pronoun = resolve_pronoun(entity.gender(), p_type, is_viewer, entity.is_plural())?;
 
         if *is_capitalized {
@@ -480,7 +449,6 @@ impl PerspectiveEngine {
             lower_verb,
             is_capitalized,
             force_3rd_person,
-            force_actor,
         } = token
         else {
             return Ok(());
@@ -494,13 +462,10 @@ impl PerspectiveEngine {
             } else {
                 ctx.viewer_id
             };
-            (
-                *force_actor || entity.contains_viewer(effective_viewer),
-                entity.is_plural(),
-            )
+            (entity.contains_viewer(effective_viewer), entity.is_plural())
         } else {
-            // Safe default to 3rd-person singular if no subject is bound, unless actor stance is forced
-            (*force_actor, false)
+            // Safe default to 3rd-person singular if no subject is bound
+            (false, false)
         };
 
         let conjugated = conjugate_verb(
@@ -701,15 +666,13 @@ fn validation_error(message: &str, content: &str, open_char: char) -> String {
     formatted_message
 }
 
-/// Parses prefix modifiers `+` and `-` used to force perspectives, returning the
-/// stripped string alongside booleans for `force_3rd_person`/`force_article` and `force_actor`.
+/// Parses prefix modifiers (like `+`) used to force perspectives, returning the
+/// stripped string alongside the boolean flag for `force_3rd_person`/`force_article`.
 #[inline]
-fn parse_stance_prefixes(s: &str) -> (&str, bool, bool) {
+fn parse_stance_prefixes(s: &str) -> (&str, bool) {
     if let Some(stripped) = s.strip_prefix('+') {
-        (stripped, true, false)
-    } else if let Some(stripped) = s.strip_prefix('-') {
-        (stripped, false, true)
+        (stripped, true)
     } else {
-        (s, false, false)
+        (s, false)
     }
 }
