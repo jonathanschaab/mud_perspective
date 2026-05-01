@@ -1267,6 +1267,29 @@ mod tests {
     }
 
     #[test]
+    fn test_anaphora_fallback_capitalization() {
+        let monster = MockEntity {
+            id: "mob_1".to_string(),
+            name: "giant spider".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+        let ctx = RenderContext::new("viewer").with_entity("target", &monster);
+
+        // {Target:subj} requests a capitalized pronoun ("It").
+        // Since it's the first mention, it falls back to the full noun with an article.
+        // We expect "The giant spider", NOT "The Giant Spider" or "The Giant spider".
+        let template = cache
+            .get_or_compile("{Target:subj} [target:hiss].")
+            .unwrap();
+        let output = PerspectiveEngine::render(&template, &ctx).unwrap();
+        assert_eq!(output, "The giant spider hisses.");
+    }
+
+    #[test]
     fn test_anaphora_across_contexts() {
         let goblin = MockEntity {
             id: "mob_1".to_string(),

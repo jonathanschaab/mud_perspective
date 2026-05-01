@@ -366,12 +366,11 @@ impl PerspectiveEngine {
         }
 
         // 2. Try dot notation traversal (e.g., "source.left_arm.weapon")
-        let mut segments = key.split('.');
-        let root_key = segments.next().unwrap_or(key);
-
-        if let Some(mut current) = ctx.entities.get(root_key).copied() {
+        if let Some((root_key, remainder)) = key.split_once('.')
+            && let Some(mut current) = ctx.entities.get(root_key).copied()
+        {
             let mut current_path = root_key;
-            for prop in segments {
+            for prop in remainder.split('.') {
                 current = current.get_property(prop).ok_or_else(|| {
                     format!("Missing property '{prop}' on entity '{current_path}'")
                 })?;
@@ -566,7 +565,11 @@ impl PerspectiveEngine {
             let fallback_params = EntityRefParams {
                 key,
                 article: Some(if *is_capitalized { "The" } else { "the" }),
-                is_capitalized: false, // The noun shouldn't be force-capitalized just because the pronoun was!
+                // We set `is_capitalized: false` here because the capitalization requested by the pronoun
+                // (e.g. `{target:Subj}`) applies to the *first word* of the substitution (the article "The").
+                // We do not want to force-capitalize common nouns (yielding "The Goblin" instead of "The goblin").
+                // Proper nouns (like "Aldran") naturally return capitalized strings and are unaffected.
+                is_capitalized: false,
                 force_article: false,
                 force_3rd_person: *force_3rd_person,
                 is_possessive,
