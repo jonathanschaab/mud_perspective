@@ -13,6 +13,8 @@ pub enum Token {
         key: String,
         /// An optional article to precede the entity name (e.g., "a", "an", "the").
         article: Option<String>,
+        /// A flag indicating if the entity key was capitalized (e.g. {Source}).
+        is_capitalized: bool,
     },
     /// e.g., {source:poss}
     PronounRef {
@@ -20,6 +22,8 @@ pub enum Token {
         key: String,
         /// The type of pronoun requested (e.g., "subj", "obj", "poss", "abs_poss", "reflex").
         p_type: String,
+        /// A flag indicating if the pronoun type was capitalized (e.g. {source:Subj}).
+        is_capitalized: bool,
     },
     /// e.g., [source:pulse]
     VerbRef {
@@ -75,14 +79,18 @@ impl Template {
 
             if c == '\\' {
                 chars.next();
-                if let Some(&(next_i, next_c)) = chars.peek() {
-                    if next_c == '{' || next_c == '[' || next_c == '}' || next_c == ']' || next_c == '\\' {
-                        if i > last_literal_start {
-                            tokens.push(Token::Literal(raw[last_literal_start..i].to_string()));
-                        }
-                        last_literal_start = next_i;
-                        chars.next();
+                if let Some(&(next_i, next_c)) = chars.peek()
+                    && (next_c == '{'
+                        || next_c == '['
+                        || next_c == '}'
+                        || next_c == ']'
+                        || next_c == '\\')
+                {
+                    if i > last_literal_start {
+                        tokens.push(Token::Literal(raw[last_literal_start..i].to_string()));
                     }
+                    last_literal_start = next_i;
+                    chars.next();
                 }
                 continue;
             }
@@ -123,8 +131,9 @@ impl Template {
                                 ));
                             }
                             tokens.push(Token::EntityRef {
-                                key: p2.to_string(),
+                                key: p2.to_lowercase(),
                                 article: Some(p1.to_string()),
+                                is_capitalized: p2.chars().next().is_some_and(|c| c.is_uppercase()),
                             });
                         } else {
                             if p1.is_empty() || p2.is_empty() {
@@ -135,8 +144,9 @@ impl Template {
                                 ));
                             }
                             tokens.push(Token::PronounRef {
-                                key: p1.to_string(),
-                                p_type: p2.to_string(),
+                                key: p1.to_lowercase(),
+                                p_type: p2.to_lowercase(),
+                                is_capitalized: p2.chars().next().is_some_and(|c| c.is_uppercase()),
                             });
                         }
                     } else {
@@ -149,8 +159,9 @@ impl Template {
                             ));
                         }
                         tokens.push(Token::EntityRef {
-                            key: p1.to_string(),
+                            key: p1.to_lowercase(),
                             article: None,
+                            is_capitalized: p1.chars().next().is_some_and(|c| c.is_uppercase()),
                         });
                     }
                 } else {
@@ -166,7 +177,7 @@ impl Template {
                             ));
                         }
                         // p2 (base_verb) can be empty, we warn for that later.
-                        (Some(p1.to_string()), p2)
+                        (Some(p1.to_lowercase()), p2)
                     } else {
                         (None, p1)
                     };
@@ -246,11 +257,26 @@ impl PerspectiveEngine {
                 Token::Literal(text) => {
                     raw_output.push_str(text);
                 }
-                Token::EntityRef { key, article } => {
+                Token::EntityRef {
+                    key,
+                    article,
+                    is_capitalized,
+                } => {
                     let entity = get_entity(key)?;
 
                     let is_viewer = entity.contains_viewer(ctx.viewer_id);
                     let name = entity.display_name_for(ctx.viewer_id);
+
+                    // Capitalize the name if explicitly requested and it isn't already
+                    let name_buf;
+                    let name_str = if *is_capitalized
+                        && name.chars().next().is_some_and(|c| c.is_lowercase())
+                    {
+                        name_buf = crate::grammar::capitalize_first(&name);
+                        name_buf.as_str()
+                    } else {
+                        name.as_ref()
+                    };
 
                     // Handle dynamic "a" or "an" injection
                     if let Some(art) = article
@@ -260,7 +286,7 @@ impl PerspectiveEngine {
                         let is_capitalized = art.starts_with(|c: char| c.is_uppercase());
 
                         if art.eq_ignore_ascii_case("a") || art.eq_ignore_ascii_case("an") {
-                            let indefinite = get_indefinite_article(&name);
+                            let indefinite = get_indefinite_article(name_str);
                             if is_capitalized {
                                 if indefinite == "a" {
                                     raw_output.push_str("A ");
@@ -280,15 +306,24 @@ impl PerspectiveEngine {
                         }
                     }
 
-                    raw_output.push_str(&name);
+                    raw_output.push_str(name_str);
                 }
-                Token::PronounRef { key, p_type } => {
+                Token::PronounRef {
+                    key,
+                    p_type,
+                    is_capitalized,
+                } => {
                     let entity = get_entity(key)?;
 
                     let is_viewer = entity.contains_viewer(ctx.viewer_id);
                     let pronoun =
                         resolve_pronoun(entity.gender(), p_type, is_viewer, entity.is_plural())?;
-                    raw_output.push_str(pronoun);
+
+                    if *is_capitalized {
+                        raw_output.push_str(&crate::grammar::capitalize_first(pronoun));
+                    } else {
+                        raw_output.push_str(pronoun);
+                    }
                 }
                 Token::VerbRef {
                     subject_key,
@@ -497,7 +532,7 @@ fn find_skipped_tag_end(remainder: &str) -> Option<usize> {
                 _ => return Some(idx), // Simple 2-character escape
             }
         }
-        return Some(remainder.len().saturating_sub(1));
+        return None;
     }
 
     None

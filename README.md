@@ -127,11 +127,11 @@ let template = cache.get_or_compile("{source} [source:open] the door.").unwrap()
 
 ### **4. Syntax Reference**
 
-* **Entities:** {key} inserts the entity's display name.  
+* **Entities:** {key} inserts the entity's display name. Use {Key} to force capitalization mid-sentence.  
 * **Articles:** {a:key} or {the:key} prepends the appropriate article. Use {A:key} or {The:key} to force capitalization mid-sentence. These are automatically suppressed if the entity evaluates to the viewer ("you") or is flagged as a proper noun.  
-* **Pronouns:** {key:type}. Supported types include subj (he/she/it/they), obj (him/her/it/them), poss (his/her/their), abs\_poss (his/hers/theirs), and reflex (himself/themselves).
+* **Pronouns:** {key:type}. Supported types include subj (he/she/it/they), obj (him/her/it/them), poss (his/her/their), abs_poss (his/hers/theirs), and reflex (himself/themselves). Capitalize the type (e.g., {key:Subj}) to force capitalization mid-sentence.
 
-* **Verbs:** \[key:verb\] explicitly binds a base verb to a subject to ensure correct conjugation. This prevents grammatical errors during compound subjects or passive voice structures.
+* **Verbs:** [key:verb] explicitly binds a base verb to a subject to ensure correct conjugation. Capitalize the verb (e.g., [key:Verb]) to force capitalization mid-sentence. This prevents grammatical errors during compound subjects or passive voice structures.
 
 * **Escaping:** Use a backslash (`\`) to escape special characters if you need to output literal braces or brackets (e.g., `\{`, `\}`, `\[`, `\]`). You can also escape a backslash itself (`\\`).
 

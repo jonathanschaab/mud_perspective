@@ -70,6 +70,7 @@ pub struct RenderContext<'a> {
     /// The unique identifier of the entity actively reading the text.
     pub viewer_id: &'a str,
     /// A mapping of template syntax keys (e.g., "source") to their actual game entities.
+    /// Keys are normalized to lowercase by the engine, so ensure your builder mapping uses lowercase keys.
     pub entities: HashMap<&'a str, &'a dyn TemplateEntity>,
 }
 

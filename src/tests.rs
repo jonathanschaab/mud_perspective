@@ -701,6 +701,84 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "ansi")]
+    fn test_unterminated_ansi_fallback() {
+        let goblin = MockEntity {
+            id: "mob_1".to_string(),
+            name: "goblin".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+
+        // 1. Unterminated OSC sequence
+        // Since there is no terminator (\x07), it falls back to literal text.
+        // The {the:source} tag is parsed successfully rather than being swallowed.
+        let template = cache
+            .get_or_compile("\x1b]8;;unterminated {the:source} [source:attack].")
+            .unwrap();
+
+        let output = render_msg!("char_2", &template, "source" => &goblin).unwrap();
+        // The 'u' in 'unterminated' is capitalized by the post-processor because
+        // the sequence was treated as literal text.
+        assert_eq!(output, "\x1b]8;;Unterminated the goblin attacks.");
+
+        // 2. Unterminated CSI sequence
+        // Falls back to literal text, but the `[` immediately triggers the verb tag parser.
+        // Since there's no `]`, it safely fails with a syntax error instead of skipping the string.
+        let err = Template::compile("\x1b[31").unwrap_err();
+        assert_eq!(err, "Unclosed verb tag starting at index 1");
+    }
+
+    #[test]
+    #[cfg(feature = "mxp")]
+    fn test_unterminated_mxp_fallback() {
+        let goblin = MockEntity {
+            id: "mob_1".to_string(),
+            name: "goblin".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+
+        // Unterminated MXP sequence (missing closing '>')
+        // Falls back to literal text. The {the:source} tag is parsed successfully.
+        let template = cache
+            .get_or_compile("<color red unterminated {the:source} [source:attack].")
+            .unwrap();
+
+        let output = render_msg!("char_2", &template, "source" => &goblin).unwrap();
+        assert_eq!(output, "<Color red unterminated the goblin attacks.");
+    }
+
+    #[test]
+    #[cfg(feature = "msp")]
+    fn test_unterminated_msp_fallback() {
+        let goblin = MockEntity {
+            id: "mob_1".to_string(),
+            name: "goblin".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+
+        // Unterminated MSP sequence (missing closing ')')
+        // Falls back to literal text. The {the:source} tag is parsed successfully.
+        let template = cache
+            .get_or_compile("!!SOUND(roar.wav unterminated {the:source} [source:attack].")
+            .unwrap();
+
+        let output = render_msg!("char_2", &template, "source" => &goblin).unwrap();
+        assert_eq!(output, "!!SOUND(roar.wav unterminated the goblin attacks.");
+    }
+
+    #[test]
     fn test_escaped_tags() {
         let goblin = MockEntity {
             id: "mob_1".to_string(),
@@ -714,7 +792,7 @@ mod tests {
 
         // Verifies that escaped braces, brackets, and backslashes are cleanly bypassed
         let template = cache
-            .get_or_compile(r"some \{escaped\} and \[tags\]. \\{the:source}")
+            .get_or_compile(r"some \{escaped\} and \[tags\]. \\{The:source}")
             .unwrap();
 
         let output = render_msg!("char_2", &template, "source" => &goblin).unwrap();
@@ -774,6 +852,41 @@ mod tests {
         let output4 =
             render_msg!("char_2", &template4, "source" => &goblin, "target" => &player).unwrap();
         assert_eq!(output4, "Aldran yells, \"A goblin is approaching!\"");
+    }
+
+    #[test]
+    fn test_mid_sentence_capitalization_overrides() {
+        let disguised = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(), // will be masked as "tall man" to strangers
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+
+        let cache = TemplateCache::new(100);
+
+        // 1. Force capitalizing a disguised common noun directly
+        // The segmenter will capitalize "you", and `{Source}` overrides the disguise's lowercase.
+        let template1 = cache.get_or_compile("you point at {the:Source}.").unwrap();
+        let out1 = render_msg!("stranger_1", &template1, "source" => &disguised).unwrap();
+        assert_eq!(out1, "You point at the Tall man.");
+
+        // 2. Force capitalizing a pronoun mid-sentence
+        let template2 = cache
+            .get_or_compile("you watch as {source:Subj} falls.")
+            .unwrap();
+        let out2 = render_msg!("stranger_1", &template2, "source" => &disguised).unwrap();
+        assert_eq!(out2, "You watch as He falls.");
+
+        // 3. Verbs already support this organically
+        // We use `{the:source}` to provide the article, and a sentence structure
+        // where a conjugated verb is grammatically correct mid-sentence.
+        let template3 = cache
+            .get_or_compile("they say {the:source} [source:Smile] often.")
+            .unwrap();
+        let out3 = render_msg!("stranger_1", &template3, "source" => &disguised).unwrap();
+        assert_eq!(out3, "They say the tall man Smiles often.");
     }
 
     pub struct GroupEntity<'a> {

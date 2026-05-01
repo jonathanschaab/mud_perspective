@@ -161,7 +161,7 @@ fn format_verb<'a>(verb: &'a str, is_capitalized: bool) -> Cow<'a, str> {
 }
 
 /// Capitalizes the first letter of a string slice.
-fn capitalize_first(s: &str) -> String {
+pub fn capitalize_first(s: &str) -> String {
     let mut c = s.chars();
     match c.next() {
         None => String::new(),
