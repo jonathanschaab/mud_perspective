@@ -79,6 +79,7 @@ impl<'a> RenderContext<'a> {
     ///
     /// # Arguments
     /// * `viewer_id` - The string ID of the observing entity.
+    #[must_use]
     pub fn new(viewer_id: &'a str) -> Self {
         Self {
             viewer_id,
@@ -91,6 +92,7 @@ impl<'a> RenderContext<'a> {
     /// # Arguments
     /// * `key` - The string key used inside the template tags (e.g., "target").
     /// * `entity` - A reference to the game object implementing `TemplateEntity`.
+    #[must_use]
     pub fn with_entity(mut self, key: &'a str, entity: &'a dyn TemplateEntity) -> Self {
         self.entities.insert(key, entity);
         self

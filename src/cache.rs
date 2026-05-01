@@ -17,6 +17,7 @@ impl TemplateCache {
     /// # Arguments
     /// * `capacity` - The maximum number of templates to keep in memory. Once
     ///   exceeded, the least recently used templates are automatically evicted.
+    #[must_use]
     pub fn new(capacity: usize) -> Self {
         Self {
             inner: Cache::builder()

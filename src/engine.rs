@@ -20,7 +20,7 @@ pub enum Token {
     PronounRef {
         /// The key of the entity in the `RenderContext`.
         key: String,
-        /// The type of pronoun requested (e.g., "subj", "obj", "poss", "abs_poss", "reflex").
+        /// The type of pronoun requested (e.g., `"subj"`, `"obj"`, `"poss"`, `"abs_poss"`, `"reflex"`).
         p_type: String,
         /// A flag indicating if the pronoun type was capitalized (e.g. {source:Subj}).
         is_capitalized: bool,
@@ -62,6 +62,11 @@ impl Template {
     ///
     /// # Errors
     /// Returns a `String` describing the syntax error if the template is malformed.
+    ///
+    /// # Panics
+    /// Panics if the string `split` iterator fails to yield at least one item, which is
+    /// technically impossible under standard Rust string split guarantees.
+    #[allow(clippy::too_many_lines)]
     pub fn compile(raw: &str) -> Result<Self, String> {
         let mut tokens = Vec::new();
         let mut chars = raw.char_indices().peekable();
@@ -133,7 +138,7 @@ impl Template {
                             tokens.push(Token::EntityRef {
                                 key: p2.to_lowercase(),
                                 article: Some(p1.to_string()),
-                                is_capitalized: p2.chars().next().is_some_and(|c| c.is_uppercase()),
+                                is_capitalized: p2.chars().next().is_some_and(char::is_uppercase),
                             });
                         } else {
                             if p1.is_empty() || p2.is_empty() {
@@ -146,7 +151,7 @@ impl Template {
                             tokens.push(Token::PronounRef {
                                 key: p1.to_lowercase(),
                                 p_type: p2.to_lowercase(),
-                                is_capitalized: p2.chars().next().is_some_and(|c| c.is_uppercase()),
+                                is_capitalized: p2.chars().next().is_some_and(char::is_uppercase),
                             });
                         }
                     } else {
@@ -161,7 +166,7 @@ impl Template {
                         tokens.push(Token::EntityRef {
                             key: p1.to_lowercase(),
                             article: None,
-                            is_capitalized: p1.chars().next().is_some_and(|c| c.is_uppercase()),
+                            is_capitalized: p1.chars().next().is_some_and(char::is_uppercase),
                         });
                     }
                 } else {
@@ -183,10 +188,8 @@ impl Template {
                     };
 
                     let original_verb = base_verb.to_string();
-                    let is_capitalized = original_verb
-                        .chars()
-                        .next()
-                        .is_some_and(|c| c.is_uppercase());
+                    let is_capitalized =
+                        original_verb.chars().next().is_some_and(char::is_uppercase);
                     let lower_verb = original_verb.to_lowercase();
 
                     if original_verb.is_empty() {
@@ -248,7 +251,7 @@ impl PerspectiveEngine {
                     "Failed to render template: Missing entity for key '{}'",
                     key
                 );
-                format!("Missing entity for key: {}", key)
+                format!("Missing entity for key: {key}")
             })
         };
 
@@ -269,26 +272,25 @@ impl PerspectiveEngine {
 
                     // Capitalize the name if explicitly requested and it isn't already
                     let name_buf;
-                    let name_str = if *is_capitalized
-                        && name.chars().next().is_some_and(|c| c.is_lowercase())
-                    {
-                        name_buf = crate::grammar::capitalize_first(&name);
-                        name_buf.as_str()
-                    } else {
-                        name.as_ref()
-                    };
+                    let name_str =
+                        if *is_capitalized && name.chars().next().is_some_and(char::is_lowercase) {
+                            name_buf = crate::grammar::capitalize_first(&name);
+                            name_buf.as_str()
+                        } else {
+                            name.as_ref()
+                        };
 
                     // Handle dynamic "a" or "an" injection
-                    if let Some(art) = article {
-                        if let Some(resolved_art) = resolve_article(
+                    if let Some(art) = article
+                        && let Some(resolved_art) = resolve_article(
                             art,
                             name_str,
                             is_viewer,
                             entity.is_proper_noun_for(ctx.viewer_id),
                             entity.is_plural(),
-                        ) {
-                            raw_output.push_str(resolved_art);
-                        }
+                        )
+                    {
+                        raw_output.push_str(resolved_art);
                     }
 
                     raw_output.push_str(name_str);
@@ -338,12 +340,12 @@ impl PerspectiveEngine {
         }
 
         // 2. Pass the fully assembled base-case string to the typography post-processor
-        Ok(Self::post_process_typography(raw_output))
+        Ok(Self::post_process_typography(&raw_output))
     }
 
     /// Segments the text by true sentence boundaries and capitalizes the first letter.
-    fn post_process_typography(input: String) -> String {
-        let mut output = String::with_capacity(input.capacity());
+    fn post_process_typography(input: &str) -> String {
+        let mut output = String::with_capacity(input.len());
 
         let mut bounds = input.split_sentence_bound_indices();
         bounds.next(); // Skip the first bound (which is always 0)
@@ -461,10 +463,7 @@ fn consume_until_closed(
 
     if !closed {
         tracing::error!("Unclosed {} starting at index {}", tag_type, start_idx);
-        return Err(format!(
-            "Unclosed {} starting at index {}",
-            tag_type, start_idx
-        ));
+        return Err(format!("Unclosed {tag_type} starting at index {start_idx}"));
     }
 
     Ok(end_idx)
@@ -526,7 +525,7 @@ fn find_skipped_tag_end(remainder: &str) -> Option<usize> {
 #[cold]
 fn validation_error(message: &str, content: &str, open_char: char) -> String {
     let close_char = if open_char == '{' { '}' } else { ']' };
-    let formatted_message = format!("{}: {}{}{}", message, open_char, content, close_char);
+    let formatted_message = format!("{message}: {open_char}{content}{close_char}");
     tracing::error!("{}", formatted_message);
     formatted_message
 }

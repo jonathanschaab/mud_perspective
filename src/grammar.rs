@@ -80,6 +80,9 @@ static VIEWER_PLURAL_PRONOUNS: PronounSet = PronounSet {
 };
 
 /// Returns the correct pronoun based on gender, type, and perspective.
+///
+/// # Errors
+/// Returns a `String` error if the provided `p_type` is an unknown or unsupported pronoun case.
 pub fn resolve_pronoun(
     gender: Gender,
     p_type: &str,
@@ -114,6 +117,7 @@ pub fn resolve_pronoun(
 }
 
 /// Conjugates a base verb into the appropriate person and number.
+#[must_use]
 pub fn conjugate_verb<'a>(
     original_verb: &'a str,
     lower_verb: &'a str,
@@ -142,17 +146,17 @@ pub fn conjugate_verb<'a>(
         || lower_verb.ends_with("sh")
         || lower_verb.ends_with(['s', 'x', 'z'])
     {
-        Cow::Owned(format!("{}es", original_verb))
+        Cow::Owned(format!("{original_verb}es"))
     } else if lower_verb.len() > 1 && lower_verb.ends_with('y') && !is_vowel_before_y(lower_verb) {
         let trimmed = &original_verb[..original_verb.len() - 1];
-        Cow::Owned(format!("{}ies", trimmed))
+        Cow::Owned(format!("{trimmed}ies"))
     } else {
-        Cow::Owned(format!("{}s", original_verb))
+        Cow::Owned(format!("{original_verb}s"))
     }
 }
 
 #[inline]
-fn format_verb<'a>(verb: &'a str, is_capitalized: bool) -> Cow<'a, str> {
+fn format_verb(verb: &str, is_capitalized: bool) -> Cow<'_, str> {
     if is_capitalized {
         Cow::Owned(capitalize_first(verb))
     } else {
@@ -161,6 +165,7 @@ fn format_verb<'a>(verb: &'a str, is_capitalized: bool) -> Cow<'a, str> {
 }
 
 /// Capitalizes the first letter of a string slice.
+#[must_use]
 pub fn capitalize_first(s: &str) -> String {
     let mut c = s.chars();
     match c.next() {
@@ -181,10 +186,11 @@ fn is_vowel_before_y(verb: &str) -> bool {
 #[cold]
 fn unknown_pronoun_error(p_type: &str, context: &str) -> String {
     tracing::error!("Unknown pronoun type requested for {}: {}", context, p_type);
-    format!("Unknown pronoun type: {}", p_type)
+    format!("Unknown pronoun type: {p_type}")
 }
 
 /// Dynamically returns "a" or "an" based on the phonetic pronunciation of the following word.
+#[must_use]
 pub fn get_indefinite_article(word: &str) -> &str {
     in_definite::get_a_or_an(word)
 }
@@ -194,6 +200,7 @@ pub fn get_indefinite_article(word: &str) -> &str {
 ///
 /// **Note:** The returned string includes a trailing space (e.g., `"The "`, `"a "`) to ensure
 /// correct formatting when appended directly before the entity name.
+#[must_use]
 pub fn resolve_article(
     article: &str,
     entity_name: &str,
@@ -213,10 +220,10 @@ pub fn resolve_article(
             Some(if is_capitalized { "Some " } else { "some " })
         } else {
             match (is_capitalized, get_indefinite_article(entity_name)) {
-                (true, "a") => Some("A "),
-                (true, _) => Some("An "),
-                (false, "a") => Some("a "),
-                (false, _) => Some("an "),
+                (true, "an") => Some("An "),
+                (false, "an") => Some("an "),
+                (true, _) => Some("A "), // Covers "a" and any unexpected strings
+                (false, _) => Some("a "),
             }
         }
     } else if article.eq_ignore_ascii_case("the") {
