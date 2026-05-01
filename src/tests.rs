@@ -34,6 +34,10 @@ mod tests {
         }
 
         fn display_name_for<'a>(&'a self, viewer_id: &str) -> Cow<'a, str> {
+            if self.contains_viewer(viewer_id) {
+                return Cow::Borrowed("you");
+            }
+
             // Simulate an epistemological visibility check:
             // If the viewer is a stranger, hide Aldran's real name.
             if viewer_id == "stranger_1" && self.name == "Aldran" {
@@ -264,11 +268,11 @@ mod tests {
             .get_or_compile("{the:source} [source:attack] {target:obj}!")
             .unwrap();
 
-        // The group is the target, viewer is IN the group -> Expects 1st-person plural "us"
+        // The group is the target, viewer is IN the group -> Expects 2nd-person "you"
         let member_pronoun =
             render_msg!("char_1", &template_pronoun, "source" => &enemy, "target" => &party)
                 .unwrap();
-        assert_eq!(member_pronoun, "The Goblin attacks us!");
+        assert_eq!(member_pronoun, "The Goblin attacks you!");
 
         // The group is the target, viewer is OUTSIDE the group -> Expects 3rd-person plural "them"
         let observer_pronoun =
@@ -400,6 +404,84 @@ mod tests {
             .unwrap();
         let director_have = render_msg!("char_3", &template_have, "source" => &player).unwrap();
         assert_eq!(director_have, "Aldran Has a sword.");
+    }
+
+    #[test]
+    fn test_reflexive_plural_pronouns() {
+        let player = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+        let ally = MockEntity {
+            id: "char_2".to_string(),
+            name: "Bob".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+
+        let party = GroupEntity {
+            members: vec![&player, &ally],
+        };
+
+        let cache = TemplateCache::new(100);
+        let template = cache
+            .get_or_compile("{source} [source:defend] {source:reflex}!")
+            .unwrap();
+
+        // Plural Viewer (Actor Stance) -> tests the "yourselves" logic
+        let plural_actor = render_msg!("char_1", &template, "source" => &party).unwrap();
+        assert_eq!(plural_actor, "You and Bob defend yourselves!");
+    }
+
+    #[test]
+    fn test_typography_skips_tags() {
+        let goblin = MockEntity {
+            id: "mob_1".to_string(),
+            name: "goblin".to_string(), // lowercase common noun
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+
+        // 1. ANSI escape sequence
+        let template_ansi = cache
+            .get_or_compile("\x1b[31mthe {source} [source:attack].")
+            .unwrap();
+        let output_ansi = render_msg!("char_2", &template_ansi, "source" => &goblin).unwrap();
+        assert_eq!(output_ansi, "\x1b[31mThe goblin attacks.");
+
+        // 2. MXP tags
+        let template_mxp = cache
+            .get_or_compile("<COLOR red>a {source} [source:approach].")
+            .unwrap();
+        let output_mxp = render_msg!("char_2", &template_mxp, "source" => &goblin).unwrap();
+        assert_eq!(output_mxp, "<COLOR red>A goblin approaches.");
+
+        // 3. MSP triggers
+        let template_msp = cache
+            .get_or_compile("!!SOUND(roar.wav){the:source} [source:roar].")
+            .unwrap();
+        let output_msp = render_msg!("char_2", &template_msp, "source" => &goblin).unwrap();
+        assert_eq!(output_msp, "!!SOUND(roar.wav)The goblin roars.");
+
+        // 4. Mixed tags across multiple sentences
+        let template_mixed = cache
+            .get_or_compile(
+                "\x1b[1;32m<SEND href=\"look\">{the:source} [source:wave].\x1b[0m <COLOR blue>it [source:smile].",
+            )
+            .unwrap();
+
+        let output_mixed = render_msg!("char_2", &template_mixed, "source" => &goblin).unwrap();
+        assert_eq!(
+            output_mixed,
+            "\x1b[1;32m<SEND href=\"look\">The goblin waves.\x1b[0m <COLOR blue>It smiles."
+        );
     }
 
     pub struct GroupEntity<'a> {

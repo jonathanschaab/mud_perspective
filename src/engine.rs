@@ -64,7 +64,14 @@ impl Template {
         let mut last_literal_start = 0;
 
         while let Some(&(i, c)) = chars.peek() {
-            if c == '{' {
+            if c == '\x1b' {
+                chars.next();
+                if let Some(&(_, next_c)) = chars.peek()
+                    && next_c == '['
+                {
+                    chars.next(); // Consume the `[` so it isn't mistakenly parsed as a verb tag
+                }
+            } else if c == '{' {
                 // Push any preceding literal text
                 if i > last_literal_start {
                     tokens.push(Token::Literal(raw[last_literal_start..i].to_string()));
@@ -220,32 +227,25 @@ impl PerspectiveEngine {
                         .ok_or_else(|| format!("Missing entity for key: {}", key))?;
 
                     let is_viewer = entity.contains_viewer(ctx.viewer_id);
+                    let name = entity.display_name_for(ctx.viewer_id);
 
-                    // Only hardcode "you" if it's a singular entity.
-                    // Groups (plural) need to evaluate `display_name_for` to get "you and Bob".
-                    if is_viewer && !entity.is_plural() {
-                        raw_output.push_str("you");
-                    } else {
-                        let name = entity.display_name_for(ctx.viewer_id);
-
-                        // Handle dynamic "a" or "an" injection
-                        if let Some(art) = article {
-                            // Suppress articles if the viewer is part of this group
-                            // OR if it's a proper noun
-                            if is_viewer || entity.is_proper_noun_for(ctx.viewer_id) {
-                                raw_output.push_str(&name);
-                            } else if art == "a" || art == "an" {
-                                let indefinite = get_indefinite_article(&name);
-                                raw_output.push_str(indefinite);
-                                raw_output.push(' ');
-                                raw_output.push_str(&name);
-                            } else if art == "the" {
-                                raw_output.push_str("the ");
-                                raw_output.push_str(&name);
-                            }
-                        } else {
+                    // Handle dynamic "a" or "an" injection
+                    if let Some(art) = article {
+                        // Suppress articles if the viewer is part of this group
+                        // OR if it's a proper noun
+                        if is_viewer || entity.is_proper_noun_for(ctx.viewer_id) {
+                            raw_output.push_str(&name);
+                        } else if art == "a" || art == "an" {
+                            let indefinite = get_indefinite_article(&name);
+                            raw_output.push_str(indefinite);
+                            raw_output.push(' ');
+                            raw_output.push_str(&name);
+                        } else if art == "the" {
+                            raw_output.push_str("the ");
                             raw_output.push_str(&name);
                         }
+                    } else {
+                        raw_output.push_str(&name);
                     }
                 }
                 Token::PronounRef { key, p_type } => {
@@ -297,19 +297,129 @@ impl PerspectiveEngine {
     fn post_process_typography(input: String) -> String {
         let mut output = String::with_capacity(input.capacity());
 
-        // Use unicode-segmentation to safely chunk sentences
-        for sentence in input.split_sentence_bounds() {
-            let mut capitalized = false;
+        let mut bounds = input.split_sentence_bound_indices();
+        bounds.next(); // Skip the first bound (which is always 0)
+        let mut next_sentence_start = bounds.next().map(|(i, _)| i);
+        let mut capitalized = false;
+        let mut last_real_char = None;
 
-            for c in sentence.chars() {
-                // Skip ANSI codes and spaces; capitalize the FIRST alphabetic character
-                if !capitalized && c.is_alphabetic() {
-                    for uc in c.to_uppercase() {
-                        output.push(uc);
-                    }
-                    capitalized = true;
+        let mut chars = input.char_indices().peekable();
+
+        while let Some(&(i, c)) = chars.peek() {
+            // If we cross into a new sentence boundary, reset the capitalization flag
+            while let Some(next_start) = next_sentence_start {
+                if i >= next_start {
+                    capitalized = false;
+                    next_sentence_start = bounds.next().map(|(idx, _)| idx);
                 } else {
-                    output.push(c);
+                    break;
+                }
+            }
+
+            let remainder = &input[i..];
+            let mut skipped_tag = false;
+
+            // 1. Skip MXP Tags (e.g., <SEND HREF="..."> or <COLOR red>)
+            if c == '<'
+                && let Some(end_offset) = remainder.find('>')
+            {
+                output.push_str(&remainder[..=end_offset]);
+                let target_i = i + end_offset;
+                while let Some(&(curr_i, _)) = chars.peek() {
+                    if curr_i <= target_i {
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+                skipped_tag = true;
+            } else if (remainder.starts_with("!!SOUND(") || remainder.starts_with("!!MUSIC("))
+                && let Some(end_offset) = remainder.find(')')
+            {
+                // 2. Skip MSP Triggers (e.g., !!SOUND(...) or !!MUSIC(...))
+                output.push_str(&remainder[..=end_offset]);
+                let target_i = i + end_offset;
+                while let Some(&(curr_i, _)) = chars.peek() {
+                    if curr_i <= target_i {
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+                skipped_tag = true;
+            } else if c == '\x1b' {
+                // 3. Skip ANSI Escape Sequences
+                chars.next(); // Consume ESC
+                output.push('\x1b');
+
+                if let Some(&(_, next_c)) = chars.peek() {
+                    output.push(next_c);
+                    chars.next();
+
+                    match next_c {
+                        '[' => {
+                            // CSI Sequences: Read until a final character (0x40-0x7E)
+                            while let Some(&(_, csi_c)) = chars.peek() {
+                                output.push(csi_c);
+                                chars.next();
+                                if (0x40..=0x7E).contains(&(csi_c as u8)) {
+                                    break;
+                                }
+                            }
+                        }
+                        ']' | 'P' | 'X' | '^' | '_' => {
+                            // OSC / DCS Sequences: Read until BEL (\x07) or ST (\x1b\)
+                            let mut last_char = next_c;
+                            while let Some(&(_, osc_c)) = chars.peek() {
+                                output.push(osc_c);
+                                chars.next();
+                                if osc_c == '\x07' || (last_char == '\x1b' && osc_c == '\\') {
+                                    break;
+                                }
+                                last_char = osc_c;
+                            }
+                        }
+                        '(' | ')' | '*' | '+' | '-' | '.' | '/' => {
+                            // Charset designators: Read exactly one more character
+                            if let Some(&(_, char_c)) = chars.peek() {
+                                output.push(char_c);
+                                chars.next();
+                            }
+                        }
+                        _ => {
+                            // Simple 2-character escape (already consumed)
+                        }
+                    }
+                }
+                skipped_tag = true;
+            }
+
+            if skipped_tag {
+                // If the last real character was a sentence terminator, the tag might have
+                // hidden the sentence boundary from the unicode segmenter. Force a reset.
+                if let Some(lrc) = last_real_char
+                    && (lrc == '.' || lrc == '!' || lrc == '?')
+                {
+                    capitalized = false;
+                }
+                continue;
+            }
+
+            // 4. Normal Character Processing
+            chars.next(); // Consume the character
+
+            if !capitalized && c.is_alphabetic() {
+                // We found the first real letter outside of any tags! Capitalize it.
+                for uc in c.to_uppercase() {
+                    output.push(uc);
+                }
+                capitalized = true;
+                last_real_char = Some(c);
+            } else {
+                // It's whitespace, punctuation, or numbers. Push it and keep looking.
+                output.push(c);
+                if !c.is_whitespace() {
+                    last_real_char = Some(c);
                 }
             }
         }

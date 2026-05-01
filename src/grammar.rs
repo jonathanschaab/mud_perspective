@@ -31,26 +31,20 @@ pub fn resolve_pronoun(
     is_plural: bool,
 ) -> Result<&'static str, String> {
     if is_viewer {
-        if is_plural {
-            // 1st Person Plural (The viewer is part of this group)
-            return match p_type {
-                "subj" => Ok("we"),
-                "obj" => Ok("us"),
-                "poss" => Ok("our"),
-                "abs_poss" => Ok("ours"),
-                "reflex" => Ok("ourselves"),
-                _ => Err(format!("Unknown pronoun type: {}", p_type)),
-            };
-        } else {
-            // 2nd Person Singular (The viewer is the sole actor)
-            return match p_type {
-                "subj" | "obj" => Ok("you"),
-                "poss" => Ok("your"),
-                "abs_poss" => Ok("yours"),
-                "reflex" => Ok("yourself"),
-                _ => Err(format!("Unknown pronoun type: {}", p_type)),
-            };
-        }
+        // Actor Stance (2nd Person)
+        return match p_type {
+            "subj" | "obj" => Ok("you"),
+            "poss" => Ok("your"),
+            "abs_poss" => Ok("yours"),
+            "reflex" => {
+                if is_plural {
+                    Ok("yourselves")
+                } else {
+                    Ok("yourself")
+                }
+            }
+            _ => Err(format!("Unknown pronoun type: {}", p_type)),
+        };
     }
 
     // Comprehensive 5-case pronoun matrix

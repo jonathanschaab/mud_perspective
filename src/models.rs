@@ -42,6 +42,9 @@ pub trait TemplateEntity {
 
     /// Returns the display name of the entity, explicitly tailored to the observer.
     ///
+    /// Implementers are responsible for returning `"you"` when `contains_viewer` is true,
+    /// ensuring a consistent Actor Stance for both individuals and groups.
+    ///
     /// Returning a `Cow` (Clone-on-Write) allows the implementation to borrow the
     /// underlying string in most cases, avoiding heap allocations unless dynamic
     /// formatting (like appending a disguise title) is required.

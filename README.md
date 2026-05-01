@@ -53,7 +53,10 @@ fn is\_proper\_noun\_for(\&self, \_viewer\_id: \&str) \-\> bool {
     self.is\_proper\_noun   
 }
 
-fn display\_name\_for\<'a\>(&'a self, \_viewer\_id: \&str) \-\> Cow\<'a, str\> {  
+fn display\_name\_for\<'a\>(&'a self, viewer\_id: \&str) \-\> Cow\<'a, str\> {  
+    if self.contains_viewer(viewer_id) {
+        return Cow::Borrowed("you");
+    }
     // You can implement disguise logic or recognition checks here  
     Cow::Borrowed(\&self.name)  
 }
