@@ -1,8 +1,9 @@
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use crate::cache::TemplateCache;
     use crate::engine::{PerspectiveEngine, Template};
-    use crate::models::{Gender, RenderContext, TemplateEntity};
+    use crate::models::{Gender, GroupEntity, RenderContext, TemplateEntity};
     use std::borrow::Cow;
 
     /// A mock entity to represent game objects and characters in our tests.
@@ -422,6 +423,19 @@ mod tests {
         let observer_article =
             render_msg!("char_3", &template_article, "source" => &party).unwrap();
         assert_eq!(observer_article, "Aldran and Bob are ready.");
+
+        // --- SCENARIO 4: Mixed Recognition (Internal Articles) ---
+        let mixed_party = GroupEntity {
+            members: vec![&player, &enemy],
+        };
+        let template_mixed = cache
+            .get_or_compile("{the:source} [source:prepare] for battle.")
+            .unwrap();
+
+        let observer_mixed =
+            render_msg!("char_3", &template_mixed, "source" => &mixed_party).unwrap();
+        // "Aldran" is a proper noun (no article), "Goblin" is a common noun (gets "the").
+        assert_eq!(observer_mixed, "Aldran and the Goblin prepare for battle.");
     }
 
     #[test]
@@ -970,51 +984,214 @@ mod tests {
         assert_eq!(out3, "They say the tall man Smiles often.");
     }
 
-    pub struct GroupEntity<'a> {
-        pub members: Vec<&'a dyn TemplateEntity>,
+    #[test]
+    fn test_nested_and_empty_group_entities() {
+        let player = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+        let ally1 = MockEntity {
+            id: "char_2".to_string(),
+            name: "Bob".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+        let ally2 = MockEntity {
+            id: "char_3".to_string(),
+            name: "Charlie".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+        let ally3 = MockEntity {
+            id: "char_4".to_string(),
+            name: "Dave".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+
+        let empty_group = GroupEntity { members: vec![] };
+        let sub_group = GroupEntity {
+            members: vec![&player, &ally1],
+        };
+
+        // top_group contains a nested group, an empty group, and regular entities
+        let top_group = GroupEntity {
+            members: vec![&sub_group, &empty_group, &ally2, &ally3],
+        };
+
+        let cache = TemplateCache::new(100);
+        let template = cache
+            .get_or_compile("{the:source} [source:prepare].")
+            .unwrap();
+
+        // 1. Director Stance (bystander sees everyone)
+        // Expects empty group to be completely ignored.
+        // Nested group is flattened so it prints as a single cohesive list.
+        let out_director = render_msg!("stranger_1", &template, "source" => &top_group).unwrap();
+        assert_eq!(
+            out_director,
+            "The tall man, Bob, Charlie, and Dave prepare."
+        );
+
+        // 2. Actor Stance (Player is the viewer)
+        // Expects "You" to be pulled to the front of the flattened list cleanly.
+        let out_actor = render_msg!("char_1", &template, "source" => &top_group).unwrap();
+        assert_eq!(out_actor, "You, Bob, Charlie, and Dave prepare.");
     }
 
-    impl<'a> TemplateEntity for GroupEntity<'a> {
-        fn contains_viewer(&self, viewer_id: &str) -> bool {
-            self.members.iter().any(|m| m.contains_viewer(viewer_id))
-        }
+    #[test]
+    fn test_single_member_group_grammar() {
+        let aldran = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
 
-        fn gender(&self) -> Gender {
-            Gender::Plural // Forces 'they/them' for bystanders
-        }
+        let solo_group = GroupEntity {
+            members: vec![&aldran],
+        };
 
-        fn is_plural(&self) -> bool {
-            true // Forces base verbs like "attack"
-        }
+        let cache = TemplateCache::new(100);
 
-        fn display_name_for<'b>(&'b self, viewer_id: &str) -> Cow<'b, str> {
-            let mut names: Vec<String> = self
-                .members
-                .iter()
-                .filter(|m| !m.contains_viewer(viewer_id))
-                .map(|m| m.display_name_for(viewer_id).into_owned())
-                .collect();
+        // 1. Verb Conjugation
+        // Because Aldran is singular, the verb "open" must conjugate to "opens"
+        let template_verb = cache
+            .get_or_compile("{source} [source:open] the door.")
+            .unwrap();
+        let out_verb = render_msg!("char_2", &template_verb, "source" => &solo_group).unwrap();
+        assert_eq!(out_verb, "Aldran opens the door.");
 
-            // If the viewer is in this group, they are always listed first as "you"
-            if self.contains_viewer(viewer_id) {
-                names.insert(0, "you".to_string());
-            }
+        // 2. Pronoun Resolution
+        // Because Aldran is male, the pronoun must be "his" instead of "their"
+        let template_pronoun = cache
+            .get_or_compile("{source} [source:open] {source:poss} door.")
+            .unwrap();
+        let out_pronoun =
+            render_msg!("char_2", &template_pronoun, "source" => &solo_group).unwrap();
+        assert_eq!(out_pronoun, "Aldran opens his door.");
 
-            let output = match names.len() {
-                0 => String::new(),
-                1 => names[0].clone(),
-                2 => format!("{} and {}", names[0], names[1]),
-                _ => {
-                    let last = names.pop().unwrap();
-                    format!("{}, and {}", names.join(", "), last) // Oxford comma for 3+ items
-                }
-            };
+        // 3. Articles for common noun wrapped in a group
+        let goblin = MockEntity {
+            id: "mob_1".to_string(),
+            name: "goblin".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+        let goblin_group = GroupEntity {
+            members: vec![&goblin],
+        };
+        let template_art = cache
+            .get_or_compile("{the:source} [source:attack].")
+            .unwrap();
+        let out_art = render_msg!("char_2", &template_art, "source" => &goblin_group).unwrap();
+        assert_eq!(out_art, "The goblin attacks.");
+    }
 
-            Cow::Owned(output)
-        }
+    #[test]
+    fn test_demonstratives_and_past_tense() {
+        let goblin = MockEntity {
+            id: "mob_1".to_string(),
+            name: "goblin".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+        let wolves = MockEntity {
+            id: "mob_2".to_string(),
+            name: "wolves".to_string(),
+            gender: Gender::Plural,
+            is_plural: true,
+            is_proper_noun: false,
+        };
 
-        fn is_proper_noun_for(&self, _viewer_id: &str) -> bool {
-            true
-        }
+        let cache = TemplateCache::new(100);
+
+        // 1. Demonstratives (this -> these) combined with Past Tense "To Be" (was -> were)
+        let template = cache
+            .get_or_compile("{This:source} [source:was] angry.")
+            .unwrap();
+
+        let out_singular = render_msg!("char_2", &template, "source" => &goblin).unwrap();
+        assert_eq!(out_singular, "This goblin was angry.");
+
+        let out_plural = render_msg!("char_2", &template, "source" => &wolves).unwrap();
+        assert_eq!(out_plural, "These wolves were angry.");
+
+        // 2. Automatically suppresses the demonstrative for the viewer just like an article
+        let out_viewer = render_msg!("mob_2", &template, "source" => &wolves).unwrap();
+        assert_eq!(out_viewer, "You were angry.");
+
+        // 3. Forcing an article for a proper noun using the `+` prefix
+        let template_force = cache
+            .get_or_compile("{+This:source} [source:be] angry.")
+            .unwrap();
+        let aldran = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+        let out_forced = render_msg!("char_2", &template_force, "source" => &aldran).unwrap();
+        assert_eq!(out_forced, "This Aldran is angry.");
+    }
+
+    #[test]
+    fn test_force_director_stance() {
+        let player = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+
+        let goblin = MockEntity {
+            id: "mob_1".to_string(),
+            name: "goblin".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+
+        let template_forced = cache
+            .get_or_compile("{+source} [+source:attack] {the:target} with {+source:poss} sword.")
+            .unwrap();
+
+        // The player is the viewer, so normally this would render "You attack the goblin with your sword."
+        // Because of the `+` prefix on the keys, it forces 3rd person logic even for the viewer!
+        let out_forced =
+            render_msg!("char_1", &template_forced, "source" => &player, "target" => &goblin)
+                .unwrap();
+        assert_eq!(out_forced, "Aldran attacks the goblin with his sword.");
+
+        // Can even force an article onto a forced-3rd-person proper noun (e.g. {+the:+source})
+        let template_double_force = cache.get_or_compile("{+the:+source} is here.").unwrap();
+        let out_double_force =
+            render_msg!("char_1", &template_double_force, "source" => &player).unwrap();
+        assert_eq!(out_double_force, "The Aldran is here.");
+    }
+
+    #[test]
+    fn test_unbound_forced_director_verbs() {
+        let cache = TemplateCache::new(100);
+        let ctx = RenderContext::new("viewer");
+
+        // [+smile] should output "smiles" (director stance, which is default anyway, but tests parser stripping)
+        let out_director =
+            PerspectiveEngine::render(&cache.get_or_compile("he [+smile].").unwrap(), &ctx)
+                .unwrap();
+        assert_eq!(out_director, "He smiles.");
     }
 }

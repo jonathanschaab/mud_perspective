@@ -91,33 +91,11 @@ let output_director = render_msg!("char_3", &template, "source" => &player, "tar
 
 ### 3. Handling Groups and Swarms
 
-You can easily represent dynamic groups of entities by wrapping them in a custom `TemplateEntity` that evaluates as plural. The engine will automatically conjugate verbs to their base form (e.g., "attack" instead of "attacks") and resolve plural pronouns ("they", "them", "yourselves").
+The library provides a built-in `GroupEntity` to easily represent dynamic groups of characters or objects. It automatically handles Oxford comma formatting, injects "you" if the viewer is in the group, and evaluates as plural so verbs and pronouns automatically conjugate correctly ("attack" instead of "attacks", "themselves", etc.).
 
 ```rust
-pub struct GroupEntity<'a> {
-    pub members: Vec<&'a dyn TemplateEntity>,
-}
+use mud_perspective::models::GroupEntity;
 
-impl<'a> TemplateEntity for GroupEntity<'a> {
-    fn contains_viewer(&self, viewer_id: &str) -> bool {
-        self.members.iter().any(|m| m.contains_viewer(viewer_id))
-    }
-
-    fn gender(&self) -> Gender { Gender::Plural }
-    fn is_plural(&self) -> bool { true }
-    fn is_proper_noun_for(&self, _viewer_id: &str) -> bool { true }
-
-    fn display_name_for<'b>(&'b self, viewer_id: &str) -> Cow<'b, str> {
-        // Build an Oxford comma-separated list of the members!
-        // If the viewer is in the group, ensure they are listed as "you" or "You and Bob".
-        Cow::Owned("...".to_string())
-    }
-}
-```
-
-When rendering a message involving a group, the engine seamlessly shifts perspectives:
-
-```rust
 let party = GroupEntity { members: vec![&player, &ally] };
 let template = cache.get_or_compile("{source} [source:open] the door.").unwrap();
 
@@ -127,11 +105,11 @@ let template = cache.get_or_compile("{source} [source:open] the door.").unwrap()
 
 ### **4. Syntax Reference**
 
-* **Entities:** {key} inserts the entity's display name. Use {Key} to force capitalization mid-sentence.  
-* **Articles:** {a:key} or {the:key} prepends the appropriate article. Use {A:key} or {The:key} to force capitalization mid-sentence. These are automatically suppressed if the entity evaluates to the viewer ("you") or is flagged as a proper noun.  
-* **Pronouns:** {key:type}. Supported types include subj (he/she/it/they), obj (him/her/it/them), poss (his/her/their), abs_poss (his/hers/theirs), and reflex (himself/themselves). Capitalize the type (e.g., {key:Subj}) to force capitalization mid-sentence.
+* **Entities:** {key} inserts the entity's display name. Use {Key} to force capitalization mid-sentence. Prepend a plus (`{+key}`) to force the engine to render the character's 3rd-person name (Director Stance) even if the viewer is that character.
+* **Articles / Demonstratives:** {a:key}, {the:key}, {this:key}, or {that:key} prepends the appropriate word. Indefinite articles ("a") automatically adapt to "some" for plural entities, and demonstratives automatically adapt to plural ("these", "those"). Use {A:key}, {The:key}, etc. to force capitalization mid-sentence. These are automatically suppressed if the entity evaluates to the viewer ("you") or is flagged as a proper noun. You can force an article to render for a proper noun by prepending a plus sign (e.g., `{+this:key}`).
+* **Pronouns:** {key:type}. Supported types include subj (he/she/it/they), obj (him/her/it/them), poss (his/her/their), abs_poss (his/hers/theirs), and reflex (himself/themselves). Capitalize the type (e.g., {key:Subj}) to force capitalization mid-sentence. Prepend a plus (`{+key:subj}`) to force a 3rd-person pronoun (e.g., he/she/it/they) even if the viewer is the entity.
 
-* **Verbs:** [key:verb] explicitly binds a base verb to a subject to ensure correct conjugation. Capitalize the verb (e.g., [key:Verb]) to force capitalization mid-sentence. This prevents grammatical errors during compound subjects or passive voice structures.
+* **Verbs:** [key:verb] explicitly binds a base verb to a subject to ensure correct conjugation (including "be" -> "is"/"are" and "was" -> "were"). Capitalize the verb (e.g., [key:Verb]) to force capitalization mid-sentence. Prepend a plus (`[+key:verb]`) to force 3rd-person conjugation. This prevents grammatical errors during compound subjects or passive voice structures.
 
 * **Escaping:** Use a backslash (`\`) to escape special characters if you need to output literal braces or brackets (e.g., `\{`, `\}`, `\[`, `\]`). You can also escape a backslash itself (`\\`).
 
