@@ -1,6 +1,21 @@
 //! A Rust library designed to handle perspective-aware text generation for MUDs and interactive fiction.
 
 #![deny(missing_docs)]
+#![warn(
+    clippy::pedantic,
+    clippy::cargo,
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::must_use_candidate,
+    clippy::doc_markdown
+)]
+#![allow(
+    // module_name_repetitions will complain if a struct is named `TemplateCache` inside the `cache` module.
+    // It is highly subjective, and usually fine to disable.
+    clippy::module_name_repetitions,
+    // Often unavoidable when relying on third-party crates that use different versions of the same dependency.
+    clippy::multiple_crate_versions
+)]
 
 /// Thread-safe caching for compiled templates.
 pub mod cache;

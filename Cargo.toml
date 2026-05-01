@@ -2,6 +2,11 @@
 name = "mud_perspective"
 version = "0.1.0"
 edition = "2024"
+description = "A perspective-aware text generation engine for MUDs and interactive fiction."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/jonathanschaab/mud_perspective"
+keywords = ["mud", "text-generation", "nlp", "template"]
+categories = ["text-processing", "game-development"]
 
 [features]
 default = ["ansi", "mxp", "msp"]
