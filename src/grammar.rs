@@ -165,7 +165,12 @@ fn capitalize_first(s: &str) -> String {
     let mut c = s.chars();
     match c.next() {
         None => String::new(),
-        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+        Some(f) => {
+            let mut result = String::with_capacity(s.len());
+            result.extend(f.to_uppercase());
+            result.push_str(c.as_str());
+            result
+        }
     }
 }
 

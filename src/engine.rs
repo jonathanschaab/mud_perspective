@@ -104,23 +104,31 @@ impl Template {
                 if is_entity {
                     if let Some(p2) = parts.next() {
                         if parts.next().is_some() {
-                            tracing::error!("Malformed entity tag: {{{}}}", content);
-                            return Err(format!("Malformed entity tag: {{{}}}", content));
+                            return Err(validation_error("Malformed entity tag", content, '{'));
                         }
 
                         // 2-part case
-                        if p1 == "a" || p1 == "an" {
+                        if p1 == "a" || p1 == "an" || p1 == "the" {
+                            if p2.is_empty() {
+                                return Err(validation_error(
+                                    "Entity tag has an article but an empty key",
+                                    content,
+                                    '{',
+                                ));
+                            }
+                            let article = if p1 == "the" { "the" } else { "a" };
                             tokens.push(Token::EntityRef {
                                 key: p2.to_string(),
-                                article: Some("a".to_string()),
-                            });
-                        } else if p1 == "the" {
-                            tokens.push(Token::EntityRef {
-                                key: p2.to_string(),
-                                article: Some("the".to_string()),
+                                article: Some(article.to_string()),
                             });
                         } else {
-                            // Otherwise, it's a pronoun like {source:poss}
+                            if p1.is_empty() || p2.is_empty() {
+                                return Err(validation_error(
+                                    "Pronoun tag has an empty key or type",
+                                    content,
+                                    '{',
+                                ));
+                            }
                             tokens.push(Token::PronounRef {
                                 key: p1.to_string(),
                                 p_type: p2.to_string(),
@@ -128,6 +136,13 @@ impl Template {
                         }
                     } else {
                         // 1-part case
+                        if p1.is_empty() {
+                            return Err(validation_error(
+                                "Entity tag has an empty key",
+                                content,
+                                '{',
+                            ));
+                        }
                         tokens.push(Token::EntityRef {
                             key: p1.to_string(),
                             article: None,
@@ -136,9 +151,16 @@ impl Template {
                 } else {
                     let (subject_key, base_verb) = if let Some(p2) = parts.next() {
                         if parts.next().is_some() {
-                            tracing::error!("Malformed verb tag: [{}]", content);
-                            return Err(format!("Malformed verb tag: [{}]", content));
+                            return Err(validation_error("Malformed verb tag", content, '['));
                         }
+                        if p1.is_empty() {
+                            return Err(validation_error(
+                                "Verb tag has an empty subject key",
+                                content,
+                                '[',
+                            ));
+                        }
+                        // p2 (base_verb) can be empty, we warn for that later.
                         (Some(p1.to_string()), p2)
                     } else {
                         (None, p1)
@@ -475,4 +497,12 @@ fn find_skipped_tag_end(remainder: &str) -> Option<usize> {
     }
 
     None
+}
+
+#[cold]
+fn validation_error(message: &str, content: &str, open_char: char) -> String {
+    let close_char = if open_char == '{' { '}' } else { ']' };
+    let formatted_message = format!("{}: {}{}{}", message, open_char, content, close_char);
+    tracing::error!("{}", formatted_message);
+    formatted_message
 }

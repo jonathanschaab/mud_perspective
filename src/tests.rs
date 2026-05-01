@@ -20,13 +20,7 @@ mod tests {
         }
 
         fn gender(&self) -> Gender {
-            // Simple clone for the test enum
-            match self.gender {
-                Gender::Male => Gender::Male,
-                Gender::Female => Gender::Female,
-                Gender::Neutral => Gender::Neutral,
-                Gender::Plural => Gender::Plural,
-            }
+            self.gender
         }
 
         fn is_plural(&self) -> bool {
@@ -90,7 +84,7 @@ mod tests {
             name: "Aldran".to_string(), // Will be masked as "tall man" to strangers
             gender: Gender::Male,
             is_plural: false,
-            is_proper_noun: true, // Set to false so the stranger accurately gets "A tall man"
+            is_proper_noun: true, // is_proper_noun_for returns false for strangers
         };
 
         let template = Template::compile("{a:source} [source:approach].").unwrap();
@@ -100,6 +94,60 @@ mod tests {
 
         // The engine should dynamically add the article "a", and capitalize the sentence
         assert_eq!(stranger_output, "A tall man approaches.");
+    }
+
+    #[test]
+    fn test_article_suppression() {
+        let aldran = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+
+        let goblin = MockEntity {
+            id: "mob_1".to_string(),
+            name: "goblin".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+
+        // --- SCENARIO 1: `{the:key}` on a common noun ---
+        let template_the = cache.get_or_compile("{the:source} is here.").unwrap();
+        let output_the = render_msg!("char_2", &template_the, "source" => &goblin).unwrap();
+        assert_eq!(output_the, "The goblin is here.");
+
+        // --- SCENARIO 2: `{a:key}` suppressed for a proper noun ---
+        let template_a_proper = cache.get_or_compile("{a:source} is here.").unwrap();
+        let output_a_proper =
+            render_msg!("char_2", &template_a_proper, "source" => &aldran).unwrap();
+        assert_eq!(output_a_proper, "Aldran is here.");
+
+        // --- SCENARIO 3: `{the:key}` suppressed for a proper noun ---
+        let template_the_proper = cache.get_or_compile("{the:source} is here.").unwrap();
+        let output_the_proper =
+            render_msg!("char_2", &template_the_proper, "source" => &aldran).unwrap();
+        assert_eq!(output_the_proper, "Aldran is here.");
+
+        // --- SCENARIO 4: `{a:key}` suppressed for the viewer ---
+        let template_a_viewer = cache
+            .get_or_compile("{a:source} [source:be] here.")
+            .unwrap();
+        let output_a_viewer =
+            render_msg!("char_1", &template_a_viewer, "source" => &aldran).unwrap();
+        assert_eq!(output_a_viewer, "You are here.");
+
+        // --- SCENARIO 5: `{the:key}` suppressed for the viewer ---
+        let template_the_viewer = cache
+            .get_or_compile("{the:source} [source:be] here.")
+            .unwrap();
+        let output_the_viewer =
+            render_msg!("char_1", &template_the_viewer, "source" => &aldran).unwrap();
+        assert_eq!(output_the_viewer, "You are here.");
     }
 
     #[test]
@@ -279,6 +327,20 @@ mod tests {
             render_msg!("char_3", &template_pronoun, "source" => &enemy, "target" => &party)
                 .unwrap();
         assert_eq!(observer_pronoun, "The Goblin attacks them!");
+
+        // --- SCENARIO 3: Article Suppression ---
+        let template_article = cache
+            .get_or_compile("{the:source} [source:be] ready.")
+            .unwrap();
+
+        // Viewer IN party -> suppresses article (starts with "You")
+        let member_article = render_msg!("char_1", &template_article, "source" => &party).unwrap();
+        assert_eq!(member_article, "You and Bob are ready.");
+
+        // Viewer OUTSIDE party -> suppresses article because the Group is treated as a proper noun
+        let observer_article =
+            render_msg!("char_3", &template_article, "source" => &party).unwrap();
+        assert_eq!(observer_article, "Aldran and Bob are ready.");
     }
 
     #[test]
@@ -377,6 +439,27 @@ mod tests {
 
         let verb_err = Template::compile("The goblin [a:b:c]").unwrap_err();
         assert_eq!(verb_err, "Malformed verb tag: [a:b:c]");
+    }
+
+    #[test]
+    fn test_empty_tag_parts_return_errors() {
+        let err1 = Template::compile("The {a:} approaches.").unwrap_err();
+        assert_eq!(err1, "Entity tag has an article but an empty key: {a:}");
+
+        let err2 = Template::compile("The {the:} approaches.").unwrap_err();
+        assert_eq!(err2, "Entity tag has an article but an empty key: {the:}");
+
+        let err3 = Template::compile("The goblin hits {:poss} shield.").unwrap_err();
+        assert_eq!(err3, "Pronoun tag has an empty key or type: {:poss}");
+
+        let err4 = Template::compile("The goblin hits {source:}.").unwrap_err();
+        assert_eq!(err4, "Pronoun tag has an empty key or type: {source:}");
+
+        let err5 = Template::compile("A {} appears.").unwrap_err();
+        assert_eq!(err5, "Entity tag has an empty key: {}");
+
+        let err6 = Template::compile("The goblin [:attack].").unwrap_err();
+        assert_eq!(err6, "Verb tag has an empty subject key: [:attack]");
     }
 
     #[test]

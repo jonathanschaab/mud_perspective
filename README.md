@@ -17,9 +17,10 @@ The primary goal of this crate is to provide a reliable, thread-safe templating 
 
 ### **1\. Implementing TemplateEntity**
 
-To use the engine, your game objects must implement the TemplateEntity trait. This abstracts your database logic away from the rendering engine.rust
+To use the engine, your game objects must implement the TemplateEntity trait. This abstracts your database logic away from the rendering engine.
 
-use mud\_perspective::models::{TemplateEntity, Gender};
+```rust
+use mud_perspective::models::{TemplateEntity, Gender};
 
 use std::borrow::Cow;
 
@@ -31,68 +32,121 @@ pub name: String,
 
 pub gender: Gender,
 
-pub is\_plural: bool,
+pub is_plural: bool,
 
-pub is\_proper\_noun: bool,
+pub is_proper_noun: bool,
 
 }
 
 impl TemplateEntity for Character {
 
-fn contains\_viewer(\&self, viewer\_id: \&str) \-\> bool {
+fn contains_viewer(&self, viewer_id: &str) -> bool {
 
-self.id \== viewer\_id
+self.id == viewer_id
 
 }
 
-fn gender(\&self) \-\> Gender { self.gender }
+fn gender(&self) -> Gender { self.gender }
 
-fn is\_plural(\&self) \-\> bool { self.is\_plural }
+fn is_plural(&self) -> bool { self.is_plural }
 
-fn is\_proper\_noun\_for(\&self, \_viewer\_id: \&str) \-\> bool {   
-    self.is\_proper\_noun   
+fn is_proper_noun_for(&self, _viewer_id: &str) -> bool {   
+    self.is_proper_noun   
 }
 
-fn display\_name\_for\<'a\>(&'a self, viewer\_id: \&str) \-\> Cow\<'a, str\> {  
+fn display_name_for<'a>(&'a self, viewer_id: &str) -> Cow<'a, str> {  
     if self.contains_viewer(viewer_id) {
         return Cow::Borrowed("you");
     }
     // You can implement disguise logic or recognition checks here  
-    Cow::Borrowed(\&self.name)  
+    Cow::Borrowed(&self.name)  
 }
 
 }
+```
 
-\#\#\# 2\. Rendering Templates  
-The engine provides a \`render\_msg\!\` macro to make evaluating templates against a context ergonomic for game logic.
+### 2\. Rendering Templates  
+The engine provides a `render_msg!` macro to make evaluating templates against a context ergonomic for game logic.
 
-\`\`\`rust  
-use mud\_perspective::{render\_msg, TemplateCache};
+```rust  
+use mud_perspective::{render_msg, TemplateCache};
 
 // Initialize this cache once and share it across your game state  
-let cache \= TemplateCache::new(1000);
+let cache = TemplateCache::new(1000);
 
 // Compile the template  
-let template \= cache.get\_or\_compile("{the:source} \[source:watch\] as {the:target} \[target:approach\].").unwrap();
+let template = cache.get_or_compile("{the:source} [source:watch] as {the:target} [target:approach].").unwrap();
 
-let player \= Character { /\*... \*/ };  
-let goblin \= Character { /\*... \*/ };
+let player = Character { /*... */ };  
+let goblin = Character { /*... */ };
 
 // Actor Stance (The player is the viewer)  
-let output\_actor \= render\_msg\!("char\_1", \&template, "source" \=\> \&player, "target" \=\> \&goblin).unwrap();  
+let output_actor = render_msg!("char_1", &template, "source" => &player, "target" => &goblin).unwrap();  
 // Output: "You watch as the goblin approaches."
 
 // Director Stance (A third-party bystander is the viewer)  
-let output\_director \= render\_msg\!("char\_3", \&template, "source" \=\> \&player, "target" \=\> \&goblin).unwrap();  
+let output_director = render_msg!("char_3", &template, "source" => &player, "target" => &goblin).unwrap();  
 // Output: "Aldran watches as the goblin approaches."
+```
 
-### **3\. Syntax Reference**
+### 3. Handling Groups and Swarms
+
+You can easily represent dynamic groups of entities by wrapping them in a custom `TemplateEntity` that evaluates as plural. The engine will automatically conjugate verbs to their base form (e.g., "attack" instead of "attacks") and resolve plural pronouns ("they", "them", "yourselves").
+
+```rust
+pub struct GroupEntity<'a> {
+    pub members: Vec<&'a dyn TemplateEntity>,
+}
+
+impl<'a> TemplateEntity for GroupEntity<'a> {
+    fn contains_viewer(&self, viewer_id: &str) -> bool {
+        self.members.iter().any(|m| m.contains_viewer(viewer_id))
+    }
+
+    fn gender(&self) -> Gender { Gender::Plural }
+    fn is_plural(&self) -> bool { true }
+    fn is_proper_noun_for(&self, _viewer_id: &str) -> bool { true }
+
+    fn display_name_for<'b>(&'b self, viewer_id: &str) -> Cow<'b, str> {
+        // Build an Oxford comma-separated list of the members!
+        // If the viewer is in the group, ensure they are listed as "you" or "You and Bob".
+        Cow::Owned("...".to_string())
+    }
+}
+```
+
+When rendering a message involving a group, the engine seamlessly shifts perspectives:
+
+```rust
+let party = GroupEntity { members: vec![&player, &ally] };
+let template = cache.get_or_compile("{source} [source:open] the door.").unwrap();
+
+// Player's Perspective: "You and Bob open the door."
+// Bystander's Perspective: "Aldran and Bob open the door."
+```
+
+### **4. Syntax Reference**
 
 * **Entities:** {key} inserts the entity's display name.  
 * **Articles:** {a:key} or {the:key} prepends the appropriate article. These are automatically suppressed if the entity evaluates to the viewer ("you") or is flagged as a proper noun.  
 * **Pronouns:** {key:type}. Supported types include subj (he/she/it/they), obj (him/her/it/them), poss (his/her/their), abs\_poss (his/hers/theirs), and reflex (himself/themselves).
 
 * **Verbs:** \[key:verb\] explicitly binds a base verb to a subject to ensure correct conjugation. This prevents grammatical errors during compound subjects or passive voice structures.
+
+## **Cargo Features**
+
+By default, `mud_perspective` includes built-in support for parsing and safely skipping common MUD protocol tags. This ensures that the typography engine does not accidentally capitalize hidden metadata (e.g., changing `<color red>` to `<color Red>`) and that the AST compiler does not misinterpret braces or brackets hidden inside these tags.
+
+* `ansi`: Safely skips ANSI escape sequences (e.g., `\x1b[31m`).
+* `mxp`: Safely skips MUD eXtension Protocol HTML-like tags (e.g., `<SEND HREF="look">`).
+* `msp`: Safely skips MUD Sound Protocol triggers (e.g., `!!SOUND(roar.wav)`).
+
+These are enabled by default. If your MUD does not use some or all of these protocols, you can disable them to eke out extra performance during the compilation and rendering phases:
+
+```toml
+[dependencies]
+mud_perspective = { version = "0.1", default-features = false, features = ["ansi"] }
+```
 
 ## **Current Shortcomings**
 
