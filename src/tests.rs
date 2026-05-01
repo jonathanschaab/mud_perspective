@@ -2,7 +2,7 @@
 mod tests {
     use crate::cache::TemplateCache;
     use crate::engine::{PerspectiveEngine, Template};
-    use crate::models::{Gender, RenderContext, TemplateEntity};
+    use crate::models::{Gender, GroupEntity, RenderContext, TemplateEntity};
     use std::borrow::Cow;
 
     /// A mock entity to represent game objects and characters in our tests.
@@ -422,6 +422,19 @@ mod tests {
         let observer_article =
             render_msg!("char_3", &template_article, "source" => &party).unwrap();
         assert_eq!(observer_article, "Aldran and Bob are ready.");
+
+        // --- SCENARIO 4: Mixed Recognition (Internal Articles) ---
+        let mixed_party = GroupEntity {
+            members: vec![&player, &enemy],
+        };
+        let template_mixed = cache
+            .get_or_compile("{source} [source:prepare] for battle.")
+            .unwrap();
+
+        let observer_mixed =
+            render_msg!("char_3", &template_mixed, "source" => &mixed_party).unwrap();
+        // "Aldran" is a proper noun (no article), "Goblin" is a common noun (gets "the").
+        assert_eq!(observer_mixed, "Aldran and the Goblin prepare for battle.");
     }
 
     #[test]
@@ -968,53 +981,5 @@ mod tests {
             .unwrap();
         let out3 = render_msg!("stranger_1", &template3, "source" => &disguised).unwrap();
         assert_eq!(out3, "They say the tall man Smiles often.");
-    }
-
-    pub struct GroupEntity<'a> {
-        pub members: Vec<&'a dyn TemplateEntity>,
-    }
-
-    impl<'a> TemplateEntity for GroupEntity<'a> {
-        fn contains_viewer(&self, viewer_id: &str) -> bool {
-            self.members.iter().any(|m| m.contains_viewer(viewer_id))
-        }
-
-        fn gender(&self) -> Gender {
-            Gender::Plural // Forces 'they/them' for bystanders
-        }
-
-        fn is_plural(&self) -> bool {
-            true // Forces base verbs like "attack"
-        }
-
-        fn display_name_for<'b>(&'b self, viewer_id: &str) -> Cow<'b, str> {
-            let mut names: Vec<String> = self
-                .members
-                .iter()
-                .filter(|m| !m.contains_viewer(viewer_id))
-                .map(|m| m.display_name_for(viewer_id).into_owned())
-                .collect();
-
-            // If the viewer is in this group, they are always listed first as "you"
-            if self.contains_viewer(viewer_id) {
-                names.insert(0, "you".to_string());
-            }
-
-            let output = match names.len() {
-                0 => String::new(),
-                1 => names[0].clone(),
-                2 => format!("{} and {}", names[0], names[1]),
-                _ => {
-                    let last = names.pop().unwrap();
-                    format!("{}, and {}", names.join(", "), last) // Oxford comma for 3+ items
-                }
-            };
-
-            Cow::Owned(output)
-        }
-
-        fn is_proper_noun_for(&self, _viewer_id: &str) -> bool {
-            true
-        }
     }
 }

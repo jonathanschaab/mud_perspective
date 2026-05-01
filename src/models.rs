@@ -1,3 +1,4 @@
+use crate::grammar::resolve_article;
 use std::borrow::Cow;
 use std::collections::HashMap;
 
@@ -96,5 +97,74 @@ impl<'a> RenderContext<'a> {
     pub fn with_entity(mut self, key: &'a str, entity: &'a dyn TemplateEntity) -> Self {
         self.entities.insert(key, entity);
         self
+    }
+}
+
+/// A built-in helper for representing a dynamic group of entities.
+///
+/// `GroupEntity` automatically aggregates a collection of `TemplateEntity` references.
+/// It seamlessly handles Oxford comma formatting, injects "you" if the viewer is in the group,
+/// evaluates as plural for verb conjugation, and resolves internal definite articles
+/// for common nouns (e.g. outputting "Aldran and the goblin" instead of "Aldran and goblin").
+pub struct GroupEntity<'a> {
+    /// The list of entities comprising this group.
+    pub members: Vec<&'a dyn TemplateEntity>,
+}
+
+impl TemplateEntity for GroupEntity<'_> {
+    fn contains_viewer(&self, viewer_id: &str) -> bool {
+        self.members.iter().any(|m| m.contains_viewer(viewer_id))
+    }
+
+    fn gender(&self) -> Gender {
+        Gender::Plural // Forces 'they/them' for bystanders
+    }
+
+    fn is_plural(&self) -> bool {
+        true // Forces base verbs like "attack"
+    }
+
+    fn display_name_for<'b>(&'b self, viewer_id: &str) -> Cow<'b, str> {
+        let mut names: Vec<String> = self
+            .members
+            .iter()
+            .filter(|m| !m.contains_viewer(viewer_id))
+            .map(|m| {
+                let name = m.display_name_for(viewer_id).into_owned();
+                // Dynamically prepend "the " if it is a common noun!
+                if let Some(art) = resolve_article(
+                    "the",
+                    &name,
+                    false, // We already filtered the viewer out
+                    m.is_proper_noun_for(viewer_id),
+                    m.is_plural(),
+                ) {
+                    format!("{art}{name}")
+                } else {
+                    name
+                }
+            })
+            .collect();
+
+        // If the viewer is in this group, they are always listed first as "you"
+        if self.contains_viewer(viewer_id) {
+            names.insert(0, "you".to_string());
+        }
+
+        let output = match names.len() {
+            0 => String::new(),
+            1 => names[0].clone(),
+            2 => format!("{} and {}", names[0], names[1]),
+            _ => {
+                let last = names.pop().unwrap();
+                format!("{}, and {}", names.join(", "), last) // Oxford comma for 3+ items
+            }
+        };
+
+        Cow::Owned(output)
+    }
+
+    fn is_proper_noun_for(&self, _viewer_id: &str) -> bool {
+        true
     }
 }

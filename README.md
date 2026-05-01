@@ -91,33 +91,11 @@ let output_director = render_msg!("char_3", &template, "source" => &player, "tar
 
 ### 3. Handling Groups and Swarms
 
-You can easily represent dynamic groups of entities by wrapping them in a custom `TemplateEntity` that evaluates as plural. The engine will automatically conjugate verbs to their base form (e.g., "attack" instead of "attacks") and resolve plural pronouns ("they", "them", "yourselves").
+The library provides a built-in `GroupEntity` to easily represent dynamic groups of characters or objects. It automatically handles Oxford comma formatting, injects "you" if the viewer is in the group, and evaluates as plural so verbs and pronouns automatically conjugate correctly ("attack" instead of "attacks", "themselves", etc.).
 
 ```rust
-pub struct GroupEntity<'a> {
-    pub members: Vec<&'a dyn TemplateEntity>,
-}
+use mud_perspective::models::GroupEntity;
 
-impl<'a> TemplateEntity for GroupEntity<'a> {
-    fn contains_viewer(&self, viewer_id: &str) -> bool {
-        self.members.iter().any(|m| m.contains_viewer(viewer_id))
-    }
-
-    fn gender(&self) -> Gender { Gender::Plural }
-    fn is_plural(&self) -> bool { true }
-    fn is_proper_noun_for(&self, _viewer_id: &str) -> bool { true }
-
-    fn display_name_for<'b>(&'b self, viewer_id: &str) -> Cow<'b, str> {
-        // Build an Oxford comma-separated list of the members!
-        // If the viewer is in the group, ensure they are listed as "you" or "You and Bob".
-        Cow::Owned("...".to_string())
-    }
-}
-```
-
-When rendering a message involving a group, the engine seamlessly shifts perspectives:
-
-```rust
 let party = GroupEntity { members: vec![&player, &ally] };
 let template = cache.get_or_compile("{source} [source:open] the door.").unwrap();
 
