@@ -281,7 +281,8 @@ impl PerspectiveEngine {
                     // Handle dynamic "a" or "an" injection
                     if let Some(art) = article
                         && !is_viewer
-                        && !entity.is_proper_noun_for(ctx.viewer_id)
+                        && (!entity.is_proper_noun_for(ctx.viewer_id)
+                            || (entity.is_plural() && art.eq_ignore_ascii_case("the")))
                     {
                         let is_capitalized = art.starts_with(|c: char| c.is_uppercase());
 

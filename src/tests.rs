@@ -148,6 +148,26 @@ mod tests {
         let output_the_viewer =
             render_msg!("char_1", &template_the_viewer, "source" => &aldran).unwrap();
         assert_eq!(output_the_viewer, "You are here.");
+
+        // --- SCENARIO 6: Plural proper nouns (e.g. "The Smiths", "The Avengers") ---
+        let avengers = MockEntity {
+            id: "mob_2".to_string(),
+            name: "Avengers".to_string(),
+            gender: Gender::Plural,
+            is_plural: true,
+            is_proper_noun: true,
+        };
+
+        // Indefinite article "a" should STILL be suppressed
+        let template_a_plural = cache.get_or_compile("{a:source} assemble!").unwrap();
+        let output_a_plural = render_msg!("char_2", &template_a_plural, "source" => &avengers).unwrap();
+        assert_eq!(output_a_plural, "Avengers assemble!");
+
+        // Definite article "the" should NOT be suppressed
+        let template_the_plural = cache.get_or_compile("{The:source} assemble!").unwrap();
+        let output_the_plural =
+            render_msg!("char_2", &template_the_plural, "source" => &avengers).unwrap();
+        assert_eq!(output_the_plural, "The Avengers assemble!");
     }
 
     #[test]
