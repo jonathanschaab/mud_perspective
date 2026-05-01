@@ -1,8 +1,8 @@
 #[cfg(test)]
 mod tests {
-    use crate::models::{Gender, RenderContext, TemplateEntity};
-    use crate::engine::{PerspectiveEngine, Template};
     use crate::cache::TemplateCache;
+    use crate::engine::{PerspectiveEngine, Template};
+    use crate::models::{Gender, RenderContext, TemplateEntity};
     use std::borrow::Cow;
 
     /// A mock entity to represent game objects and characters in our tests.
@@ -46,7 +46,7 @@ mod tests {
         fn is_proper_noun_for(&self, viewer_id: &str) -> bool {
             // If the stranger sees the masked "tall man", it is no longer a proper noun
             if viewer_id == "stranger_1" && self.name == "Aldran" {
-                false 
+                false
             } else {
                 self.is_proper_noun
             }
@@ -64,8 +64,10 @@ mod tests {
         };
 
         // Note: We use lowercase text. The post-processor will handle capitalization safely.
-        let template = Template::compile("{source} [source:be] looking around for {source:poss} sword.").unwrap();
-        
+        let template =
+            Template::compile("{source} [source:be] looking around for {source:poss} sword.")
+                .unwrap();
+
         // 1. Actor Stance (Aldran is the viewer)
         let ctx_actor = RenderContext::new("char_1").with_entity("source", &aldran);
         let actor_output = PerspectiveEngine::render(&template, &ctx_actor).unwrap();
@@ -88,10 +90,10 @@ mod tests {
         };
 
         let template = Template::compile("{a:source} [source:approach].").unwrap();
-        
+
         let ctx_stranger = RenderContext::new("stranger_1").with_entity("source", &aldran);
         let stranger_output = PerspectiveEngine::render(&template, &ctx_stranger).unwrap();
-        
+
         // The engine should dynamically add the article "a", and capitalize the sentence
         assert_eq!(stranger_output, "A tall man approaches.");
     }
@@ -115,15 +117,16 @@ mod tests {
         };
 
         // Testing the "active subject fallacy" fix by explicitly binding the verb to the wolves
-        let template = Template::compile("the {target} watches as the {source} [source:attack]!").unwrap();
-        
+        let template =
+            Template::compile("the {target} watches as the {source} [source:attack]!").unwrap();
+
         let ctx = RenderContext::new("char_2")
-           .with_entity("source", &wolves)
-           .with_entity("target", &player);
+            .with_entity("source", &wolves)
+            .with_entity("target", &player);
 
         let output = PerspectiveEngine::render(&template, &ctx).unwrap();
-        
-        // Because wolves are plural, the verb "attack" should NOT become "attacks", 
+
+        // Because wolves are plural, the verb "attack" should NOT become "attacks",
         // even though it's evaluating in the third person.
         assert_eq!(output, "The Aldran watches as the pack of wolves attack!");
     }
@@ -144,7 +147,7 @@ mod tests {
 
         // First call - CACHE MISS. The engine compiles the AST.
         let template_1 = cache.get_or_compile(raw_text).unwrap();
-        
+
         // Second call - CACHE HIT. The engine instantly returns the pre-compiled AST.
         let template_2 = cache.get_or_compile(raw_text).unwrap();
 
@@ -177,19 +180,22 @@ mod tests {
         };
 
         let cache = TemplateCache::new(100);
-        let template = cache.get_or_compile("{the:target} [target:watch] as the {source} [source:attack]!").unwrap();
+        let template = cache
+            .get_or_compile("{the:target} [target:watch] as the {source} [source:attack]!")
+            .unwrap();
 
         // BEFORE: The verbose, manual context building
         let manual_ctx = RenderContext::new("char_1")
-           .with_entity("source", &wolves)
-           .with_entity("target", &player);
+            .with_entity("source", &wolves)
+            .with_entity("target", &player);
         let manual_output = PerspectiveEngine::render(&template, &manual_ctx).unwrap();
 
         // AFTER: The clean, single-line macro approach
-        let macro_output = render_msg!("char_1", &template, 
-            "source" => &wolves, 
+        let macro_output = render_msg!("char_1", &template,
+            "source" => &wolves,
             "target" => &player,
-        ).unwrap();
+        )
+        .unwrap();
 
         // Both should yield the exact same grammatically correct string
         assert_eq!(manual_output, "You watch as the pack of wolves attack!");
@@ -198,18 +204,48 @@ mod tests {
 
     #[test]
     fn test_group_entity_perspectives() {
-        let player = MockEntity { id: "char_1".to_string(), name: "Aldran".to_string(), gender: Gender::Male, is_plural: false, is_proper_noun: true };
-        let ally = MockEntity { id: "char_2".to_string(), name: "Bob".to_string(), gender: Gender::Male, is_plural: false, is_proper_noun: true };
-        let enemy = MockEntity { id: "mob_1".to_string(), name: "Goblin".to_string(), gender: Gender::Male, is_plural: false, is_proper_noun: false };
-        let stranger = MockEntity { id: "char_3".to_string(), name: "Charlie".to_string(), gender: Gender::Male, is_plural: false, is_proper_noun: true };
+        let player = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+        let ally = MockEntity {
+            id: "char_2".to_string(),
+            name: "Bob".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+        let enemy = MockEntity {
+            id: "mob_1".to_string(),
+            name: "Goblin".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+        let stranger = MockEntity {
+            id: "char_3".to_string(),
+            name: "Charlie".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
 
-        let party = GroupEntity { members: vec![&player, &ally] };
-        let big_party = GroupEntity { members: vec![&player, &ally, &stranger] };
+        let party = GroupEntity {
+            members: vec![&player, &ally],
+        };
+        let big_party = GroupEntity {
+            members: vec![&player, &ally, &stranger],
+        };
 
         let cache = TemplateCache::new(100);
 
         // --- SCENARIO 1: Verbs & Display Names ---
-        let template_action = cache.get_or_compile("{source} [source:open] the door.").unwrap();
+        let template_action = cache
+            .get_or_compile("{source} [source:open] the door.")
+            .unwrap();
 
         // Viewer is IN the party -> Expects "you" injection and uninflected verb
         let member_action = render_msg!("char_1", &template_action, "source" => &party).unwrap();
@@ -223,16 +259,21 @@ mod tests {
         let observer_big = render_msg!("mob_1", &template_action, "source" => &big_party).unwrap();
         assert_eq!(observer_big, "Aldran, Bob, and Charlie open the door.");
 
-
         // --- SCENARIO 2: Group Pronouns ---
-        let template_pronoun = cache.get_or_compile("{the:source} [source:attack] {target:obj}!").unwrap();
+        let template_pronoun = cache
+            .get_or_compile("{the:source} [source:attack] {target:obj}!")
+            .unwrap();
 
         // The group is the target, viewer is IN the group -> Expects 1st-person plural "us"
-        let member_pronoun = render_msg!("char_1", &template_pronoun, "source" => &enemy, "target" => &party).unwrap();
+        let member_pronoun =
+            render_msg!("char_1", &template_pronoun, "source" => &enemy, "target" => &party)
+                .unwrap();
         assert_eq!(member_pronoun, "The Goblin attacks us!");
 
         // The group is the target, viewer is OUTSIDE the group -> Expects 3rd-person plural "them"
-        let observer_pronoun = render_msg!("char_3", &template_pronoun, "source" => &enemy, "target" => &party).unwrap();
+        let observer_pronoun =
+            render_msg!("char_3", &template_pronoun, "source" => &enemy, "target" => &party)
+                .unwrap();
         assert_eq!(observer_pronoun, "The Goblin attacks them!");
     }
 
@@ -257,31 +298,41 @@ mod tests {
         let cache = TemplateCache::new(100);
 
         // --- TEST 1: The modal verb "must" ---
-        let template_must = cache.get_or_compile("{source} [source:must] flee from {the:target}!").unwrap();
+        let template_must = cache
+            .get_or_compile("{source} [source:must] flee from {the:target}!")
+            .unwrap();
 
         // Actor Stance (Player is the one fleeing)
-        let actor_must = render_msg!("char_1", &template_must, "source" => &player, "target" => &goblin).unwrap();
+        let actor_must =
+            render_msg!("char_1", &template_must, "source" => &player, "target" => &goblin)
+                .unwrap();
         assert_eq!(actor_must, "You must flee from the Goblin!");
 
         // Director Stance (A bystander is watching the Player flee)
         // The engine should output "must", NOT "musts"
-        let director_must = render_msg!("char_3", &template_must, "source" => &player, "target" => &goblin).unwrap();
+        let director_must =
+            render_msg!("char_3", &template_must, "source" => &player, "target" => &goblin)
+                .unwrap();
         assert_eq!(director_must, "Aldran must flee from the Goblin!");
 
-
         // --- TEST 2: Multiple modal verbs ("can" and "will") in a complex sentence ---
-        let template_can = cache.get_or_compile("if {source} [source:can] catch {the:target}, {source:subj} [source:will] win.").unwrap();
+        let template_can = cache
+            .get_or_compile(
+                "if {source} [source:can] catch {the:target}, {source:subj} [source:will] win.",
+            )
+            .unwrap();
 
         // Actor Stance
-        let actor_can = render_msg!("char_1", &template_can, "source" => &player, "target" => &goblin).unwrap();
+        let actor_can =
+            render_msg!("char_1", &template_can, "source" => &player, "target" => &goblin).unwrap();
         assert_eq!(actor_can, "If you can catch the Goblin, you will win.");
 
         // Director Stance
         // The engine should output "can" and "will", NOT "cans" and "wills"
-        let director_can = render_msg!("char_3", &template_can, "source" => &player, "target" => &goblin).unwrap();
+        let director_can =
+            render_msg!("char_3", &template_can, "source" => &player, "target" => &goblin).unwrap();
         assert_eq!(director_can, "If Aldran can catch the Goblin, he will win.");
-        
-        
+
         // --- TEST 3: Modal verbs interacting with plural targets ---
         let wolves = MockEntity {
             id: "mob_2".to_string(),
@@ -290,11 +341,20 @@ mod tests {
             is_plural: true,
             is_proper_noun: false,
         };
-        
-        let template_should = cache.get_or_compile("{the:source} [source:should] be careful, or {the:target} [target:might] attack.").unwrap();
-        
-        let observer_should = render_msg!("char_3", &template_should, "source" => &player, "target" => &wolves).unwrap();
-        assert_eq!(observer_should, "Aldran should be careful, or the pack of wolves might attack.");
+
+        let template_should = cache
+            .get_or_compile(
+                "{the:source} [source:should] be careful, or {the:target} [target:might] attack.",
+            )
+            .unwrap();
+
+        let observer_should =
+            render_msg!("char_3", &template_should, "source" => &player, "target" => &wolves)
+                .unwrap();
+        assert_eq!(
+            observer_should,
+            "Aldran should be careful, or the pack of wolves might attack."
+        );
     }
 
     #[test]
@@ -335,7 +395,9 @@ mod tests {
         assert_eq!(director_be, "Aldran Is here.");
 
         // --- TEST 2: "Have" -> "Has" ---
-        let template_have = cache.get_or_compile("{source} [source:Have] a sword.").unwrap();
+        let template_have = cache
+            .get_or_compile("{source} [source:Have] a sword.")
+            .unwrap();
         let director_have = render_msg!("char_3", &template_have, "source" => &player).unwrap();
         assert_eq!(director_have, "Aldran Has a sword.");
     }
@@ -358,10 +420,12 @@ mod tests {
         }
 
         fn display_name_for<'b>(&'b self, viewer_id: &str) -> Cow<'b, str> {
-            let mut names: Vec<String> = self.members.iter()
-               .filter(|m| !m.contains_viewer(viewer_id))
-               .map(|m| m.display_name_for(viewer_id).into_owned())
-               .collect();
+            let mut names: Vec<String> = self
+                .members
+                .iter()
+                .filter(|m| !m.contains_viewer(viewer_id))
+                .map(|m| m.display_name_for(viewer_id).into_owned())
+                .collect();
 
             // If the viewer is in this group, they are always listed first as "you"
             if self.contains_viewer(viewer_id) {
@@ -382,7 +446,7 @@ mod tests {
         }
 
         fn is_proper_noun_for(&self, _viewer_id: &str) -> bool {
-            true 
+            true
         }
     }
 }

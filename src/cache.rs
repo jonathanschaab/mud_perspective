@@ -1,16 +1,16 @@
+use crate::engine::Template;
 use lru::LruCache;
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
-use crate::engine::Template;
 
 /// A thread-safe Least Recently Used (LRU) cache for compiled text templates.
 ///
-/// Because MUDs process high volumes of text concurrently, this cache wraps the 
-/// underlying owned ASTs in an `Arc`. This allows multiple network threads to safely 
+/// Because MUDs process high volumes of text concurrently, this cache wraps the
+/// underlying owned ASTs in an `Arc`. This allows multiple network threads to safely
 /// read and render the same compiled template simultaneously without incurring cloning costs,
 /// and safely stores templates regardless of the lifetime of the original raw database strings.
 pub struct TemplateCache {
-    // We use Arc<Template> so multiple threads can read the same compiled AST 
+    // We use Arc<Template> so multiple threads can read the same compiled AST
     // simultaneously without having to clone the underlying Vec of Tokens.
     inner: Mutex<LruCache<String, Arc<Template>>>,
 }
@@ -19,7 +19,7 @@ impl TemplateCache {
     /// Initializes a new thread-safe template cache.
     ///
     /// # Arguments
-    /// * `capacity` - The maximum number of templates to keep in memory. Once 
+    /// * `capacity` - The maximum number of templates to keep in memory. Once
     ///   exceeded, the least recently used templates are automatically evicted.
     pub fn new(capacity: usize) -> Self {
         Self {
@@ -34,7 +34,7 @@ impl TemplateCache {
     /// * `raw` - The raw template string to fetch or compile.
     ///
     /// # Errors
-    /// Returns a `String` describing the syntax error if a cache miss occurs and 
+    /// Returns a `String` describing the syntax error if a cache miss occurs and
     /// the subsequent compilation fails.
     pub fn get_or_compile(&self, raw: &str) -> Result<Arc<Template>, String> {
         // First, check if the template is already in the cache, holding the lock briefly.

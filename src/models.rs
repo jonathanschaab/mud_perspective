@@ -3,7 +3,7 @@ use std::collections::HashMap;
 
 /// Represents the grammatical gender of an entity for correct pronoun resolution.
 ///
-/// The `Plural` variant is critical for supporting both literal swarms (e.g., "a pack of wolves") 
+/// The `Plural` variant is critical for supporting both literal swarms (e.g., "a pack of wolves")
 /// and singular entities that utilize non-binary they/them pronouns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Gender {
@@ -20,8 +20,8 @@ pub enum Gender {
 /// A generic trait implemented by game objects to allow them to be referenced
 /// dynamically within text templates.
 ///
-/// By requiring `viewer_id` in its methods, this trait ensures that text rendering 
-/// is strictly bound to the observer's epistemological state, supporting mechanics 
+/// By requiring `viewer_id` in its methods, this trait ensures that text rendering
+/// is strictly bound to the observer's epistemological state, supporting mechanics
 /// like stealth, disguises, and recognition.
 pub trait TemplateEntity {
     /// Evaluates whether the given `viewer_id` represents this entity or
@@ -36,14 +36,14 @@ pub trait TemplateEntity {
 
     /// Determines if the entity is treated as grammatically plural.
     ///
-    /// This is strictly used for subject-verb agreement to ensure verbs remain 
+    /// This is strictly used for subject-verb agreement to ensure verbs remain
     /// uninflected for swarms or groups (e.g., "the wolves attack" instead of "attacks").
     fn is_plural(&self) -> bool;
 
     /// Returns the display name of the entity, explicitly tailored to the observer.
     ///
-    /// Returning a `Cow` (Clone-on-Write) allows the implementation to borrow the 
-    /// underlying string in most cases, avoiding heap allocations unless dynamic 
+    /// Returning a `Cow` (Clone-on-Write) allows the implementation to borrow the
+    /// underlying string in most cases, avoiding heap allocations unless dynamic
     /// formatting (like appending a disguise title) is required.
     ///
     /// # Arguments
@@ -52,14 +52,14 @@ pub trait TemplateEntity {
 
     /// Determines if the entity's current identity is a proper noun.
     ///
-    /// If `true`, the rendering engine will automatically suppress indefinite (`a/an`) 
-    /// and definite (`the`) articles. This must be perspective-aware to account for 
-    /// situations where a stranger sees a common noun ("a tall man") while a friend 
+    /// If `true`, the rendering engine will automatically suppress indefinite (`a/an`)
+    /// and definite (`the`) articles. This must be perspective-aware to account for
+    /// situations where a stranger sees a common noun ("a tall man") while a friend
     /// sees a proper noun ("Aldran").
     ///
     /// # Arguments
     /// * `viewer_id` - The unique identifier of the observing entity.
-    fn is_proper_noun_for(&self, viewer_id: &str) -> bool; 
+    fn is_proper_noun_for(&self, viewer_id: &str) -> bool;
 }
 
 /// The context environment passed to the rendering engine for a specific view generation.

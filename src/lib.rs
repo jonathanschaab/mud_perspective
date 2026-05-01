@@ -2,19 +2,19 @@
 
 #![deny(missing_docs)]
 
-/// Core data structures and traits for perspective rendering.
-pub mod models;
-/// Grammar rules and NLP helpers for English.
-pub mod grammar;
-/// The core AST and template rendering engine.
-pub mod engine;
 /// Thread-safe caching for compiled templates.
 pub mod cache;
+/// The core AST and template rendering engine.
+pub mod engine;
+/// Grammar rules and NLP helpers for English.
+pub mod grammar;
+/// Core data structures and traits for perspective rendering.
+pub mod models;
 
 /// Renders a perspective-aware message ergonomically by abstracting the context initialization.
 ///
-/// This declarative macro transforms the verbose builder pattern into a clean, 
-/// single-line function call, allowing developers to inject entity mappings as 
+/// This declarative macro transforms the verbose builder pattern into a clean,
+/// single-line function call, allowing developers to inject entity mappings as
 /// trailing key-value pairs.
 ///
 /// # Arguments
@@ -28,9 +28,9 @@ pub mod cache;
 /// # Example
 /// ```ignore
 /// let output = render_msg!(
-///     "observer_1", 
-///     &compiled_template, 
-///     "source" => &player_entity, 
+///     "observer_1",
+///     &compiled_template,
+///     "source" => &player_entity,
 ///     "target" => &enemy_entity
 /// );
 /// ```
@@ -44,7 +44,7 @@ macro_rules! render_msg {
             // This line repeats for every key-value pair passed to the macro
            .with_entity($key, $entity)
         )*;
-        
+
         // Render and return the Result
         $crate::engine::PerspectiveEngine::render($template, &ctx)
     }};
