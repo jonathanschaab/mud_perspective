@@ -1,4 +1,4 @@
-use crate::grammar::{conjugate_verb, get_indefinite_article, resolve_pronoun};
+use crate::grammar::{conjugate_verb, resolve_article, resolve_pronoun};
 use crate::models::RenderContext;
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -279,38 +279,15 @@ impl PerspectiveEngine {
                     };
 
                     // Handle dynamic "a" or "an" injection
-                    if let Some(art) = article
-                        && !is_viewer
-                        && !entity.is_proper_noun_for(ctx.viewer_id)
-                    {
-                        let is_capitalized = art.starts_with(|c: char| c.is_uppercase());
-
-                        if art.eq_ignore_ascii_case("a") || art.eq_ignore_ascii_case("an") {
-                            if entity.is_plural() {
-                                if is_capitalized {
-                                    raw_output.push_str("Some ");
-                                } else {
-                                    raw_output.push_str("some ");
-                                }
-                            } else {
-                                let indefinite = get_indefinite_article(name_str);
-                                if is_capitalized {
-                                    if indefinite == "a" {
-                                        raw_output.push_str("A ");
-                                    } else {
-                                        raw_output.push_str("An ");
-                                    }
-                                } else {
-                                    raw_output.push_str(indefinite);
-                                    raw_output.push(' ');
-                                }
-                            }
-                        } else if art.eq_ignore_ascii_case("the") {
-                            if is_capitalized {
-                                raw_output.push_str("The ");
-                            } else {
-                                raw_output.push_str("the ");
-                            }
+                    if let Some(art) = article {
+                        if let Some(resolved_art) = resolve_article(
+                            art,
+                            name_str,
+                            is_viewer,
+                            entity.is_proper_noun_for(ctx.viewer_id),
+                            entity.is_plural(),
+                        ) {
+                            raw_output.push_str(resolved_art);
                         }
                     }
 

@@ -188,3 +188,37 @@ fn unknown_pronoun_error(p_type: &str, context: &str) -> String {
 pub fn get_indefinite_article(word: &str) -> &str {
     in_definite::get_a_or_an(word)
 }
+
+/// Resolves the correct article (definite or indefinite) for an entity.
+/// Automatically handles proper noun suppression, viewer suppression, and plural adaptation.
+pub fn resolve_article(
+    article: &str,
+    entity_name: &str,
+    is_viewer: bool,
+    is_proper_noun: bool,
+    is_plural: bool,
+) -> Option<&'static str> {
+    // Suppress articles if the entity is the viewer or a proper noun
+    if is_viewer || is_proper_noun {
+        return None;
+    }
+
+    let is_capitalized = article.starts_with(|c: char| c.is_uppercase());
+
+    if article.eq_ignore_ascii_case("a") || article.eq_ignore_ascii_case("an") {
+        if is_plural {
+            Some(if is_capitalized { "Some " } else { "some " })
+        } else {
+            match (is_capitalized, get_indefinite_article(entity_name)) {
+                (true, "a") => Some("A "),
+                (true, _) => Some("An "),
+                (false, "a") => Some("a "),
+                (false, _) => Some("an "),
+            }
+        }
+    } else if article.eq_ignore_ascii_case("the") {
+        Some(if is_capitalized { "The " } else { "the " })
+    } else {
+        None
+    }
+}
