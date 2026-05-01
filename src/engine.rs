@@ -247,28 +247,26 @@ impl PerspectiveEngine {
     }
 
     /// Segments the text by true sentence boundaries and capitalizes the first letter.
-    fn post_process_typography(mut input: String) -> String {
-        // Take ownership of the input string's buffer to reuse its allocation.
-        let original = std::mem::take(&mut input);
-        // `input` is now an empty string with the original's capacity.
+    fn post_process_typography(input: String) -> String {
+        let mut output = String::with_capacity(input.capacity());
 
         // Use unicode-segmentation to safely chunk sentences
-        for sentence in original.split_sentence_bounds() {
+        for sentence in input.split_sentence_bounds() {
             let mut capitalized = false;
             
             for c in sentence.chars() {
                 // Skip ANSI codes and spaces; capitalize the FIRST alphabetic character
                 if !capitalized && c.is_alphabetic() {
                     for uc in c.to_uppercase() {
-                        input.push(uc);
+                        output.push(uc);
                     }
                     capitalized = true;
                 } else {
-                    input.push(c);
+                    output.push(c);
                 }
             }
         }
 
-        input
+        output
     }
 }
