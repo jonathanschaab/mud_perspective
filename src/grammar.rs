@@ -250,17 +250,14 @@ pub fn resolve_article(
 }
 
 /// Formats a list of strings into a grammatically correct, Oxford comma-separated string.
-///
-/// # Panics
-/// Panics if internal vector bounds checks fail (though the function logic guarantees this is impossible).
 #[must_use]
 pub fn format_oxford_list(mut items: Vec<Cow<'_, str>>) -> Cow<'_, str> {
     match items.len() {
         0 => Cow::Borrowed(""),
-        1 => items.pop().unwrap(),
+        1 => items.pop().unwrap_or_default(),
         2 => Cow::Owned(format!("{} and {}", items[0], items[1])),
         _ => {
-            let last = items.pop().unwrap();
+            let last = items.pop().unwrap_or_default();
             Cow::Owned(format!("{}, and {}", items.join(", "), last))
         }
     }

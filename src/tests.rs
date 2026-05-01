@@ -1,4 +1,5 @@
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use crate::cache::TemplateCache;
     use crate::engine::{PerspectiveEngine, Template};

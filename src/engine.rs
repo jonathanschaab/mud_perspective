@@ -76,10 +76,6 @@ impl Template {
     ///
     /// # Errors
     /// Returns a `String` describing the syntax error if the template is malformed.
-    ///
-    /// # Panics
-    /// Panics if the string `split` iterator fails to yield at least one item, which is
-    /// technically impossible under standard Rust string split guarantees.
     pub fn compile(raw: &str) -> Result<Self, String> {
         let mut tokens = Vec::new();
         let mut chars = raw.char_indices().peekable();
@@ -154,7 +150,7 @@ impl Template {
 
     fn parse_entity_or_pronoun(content: &str) -> Result<Token, String> {
         let mut parts = content.split(':');
-        let p1 = parts.next().unwrap();
+        let p1 = parts.next().unwrap_or_default();
 
         if let Some(p2) = parts.next() {
             if parts.next().is_some() {
@@ -230,7 +226,7 @@ impl Template {
 
     fn parse_verb(content: &str) -> Result<Token, String> {
         let mut parts = content.split(':');
-        let p1 = parts.next().unwrap();
+        let p1 = parts.next().unwrap_or_default();
 
         let (subject_key, base_verb, force_3rd_person, force_actor) = if let Some(p2) = parts.next()
         {
@@ -278,6 +274,9 @@ impl Template {
         })
     }
 }
+
+/// The highly unique sentinel string used to temporarily force the Director Stance.
+const NULL_VIEWER: &str = "\0__MUD_PERSPECTIVE_NULL_VIEWER__\0";
 
 /// The core processor responsible for evaluating compiled templates against contexts.
 pub struct PerspectiveEngine;
@@ -340,18 +339,18 @@ impl PerspectiveEngine {
 
         let entity = Self::get_entity(ctx, key)?;
         let effective_viewer = if *force_3rd_person {
-            "\0"
+            NULL_VIEWER
         } else {
             ctx.viewer_id
         };
 
         // --- Handle Groups / Distributed Lists ---
         if let Some(members) = entity.group_members() {
-            let mut flat_members = Vec::new();
-            crate::models::flatten_group(members, &mut flat_members);
+            let mut flat_members = Vec::with_capacity(members.len());
+            crate::models::flatten_group(members, &mut flat_members, 0);
 
             let mut has_viewer = false;
-            let mut visible = Vec::new();
+            let mut visible = Vec::with_capacity(flat_members.len());
 
             for &m in &flat_members {
                 if *force_actor || m.contains_viewer(effective_viewer) {
@@ -454,7 +453,7 @@ impl PerspectiveEngine {
 
         let entity = Self::get_entity(ctx, key)?;
         let effective_viewer = if *force_3rd_person {
-            "\0"
+            NULL_VIEWER
         } else {
             ctx.viewer_id
         };
@@ -491,7 +490,7 @@ impl PerspectiveEngine {
         let (is_viewer, is_plural) = if let Some(key) = subject_key {
             let entity = Self::get_entity(ctx, key)?;
             let effective_viewer = if *force_3rd_person {
-                "\0"
+                NULL_VIEWER
             } else {
                 ctx.viewer_id
             };

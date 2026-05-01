@@ -23,6 +23,11 @@ pub enum Gender {
 /// By requiring `viewer_id` in its methods, this trait ensures that text rendering
 /// is strictly bound to the observer's epistemological state, supporting mechanics
 /// like stealth, disguises, and recognition.
+///
+/// **Note on Forced Perspectives:** When a template forces the Director Stance
+/// (e.g., `{+source}`), the engine temporarily passes a highly unique sentinel string
+/// (`"\0__MUD_PERSPECTIVE_NULL_VIEWER__\0"`) as the `viewer_id` to bypass recognition.
+/// Ensure your actual entity IDs do not match this sentinel.
 pub trait TemplateEntity {
     /// Evaluates whether the given `viewer_id` represents this entity or
     /// is considered a part of this entity (such as a member of a group).
@@ -128,14 +133,22 @@ impl<'a> GroupEntity<'a> {
     }
 }
 
+/// The maximum recursion depth for group flattening to prevent stack overflows.
+const MAX_GROUP_DEPTH: usize = 16;
+
 /// Recursively flattens nested groups into a single 1D list of underlying entities.
 pub(crate) fn flatten_group<'c>(
     members: &[&'c dyn TemplateEntity],
     flat_list: &mut Vec<&'c dyn TemplateEntity>,
+    depth: usize,
 ) {
+    if depth > MAX_GROUP_DEPTH {
+        tracing::warn!("Max group recursion depth exceeded. Truncating group.");
+        return;
+    }
     for &m in members {
         if let Some(group) = m.group_members() {
-            flatten_group(group, flat_list);
+            flatten_group(group, flat_list, depth + 1);
         } else {
             flat_list.push(m);
         }
@@ -150,14 +163,23 @@ impl GroupEntity<'_> {
             members: &[&'c dyn TemplateEntity],
             count: &mut usize,
             leaf: &mut Option<&'c dyn TemplateEntity>,
+            depth: usize,
         ) {
+            if depth > MAX_GROUP_DEPTH || *count > 1 {
+                return;
+            }
             for &m in members {
                 if let Some(group_m) = m.group_members() {
-                    find_leaves(group_m, count, leaf);
+                    find_leaves(group_m, count, leaf, depth + 1);
+                    if *count > 1 {
+                        return;
+                    }
                 } else {
                     *count += 1;
                     if *count == 1 {
                         *leaf = Some(m);
+                    } else {
+                        return;
                     }
                 }
             }
@@ -166,7 +188,7 @@ impl GroupEntity<'_> {
         let mut count = 0;
         let mut leaf = None;
 
-        find_leaves(&self.members, &mut count, &mut leaf);
+        find_leaves(&self.members, &mut count, &mut leaf, 0);
 
         if count == 1 { leaf } else { None }
     }
@@ -192,11 +214,11 @@ impl TemplateEntity for GroupEntity<'_> {
     }
 
     fn display_name_for<'b>(&'b self, viewer_id: &str) -> Cow<'b, str> {
-        let mut flat_members = Vec::new();
-        flatten_group(&self.members, &mut flat_members);
+        let mut flat_members = Vec::with_capacity(self.members.len());
+        flatten_group(&self.members, &mut flat_members, 0);
 
         let mut has_viewer = false;
-        let mut visible_others = Vec::new();
+        let mut visible_others = Vec::with_capacity(flat_members.len());
 
         for &m in &flat_members {
             if m.contains_viewer(viewer_id) {
@@ -219,7 +241,7 @@ impl TemplateEntity for GroupEntity<'_> {
             if has_viewer {
                 return Cow::Borrowed("you");
             }
-            return visible_others.pop().unwrap();
+            return visible_others.pop().unwrap_or_default();
         }
 
         let mut names: Vec<Cow<'b, str>> = Vec::with_capacity(total_visible);
