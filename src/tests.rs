@@ -1574,4 +1574,47 @@ mod tests {
             "Entity tag has an empty property segment: {a:source..weapon}"
         );
     }
+
+    #[test]
+    #[cfg(feature = "ansi")]
+    fn test_ansi_colored_possessive_suffixes() {
+        let colored_boss = MockEntity {
+            id: "mob_1".to_string(),
+            name: "\x1b[31mboss\x1b[0m".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+        let colored_wolves = MockEntity {
+            id: "mob_2".to_string(),
+            name: "\x1b[32mwolves\x1b[0m".to_string(),
+            gender: Gender::Plural,
+            is_plural: true,
+            is_proper_noun: false,
+        };
+        let colored_goblin = MockEntity {
+            id: "mob_3".to_string(),
+            name: "\x1b[33mgoblin\x1b[0m".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+        let template = cache
+            .get_or_compile("You take {the:target's} gold.")
+            .unwrap();
+
+        // Singular common noun ending in 's' with ANSI code at the end -> expects 's
+        let out_boss = render_msg!("char_2", &template, "target" => &colored_boss).unwrap();
+        assert_eq!(out_boss, "You take the \x1b[31mboss\x1b[0m's gold.");
+
+        // Plural common noun ending in 's' with ANSI code at the end -> expects '
+        let out_wolves = render_msg!("char_2", &template, "target" => &colored_wolves).unwrap();
+        assert_eq!(out_wolves, "You take the \x1b[32mwolves\x1b[0m' gold.");
+
+        // Regular singular common noun with ANSI code at the end -> expects 's
+        let out_goblin = render_msg!("char_2", &template, "target" => &colored_goblin).unwrap();
+        assert_eq!(out_goblin, "You take the \x1b[33mgoblin\x1b[0m's gold.");
+    }
 }

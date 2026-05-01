@@ -96,9 +96,7 @@ impl Template {
                         || next_c == ']'
                         || next_c == '\\')
                 {
-                    if i > last_literal_start {
-                        tokens.push(Token::Literal(raw[last_literal_start..i].to_string()));
-                    }
+                    push_literal(&mut tokens, raw, last_literal_start, i);
                     last_literal_start = next_i;
                     chars.next();
                 }
@@ -107,9 +105,7 @@ impl Template {
 
             if c == '{' || c == '[' {
                 // Push any preceding literal text
-                if i > last_literal_start {
-                    tokens.push(Token::Literal(raw[last_literal_start..i].to_string()));
-                }
+                push_literal(&mut tokens, raw, last_literal_start, i);
                 chars.next(); // Consume the opening brace or bracket
 
                 let is_entity = c == '{';
@@ -134,9 +130,7 @@ impl Template {
         }
 
         // Push any remaining literal text at the end of the string
-        if last_literal_start < raw.len() {
-            tokens.push(Token::Literal(raw[last_literal_start..].to_string()));
-        }
+        push_literal(&mut tokens, raw, last_literal_start, raw.len());
 
         Ok(Template {
             tokens,
@@ -145,25 +139,14 @@ impl Template {
     }
 
     fn parse_entity_or_pronoun(content: &str) -> Result<Token, String> {
-        let mut parts = content.split(':');
-        let p1 = parts.next().unwrap_or_default();
+        let (p1, p2_opt) = split_tag(content, '{', "Malformed entity tag")?;
 
-        if let Some(p2) = parts.next() {
-            if parts.next().is_some() {
-                return Err(validation_error("Malformed entity tag", content, '{'));
-            }
-
+        if let Some(p2) = p2_opt {
             let (p1_str, force_article) = parse_stance_prefixes(p1);
-            let is_article = p1_str.eq_ignore_ascii_case("a")
-                || p1_str.eq_ignore_ascii_case("an")
-                || p1_str.eq_ignore_ascii_case("the")
-                || p1_str.eq_ignore_ascii_case("this")
-                || p1_str.eq_ignore_ascii_case("that");
 
             // 2-part case: {article:key}
-            if is_article {
-                let (p2_str, force_3rd_person) = parse_stance_prefixes(p2);
-                let (p2_str, is_possessive) = parse_possessive_suffix(p2_str);
+            if is_article(p1_str) {
+                let (p2_str, force_3rd_person, is_possessive) = parse_entity_modifiers(p2);
 
                 if p2_str.is_empty() {
                     return Err(validation_error(
@@ -172,26 +155,18 @@ impl Template {
                         '{',
                     ));
                 }
-                if p2_str.split('.').any(str::is_empty) {
-                    return Err(validation_error(
-                        "Entity tag has an empty property segment",
-                        content,
-                        '{',
-                    ));
-                }
-                Ok(Token::EntityRef {
-                    key: p2_str.to_lowercase(),
-                    article: Some(p1_str.to_string()),
-                    is_capitalized: p2_str.chars().next().is_some_and(char::is_uppercase),
+                create_entity_ref(
+                    p2_str,
+                    Some(p1_str),
                     force_article,
                     force_3rd_person,
                     is_possessive,
-                })
+                    content,
+                )
             } else {
                 // 2-part case: {key:pronoun}
-                let (p1_str, force_3rd_person) = parse_stance_prefixes(p1);
                 // Strip trailing 's in case someone made a typo like {source's:subj}
-                let (p1_str, _) = parse_possessive_suffix(p1_str);
+                let (p1_str, force_3rd_person, _) = parse_entity_modifiers(p1);
 
                 if p1_str.is_empty() || p2.is_empty() {
                     return Err(validation_error(
@@ -200,24 +175,22 @@ impl Template {
                         '{',
                     ));
                 }
-                if p1_str.split('.').any(str::is_empty) {
-                    return Err(validation_error(
-                        "Pronoun tag has an empty property segment",
-                        content,
-                        '{',
-                    ));
-                }
+                validate_property_segments(
+                    p1_str,
+                    "Pronoun tag has an empty property segment",
+                    content,
+                    '{',
+                )?;
                 Ok(Token::PronounRef {
                     key: p1_str.to_lowercase(),
                     p_type: p2.to_lowercase(),
-                    is_capitalized: p2.chars().next().is_some_and(char::is_uppercase),
+                    is_capitalized: is_capitalized(p2),
                     force_3rd_person,
                 })
             }
         } else {
             // 1-part case: {key}
-            let (p1_str, force_3rd_person) = parse_stance_prefixes(p1);
-            let (p1_str, is_possessive) = parse_possessive_suffix(p1_str);
+            let (p1_str, force_3rd_person, is_possessive) = parse_entity_modifiers(p1);
 
             if p1_str.is_empty() {
                 return Err(validation_error(
@@ -226,35 +199,22 @@ impl Template {
                     '{',
                 ));
             }
-            if p1_str.split('.').any(str::is_empty) {
-                return Err(validation_error(
-                    "Entity tag has an empty property segment",
-                    content,
-                    '{',
-                ));
-            }
-            Ok(Token::EntityRef {
-                key: p1_str.to_lowercase(),
-                article: None,
-                is_capitalized: p1_str.chars().next().is_some_and(char::is_uppercase),
-                force_article: false,
+            create_entity_ref(
+                p1_str,
+                None,
+                false,
                 force_3rd_person,
                 is_possessive,
-            })
+                content,
+            )
         }
     }
 
     fn parse_verb(content: &str) -> Result<Token, String> {
-        let mut parts = content.split(':');
-        let p1 = parts.next().unwrap_or_default();
+        let (p1, p2_opt) = split_tag(content, '[', "Malformed verb tag")?;
+        let (p1_str, force_3rd_person) = parse_stance_prefixes(p1);
 
-        let (subject_key, base_verb, force_3rd_person) = if let Some(p2) = parts.next() {
-            if parts.next().is_some() {
-                return Err(validation_error("Malformed verb tag", content, '['));
-            }
-
-            let (p1_str, force_3rd_person) = parse_stance_prefixes(p1);
-
+        let (subject_key, base_verb) = if let Some(p2) = p2_opt {
             if p1_str.is_empty() {
                 return Err(validation_error(
                     "Verb tag has an empty subject key",
@@ -262,21 +222,19 @@ impl Template {
                     '[',
                 ));
             }
-            if p1_str.split('.').any(str::is_empty) {
-                return Err(validation_error(
-                    "Verb tag has an empty property segment",
-                    content,
-                    '[',
-                ));
-            }
-            (Some(p1_str.to_lowercase()), p2, force_3rd_person)
+            validate_property_segments(
+                p1_str,
+                "Verb tag has an empty property segment",
+                content,
+                '[',
+            )?;
+            (Some(p1_str.to_lowercase()), p2)
         } else {
-            let (p1_str, force_3rd_person) = parse_stance_prefixes(p1);
-            (None, p1_str, force_3rd_person)
+            (None, p1_str)
         };
 
         let original_verb = base_verb.to_string();
-        let is_capitalized = original_verb.chars().next().is_some_and(char::is_uppercase);
+        let is_capitalized = is_capitalized(&original_verb);
         let lower_verb = original_verb.to_lowercase();
 
         if original_verb.is_empty() {
@@ -389,16 +347,10 @@ impl PerspectiveEngine {
         raw_output: &mut String,
         params: &EntityRefParams<'_>,
     ) -> Result<(), String> {
-        if ctx.last_mentioned.borrow().as_deref() != Some(params.key) {
-            *ctx.last_mentioned.borrow_mut() = Some(params.key.to_string());
-        }
+        update_memory(&ctx.last_mentioned, params.key);
 
         let entity = Self::get_entity(ctx, params.key)?;
-        let effective_viewer = if params.force_3rd_person {
-            NULL_VIEWER
-        } else {
-            ctx.viewer_id
-        };
+        let effective_viewer = effective_viewer_id(ctx, params.force_3rd_person);
 
         // --- Handle Groups / Distributed Lists ---
         if let Some(members) = entity.group_members() {
@@ -408,18 +360,7 @@ impl PerspectiveEngine {
 
         // --- Handle Single Entity Viewers ---
         if entity.contains_viewer(effective_viewer) {
-            let name_str = if params.is_possessive {
-                if params.is_capitalized {
-                    "Your"
-                } else {
-                    "your"
-                }
-            } else if params.is_capitalized {
-                "You"
-            } else {
-                "you"
-            };
-            raw_output.push_str(name_str);
+            raw_output.push_str(viewer_name(params.is_possessive, params.is_capitalized));
             return Ok(());
         }
 
@@ -427,14 +368,8 @@ impl PerspectiveEngine {
         let name = entity.display_name_for(effective_viewer);
 
         // Capitalize the name if explicitly requested and it isn't already
-        let name_buf;
-        let name_str =
-            if params.is_capitalized && name.chars().next().is_some_and(char::is_lowercase) {
-                name_buf = crate::grammar::capitalize_first(&name);
-                name_buf.as_str()
-            } else {
-                name.as_ref()
-            };
+        let name_cow = capitalize_cow(name, params.is_capitalized);
+        let name_str = name_cow.as_ref();
 
         // Handle dynamic "a" or "an" injection
         if let Some(resolved_art) = params.article.and_then(|art| {
@@ -500,16 +435,34 @@ impl PerspectiveEngine {
             Self::append_possessive_suffix(&mut final_str, entity.is_plural());
         }
 
-        if params.is_capitalized && final_str.chars().next().is_some_and(char::is_lowercase) {
-            raw_output.push_str(&crate::grammar::capitalize_first(&final_str));
-        } else {
-            raw_output.push_str(&final_str);
+        push_capitalized_if(raw_output, &final_str, params.is_capitalized);
+    }
+
+    #[inline]
+    fn get_last_visible_char(input: &str) -> Option<char> {
+        let mut chars = input.char_indices().peekable();
+        let mut last_visible = None;
+
+        while let Some(&(i, c)) = chars.peek() {
+            #[allow(unused_variables)]
+            let remainder = &input[i..];
+
+            #[cfg(any(feature = "mxp", feature = "msp", feature = "ansi"))]
+            if let Some(end_offset) = find_skipped_tag_end(remainder) {
+                advance_chars_until(&mut chars, i + end_offset);
+                continue;
+            }
+
+            chars.next();
+            last_visible = Some(c);
         }
+
+        last_visible
     }
 
     #[inline]
     fn append_possessive_suffix(output: &mut String, is_plural: bool) {
-        if output.ends_with('s') || output.ends_with('S') {
+        if matches!(Self::get_last_visible_char(output), Some('s' | 'S')) {
             if is_plural {
                 output.push('\'');
             } else {
@@ -536,11 +489,7 @@ impl PerspectiveEngine {
         };
 
         let entity = Self::get_entity(ctx, key)?;
-        let effective_viewer = if *force_3rd_person {
-            NULL_VIEWER
-        } else {
-            ctx.viewer_id
-        };
+        let effective_viewer = effective_viewer_id(ctx, *force_3rd_person);
 
         let is_viewer = entity.contains_viewer(effective_viewer);
 
@@ -553,15 +502,11 @@ impl PerspectiveEngine {
 
         if already_seen || is_active_subject || is_viewer || is_reflexive {
             if !already_seen {
-                *ctx.last_mentioned.borrow_mut() = Some(key.clone()); // Update memory
+                update_memory(&ctx.last_mentioned, key);
             }
 
             let pronoun = resolve_pronoun(entity.gender(), p_type, is_viewer, entity.is_plural())?;
-            if *is_capitalized {
-                raw_output.push_str(&crate::grammar::capitalize_first(pronoun));
-            } else {
-                raw_output.push_str(pronoun);
-            }
+            push_capitalized_if(raw_output, pronoun, *is_capitalized);
         } else {
             // Smart Anaphora Resolution: The entity hasn't been introduced yet!
             // Evaluate it as if the builder had written `{the:key}` instead.
@@ -602,14 +547,8 @@ impl PerspectiveEngine {
         // Explicitly bind the verb to its subject to solve passive voice / compound subjects
         let (is_viewer, is_plural) = if let Some(key) = subject_key {
             let entity = Self::get_entity(ctx, key)?;
-            let effective_viewer = if *force_3rd_person {
-                NULL_VIEWER
-            } else {
-                ctx.viewer_id
-            };
-            if ctx.active_subject.borrow().as_deref() != Some(key.as_str()) {
-                *ctx.active_subject.borrow_mut() = Some(key.clone());
-            }
+            let effective_viewer = effective_viewer_id(ctx, *force_3rd_person);
+            update_memory(&ctx.active_subject, key);
             (entity.contains_viewer(effective_viewer), entity.is_plural())
         } else {
             // Safe default to 3rd-person singular if no subject is bound
@@ -816,6 +755,135 @@ fn parse_stance_prefixes(s: &str) -> (&str, bool) {
         (stripped, true)
     } else {
         (s, false)
+    }
+}
+
+#[inline]
+fn parse_entity_modifiers(s: &str) -> (&str, bool, bool) {
+    let (s, force_3rd_person) = parse_stance_prefixes(s);
+    let (s, is_possessive) = parse_possessive_suffix(s);
+    (s, force_3rd_person, is_possessive)
+}
+
+#[inline]
+fn split_tag<'a>(
+    content: &'a str,
+    open_char: char,
+    malformed_msg: &str,
+) -> Result<(&'a str, Option<&'a str>), String> {
+    let mut parts = content.split(':');
+    let p1 = parts.next().unwrap_or_default();
+    let p2 = parts.next();
+    if parts.next().is_some() {
+        return Err(validation_error(malformed_msg, content, open_char));
+    }
+    Ok((p1, p2))
+}
+
+#[inline]
+fn update_memory(memory: &std::cell::RefCell<Option<String>>, key: &str) {
+    if memory.borrow().as_deref() != Some(key) {
+        *memory.borrow_mut() = Some(key.to_string());
+    }
+}
+
+#[inline]
+fn push_capitalized_if(output: &mut String, text: &str, should_capitalize: bool) {
+    if should_capitalize && text.chars().next().is_some_and(char::is_lowercase) {
+        output.push_str(&crate::grammar::capitalize_first(text));
+    } else {
+        output.push_str(text);
+    }
+}
+
+#[inline]
+fn capitalize_cow(
+    text: std::borrow::Cow<'_, str>,
+    should_capitalize: bool,
+) -> std::borrow::Cow<'_, str> {
+    if should_capitalize && text.chars().next().is_some_and(char::is_lowercase) {
+        std::borrow::Cow::Owned(crate::grammar::capitalize_first(&text))
+    } else {
+        text
+    }
+}
+
+#[inline]
+fn push_literal(tokens: &mut Vec<Token>, raw: &str, start: usize, end: usize) {
+    if end > start {
+        tokens.push(Token::Literal(raw[start..end].to_string()));
+    }
+}
+
+#[inline]
+fn is_article(s: &str) -> bool {
+    s.eq_ignore_ascii_case("a")
+        || s.eq_ignore_ascii_case("an")
+        || s.eq_ignore_ascii_case("the")
+        || s.eq_ignore_ascii_case("this")
+        || s.eq_ignore_ascii_case("that")
+}
+
+#[inline]
+fn create_entity_ref(
+    key: &str,
+    article: Option<&str>,
+    force_article: bool,
+    force_3rd_person: bool,
+    is_possessive: bool,
+    content: &str,
+) -> Result<Token, String> {
+    validate_property_segments(
+        key,
+        "Entity tag has an empty property segment",
+        content,
+        '{',
+    )?;
+    Ok(Token::EntityRef {
+        key: key.to_lowercase(),
+        article: article.map(ToString::to_string),
+        is_capitalized: is_capitalized(key),
+        force_article,
+        force_3rd_person,
+        is_possessive,
+    })
+}
+
+#[inline]
+const fn viewer_name(is_possessive: bool, is_capitalized: bool) -> &'static str {
+    match (is_possessive, is_capitalized) {
+        (true, true) => "Your",
+        (true, false) => "your",
+        (false, true) => "You",
+        (false, false) => "you",
+    }
+}
+
+#[inline]
+fn is_capitalized(s: &str) -> bool {
+    s.chars().next().is_some_and(char::is_uppercase)
+}
+
+#[inline]
+fn validate_property_segments(
+    path: &str,
+    error_msg: &str,
+    content: &str,
+    open_char: char,
+) -> Result<(), String> {
+    if path.split('.').any(str::is_empty) {
+        Err(validation_error(error_msg, content, open_char))
+    } else {
+        Ok(())
+    }
+}
+
+#[inline]
+fn effective_viewer_id<'a>(ctx: &RenderContext<'a>, force_3rd_person: bool) -> &'a str {
+    if force_3rd_person {
+        NULL_VIEWER
+    } else {
+        ctx.viewer_id
     }
 }
 
