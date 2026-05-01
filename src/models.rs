@@ -125,38 +125,39 @@ impl TemplateEntity for GroupEntity<'_> {
     }
 
     fn display_name_for<'b>(&'b self, viewer_id: &str) -> Cow<'b, str> {
-        let (viewers, others): (Vec<&dyn TemplateEntity>, Vec<&dyn TemplateEntity>) = self
+        let (viewers, others): (Vec<_>, Vec<_>) = self
             .members
             .iter()
             .copied()
             .partition(|m| m.contains_viewer(viewer_id));
 
-        let mut names: Vec<Cow<'b, str>> = others
-            .into_iter()
-            .map(|m| {
-                let name = m.display_name_for(viewer_id);
-                // Dynamically prepend "the " if it is a common noun!
-                if let Some(art) = resolve_article(
-                    "the",
-                    &name,
-                    false, // We already filtered the viewer out
-                    m.is_proper_noun_for(viewer_id),
-                    m.is_plural(),
-                ) {
-                    Cow::Owned(format!("{art}{name}"))
-                } else {
-                    name
-                }
-            })
-            .collect();
+        let has_viewer = !viewers.is_empty();
+        let mut names: Vec<Cow<'b, str>> =
+            Vec::with_capacity(others.len() + usize::from(has_viewer));
 
         // If the viewer is in this group, they are always listed first as "you"
-        if !viewers.is_empty() {
-            names.insert(0, Cow::Borrowed("you"));
+        if has_viewer {
+            names.push(Cow::Borrowed("you"));
         }
 
+        names.extend(others.into_iter().map(|m| {
+            let name = m.display_name_for(viewer_id);
+            // Dynamically prepend "the " if it is a common noun!
+            if let Some(art) = resolve_article(
+                "the",
+                &name,
+                false, // We already filtered the viewer out
+                m.is_proper_noun_for(viewer_id),
+                m.is_plural(),
+            ) {
+                Cow::Owned(format!("{art}{name}"))
+            } else {
+                name
+            }
+        }));
+
         match names.len() {
-            0 => Cow::Owned(String::new()),
+            0 => Cow::Borrowed(""),
             1 => names.pop().unwrap(),
             2 => Cow::Owned(format!("{} and {}", names[0], names[1])),
             _ => {
