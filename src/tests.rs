@@ -306,6 +306,15 @@ mod tests {
         assert_eq!(verb_err, "Unclosed verb tag starting at index 11");
     }
 
+    #[test]
+    fn test_malformed_tags_return_errors() {
+        let entity_err = Template::compile("The {a:b:c} approaches.").unwrap_err();
+        assert_eq!(entity_err, "Malformed entity tag: {a:b:c}");
+
+        let verb_err = Template::compile("The goblin [a:b:c]").unwrap_err();
+        assert_eq!(verb_err, "Malformed verb tag: [a:b:c]");
+    }
+
     pub struct GroupEntity<'a> {
         pub members: Vec<&'a dyn TemplateEntity>,
     }

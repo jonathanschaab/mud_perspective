@@ -107,7 +107,7 @@ pub fn conjugate_verb<'a>(base_verb: &'a str, is_viewer: bool, is_plural: bool) 
     }
 
     // 2. Fallback algorithmic suffix rules for standard verbs
-    if lower_verb.ends_with("ch") || lower_verb.ends_with("sh") || lower_verb.ends_with('s') || lower_verb.ends_with('x') || lower_verb.ends_with('z') {
+    if lower_verb.ends_with("ch") || lower_verb.ends_with("sh") || lower_verb.ends_with(['s', 'x', 'z']) {
         Cow::Owned(format!("{}es", base_verb))
     } else if lower_verb.ends_with('y') && !is_vowel_before_y(lower_verb) {
         let trimmed = &base_verb[..base_verb.len() - 1];

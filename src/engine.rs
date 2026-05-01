@@ -1,7 +1,6 @@
 use crate::models::RenderContext;
 use crate::grammar::{conjugate_verb, get_indefinite_article, resolve_pronoun};
 use unicode_segmentation::UnicodeSegmentation;
-use std::fmt::Write;
 
 /// Represents a parsed unit of a template string.
 #[derive(Debug)]
@@ -86,20 +85,22 @@ impl Template {
                 let content = &raw[i + 1..end_idx];
                 let parts: Vec<&str> = content.split(':').collect();
                 
-                if parts.len() == 1 {
-                    tokens.push(Token::EntityRef { key: parts[0].to_string(), article: None });
-                } else if parts.len() == 2 {
-                    let p1 = parts[0];
-                    let p2 = parts[1];
-                    // Check for articles like {a:source} or {the:target}
-                    if p1 == "a" || p1 == "an" {
-                        tokens.push(Token::EntityRef { key: p2.to_string(), article: Some("a".to_string()) });
-                    } else if p1 == "the" {
-                        tokens.push(Token::EntityRef { key: p2.to_string(), article: Some("the".to_string()) });
-                    } else {
-                        // Otherwise, it's a pronoun like {source:poss}
-                        tokens.push(Token::PronounRef { key: p1.to_string(), p_type: p2.to_string() });
+                match parts.as_slice() {
+                    [key] => {
+                        tokens.push(Token::EntityRef { key: key.to_string(), article: None });
                     }
+                    [p1, p2] => {
+                        // Check for articles like {a:source} or {the:target}
+                        if *p1 == "a" || *p1 == "an" {
+                            tokens.push(Token::EntityRef { key: p2.to_string(), article: Some("a".to_string()) });
+                        } else if *p1 == "the" {
+                            tokens.push(Token::EntityRef { key: p2.to_string(), article: Some("the".to_string()) });
+                        } else {
+                            // Otherwise, it's a pronoun like {source:poss}
+                            tokens.push(Token::PronounRef { key: p1.to_string(), p_type: p2.to_string() });
+                        }
+                    }
+                    _ => return Err(format!("Malformed entity tag: {{{}}}", content)),
                 }
                 last_literal_start = end_idx + 1;
                 
@@ -128,11 +129,15 @@ impl Template {
                 let content = &raw[i + 1..end_idx];
                 let parts: Vec<&str> = content.split(':').collect();
                 
-                if parts.len() == 1 {
-                    tokens.push(Token::VerbRef { subject_key: None, base_verb: parts[0].to_string() });
-                } else if parts.len() == 2 {
-                    // Explicitly bound verbs like [source:attack]
-                    tokens.push(Token::VerbRef { subject_key: Some(parts[0].to_string()), base_verb: parts[1].to_string() });
+                match parts.as_slice() {
+                    [base_verb] => {
+                        tokens.push(Token::VerbRef { subject_key: None, base_verb: base_verb.to_string() });
+                    }
+                    [subject_key, base_verb] => {
+                        // Explicitly bound verbs like [source:attack]
+                        tokens.push(Token::VerbRef { subject_key: Some(subject_key.to_string()), base_verb: base_verb.to_string() });
+                    }
+                    _ => return Err(format!("Malformed verb tag: [{}]", content)),
                 }
                 last_literal_start = end_idx + 1;
                 
@@ -200,9 +205,12 @@ impl PerspectiveEngine {
                                 raw_output.push_str(&name);
                             } else if art == "a" || art == "an" {
                                 let indefinite = get_indefinite_article(&name);
-                                let _ = write!(raw_output, "{} {}", indefinite, name);
+                                raw_output.push_str(indefinite);
+                                raw_output.push(' ');
+                                raw_output.push_str(&name);
                             } else if art == "the" {
-                                let _ = write!(raw_output, "the {}", name);
+                                raw_output.push_str("the ");
+                                raw_output.push_str(&name);
                             }
                         } else {
                             raw_output.push_str(&name);
@@ -235,30 +243,32 @@ impl PerspectiveEngine {
         }
 
         // 2. Pass the fully assembled base-case string to the typography post-processor
-        Ok(Self::post_process_typography(&raw_output))
+        Ok(Self::post_process_typography(raw_output))
     }
 
     /// Segments the text by true sentence boundaries and capitalizes the first letter.
-    fn post_process_typography(input: &str) -> String {
-        let mut final_output = String::with_capacity(input.len());
+    fn post_process_typography(mut input: String) -> String {
+        // Take ownership of the input string's buffer to reuse its allocation.
+        let original = std::mem::take(&mut input);
+        // `input` is now an empty string with the original's capacity.
 
         // Use unicode-segmentation to safely chunk sentences
-        for sentence in input.split_sentence_bounds() {
+        for sentence in original.split_sentence_bounds() {
             let mut capitalized = false;
             
             for c in sentence.chars() {
                 // Skip ANSI codes and spaces; capitalize the FIRST alphabetic character
                 if !capitalized && c.is_alphabetic() {
                     for uc in c.to_uppercase() {
-                        final_output.push(uc);
+                        input.push(uc);
                     }
                     capitalized = true;
                 } else {
-                    final_output.push(c);
+                    input.push(c);
                 }
             }
         }
 
-        final_output
+        input
     }
 }
