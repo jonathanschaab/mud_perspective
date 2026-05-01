@@ -67,19 +67,22 @@ impl Template {
             #[allow(unused_variables)]
             let remainder = &raw[i..];
 
-            #[cfg(any(feature = "mxp", feature = "msp"))]
+            #[cfg(any(feature = "mxp", feature = "msp", feature = "ansi"))]
             if let Some(end_offset) = find_skipped_tag_end(remainder) {
                 advance_chars_until(&mut chars, i + end_offset);
                 continue;
             }
 
-            #[cfg(feature = "ansi")]
-            if c == '\x1b' {
+            if c == '\\' {
                 chars.next();
-                if let Some(&(_, next_c)) = chars.peek()
-                    && next_c == '['
-                {
-                    chars.next(); // Consume the `[` so it isn't mistakenly parsed as a verb tag
+                if let Some(&(next_i, next_c)) = chars.peek() {
+                    if next_c == '{' || next_c == '[' || next_c == '}' || next_c == ']' || next_c == '\\' {
+                        if i > last_literal_start {
+                            tokens.push(Token::Literal(raw[last_literal_start..i].to_string()));
+                        }
+                        last_literal_start = next_i;
+                        chars.next();
+                    }
                 }
                 continue;
             }
@@ -108,7 +111,10 @@ impl Template {
                         }
 
                         // 2-part case
-                        if p1 == "a" || p1 == "an" || p1 == "the" {
+                        if p1.eq_ignore_ascii_case("a")
+                            || p1.eq_ignore_ascii_case("an")
+                            || p1.eq_ignore_ascii_case("the")
+                        {
                             if p2.is_empty() {
                                 return Err(validation_error(
                                     "Entity tag has an article but an empty key",
@@ -116,10 +122,9 @@ impl Template {
                                     '{',
                                 ));
                             }
-                            let article = if p1 == "the" { "the" } else { "a" };
                             tokens.push(Token::EntityRef {
                                 key: p2.to_string(),
-                                article: Some(article.to_string()),
+                                article: Some(p1.to_string()),
                             });
                         } else {
                             if p1.is_empty() || p2.is_empty() {
@@ -252,12 +257,26 @@ impl PerspectiveEngine {
                         && !is_viewer
                         && !entity.is_proper_noun_for(ctx.viewer_id)
                     {
-                        if art == "a" || art == "an" {
+                        let is_capitalized = art.starts_with(|c: char| c.is_uppercase());
+
+                        if art.eq_ignore_ascii_case("a") || art.eq_ignore_ascii_case("an") {
                             let indefinite = get_indefinite_article(&name);
-                            raw_output.push_str(indefinite);
-                            raw_output.push(' ');
-                        } else if art == "the" {
-                            raw_output.push_str("the ");
+                            if is_capitalized {
+                                if indefinite == "a" {
+                                    raw_output.push_str("A ");
+                                } else {
+                                    raw_output.push_str("An ");
+                                }
+                            } else {
+                                raw_output.push_str(indefinite);
+                                raw_output.push(' ');
+                            }
+                        } else if art.eq_ignore_ascii_case("the") {
+                            if is_capitalized {
+                                raw_output.push_str("The ");
+                            } else {
+                                raw_output.push_str("the ");
+                            }
                         }
                     }
 
@@ -338,59 +357,11 @@ impl PerspectiveEngine {
             #[allow(unused_mut)]
             let mut skipped_tag = false;
 
-            // 1 & 2. Skip MXP Tags and MSP Triggers
-            #[cfg(any(feature = "mxp", feature = "msp"))]
+            // 1, 2, & 3. Skip MXP Tags, MSP Triggers, and ANSI Escape Sequences
+            #[cfg(any(feature = "mxp", feature = "msp", feature = "ansi"))]
             if let Some(end_offset) = find_skipped_tag_end(remainder) {
                 output.push_str(&remainder[..=end_offset]);
                 advance_chars_until(&mut chars, i + end_offset);
-                skipped_tag = true;
-            }
-
-            // 3. Skip ANSI Escape Sequences
-            #[cfg(feature = "ansi")]
-            if !skipped_tag && c == '\x1b' {
-                chars.next(); // Consume ESC
-                output.push('\x1b');
-
-                if let Some(&(_, next_c)) = chars.peek() {
-                    output.push(next_c);
-                    chars.next();
-
-                    match next_c {
-                        '[' => {
-                            // CSI Sequences: Read until a final character (0x40-0x7E)
-                            while let Some(&(_, csi_c)) = chars.peek() {
-                                output.push(csi_c);
-                                chars.next();
-                                if (0x40..=0x7E).contains(&(csi_c as u8)) {
-                                    break;
-                                }
-                            }
-                        }
-                        ']' | 'P' | 'X' | '^' | '_' => {
-                            // OSC / DCS Sequences: Read until BEL (\x07) or ST (\x1b\)
-                            let mut last_char = next_c;
-                            while let Some(&(_, osc_c)) = chars.peek() {
-                                output.push(osc_c);
-                                chars.next();
-                                if osc_c == '\x07' || (last_char == '\x1b' && osc_c == '\\') {
-                                    break;
-                                }
-                                last_char = osc_c;
-                            }
-                        }
-                        '(' | ')' | '*' | '+' | '-' | '.' | '/' => {
-                            // Charset designators: Read exactly one more character
-                            if let Some(&(_, char_c)) = chars.peek() {
-                                output.push(char_c);
-                                chars.next();
-                            }
-                        }
-                        _ => {
-                            // Simple 2-character escape (already consumed)
-                        }
-                    }
-                }
                 skipped_tag = true;
             }
 
@@ -435,7 +406,7 @@ impl PerspectiveEngine {
     }
 }
 
-#[cfg(any(feature = "mxp", feature = "msp"))]
+#[cfg(any(feature = "mxp", feature = "msp", feature = "ansi"))]
 #[inline]
 fn advance_chars_until(
     chars: &mut std::iter::Peekable<std::str::CharIndices<'_>>,
@@ -479,7 +450,7 @@ fn consume_until_closed(
     Ok(end_idx)
 }
 
-#[cfg(any(feature = "mxp", feature = "msp"))]
+#[cfg(any(feature = "mxp", feature = "msp", feature = "ansi"))]
 #[inline]
 fn find_skipped_tag_end(remainder: &str) -> Option<usize> {
     #[cfg(feature = "mxp")]
@@ -494,6 +465,39 @@ fn find_skipped_tag_end(remainder: &str) -> Option<usize> {
         && let Some(end_offset) = remainder.find(')')
     {
         return Some(end_offset);
+    }
+
+    #[cfg(feature = "ansi")]
+    if remainder.starts_with('\x1b') {
+        let mut chars = remainder.char_indices();
+        chars.next(); // Skip \x1b
+        if let Some((idx, next_c)) = chars.next() {
+            match next_c {
+                '[' => {
+                    for (idx, csi_c) in chars {
+                        if (0x40..=0x7E).contains(&(csi_c as u8)) {
+                            return Some(idx);
+                        }
+                    }
+                }
+                ']' | 'P' | 'X' | '^' | '_' => {
+                    let mut last_char = next_c;
+                    for (idx, osc_c) in chars {
+                        if osc_c == '\x07' || (last_char == '\x1b' && osc_c == '\\') {
+                            return Some(idx);
+                        }
+                        last_char = osc_c;
+                    }
+                }
+                '(' | ')' | '*' | '+' | '-' | '.' | '/' => {
+                    if let Some((idx, _)) = chars.next() {
+                        return Some(idx);
+                    }
+                }
+                _ => return Some(idx), // Simple 2-character escape
+            }
+        }
+        return Some(remainder.len().saturating_sub(1));
     }
 
     None

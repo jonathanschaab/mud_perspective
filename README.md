@@ -128,10 +128,12 @@ let template = cache.get_or_compile("{source} [source:open] the door.").unwrap()
 ### **4. Syntax Reference**
 
 * **Entities:** {key} inserts the entity's display name.  
-* **Articles:** {a:key} or {the:key} prepends the appropriate article. These are automatically suppressed if the entity evaluates to the viewer ("you") or is flagged as a proper noun.  
+* **Articles:** {a:key} or {the:key} prepends the appropriate article. Use {A:key} or {The:key} to force capitalization mid-sentence. These are automatically suppressed if the entity evaluates to the viewer ("you") or is flagged as a proper noun.  
 * **Pronouns:** {key:type}. Supported types include subj (he/she/it/they), obj (him/her/it/them), poss (his/her/their), abs\_poss (his/hers/theirs), and reflex (himself/themselves).
 
 * **Verbs:** \[key:verb\] explicitly binds a base verb to a subject to ensure correct conjugation. This prevents grammatical errors during compound subjects or passive voice structures.
+
+* **Escaping:** Use a backslash (`\`) to escape special characters if you need to output literal braces or brackets (e.g., `\{`, `\}`, `\[`, `\]`). You can also escape a backslash itself (`\\`).
 
 ## **Cargo Features**
 

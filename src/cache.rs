@@ -34,6 +34,11 @@ impl TemplateCache {
     /// Returns a `String` describing the syntax error if a cache miss occurs and
     /// the subsequent compilation fails.
     pub fn get_or_compile(&self, raw: &str) -> Result<Arc<Template>, String> {
+        // First, try a lock-free read using a borrowed string slice to avoid allocation on cache hits.
+        if let Some(template) = self.inner.get(raw) {
+            return Ok(template);
+        }
+
         // `try_get_with` ensures that if multiple threads request the same missing
         // template simultaneously, only one thread will execute the compilation closure.
         // The others will wait and receive the compiled result safely.

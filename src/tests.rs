@@ -674,6 +674,108 @@ mod tests {
         );
     }
 
+    #[test]
+    #[cfg(feature = "ansi")]
+    fn test_compiler_skips_ansi() {
+        let goblin = MockEntity {
+            id: "mob_1".to_string(),
+            name: "goblin".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+
+        // If the compiler doesn't skip the ANSI OSC sequence, it will mistakenly parse
+        // the `[` and `{` inside the URL as verb or entity tags, resulting in a syntax error.
+        let template = cache
+            .get_or_compile("\x1b]8;;https://example.com/?q={123}&v=[456]\x07{the:source} [source:attack].\x1b]8;;\x07")
+            .unwrap();
+
+        let output = render_msg!("char_2", &template, "source" => &goblin).unwrap();
+        assert_eq!(
+            output,
+            "\x1b]8;;https://example.com/?q={123}&v=[456]\x07The goblin attacks.\x1b]8;;\x07"
+        );
+    }
+
+    #[test]
+    fn test_escaped_tags() {
+        let goblin = MockEntity {
+            id: "mob_1".to_string(),
+            name: "goblin".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+
+        // Verifies that escaped braces, brackets, and backslashes are cleanly bypassed
+        let template = cache
+            .get_or_compile(r"some \{escaped\} and \[tags\]. \\{the:source}")
+            .unwrap();
+
+        let output = render_msg!("char_2", &template, "source" => &goblin).unwrap();
+        assert_eq!(output, r"Some {escaped} and [tags]. \The goblin");
+    }
+
+    #[test]
+    fn test_quoted_text_capitalization() {
+        let goblin = MockEntity {
+            id: "mob_1".to_string(),
+            name: "goblin".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+
+        let player = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+
+        let cache = TemplateCache::new(100);
+
+        // Scenario 1: Quote at the start of the sentence
+        // The typography engine correctly skips the `"` and capitalizes the first letter.
+        let template1 = cache
+            .get_or_compile("\"{the:source} [source:be] a fool!\"")
+            .unwrap();
+        let output1 = render_msg!("char_2", &template1, "source" => &goblin).unwrap();
+        assert_eq!(output1, "\"The goblin is a fool!\"");
+
+        // Scenario 2: Quote in the middle of a sentence with a proper noun
+        // Proper nouns are returned already capitalized by `display_name_for`.
+        let template2 = cache
+            .get_or_compile("{the:source} [source:say], \"{target} [target:be] a fool!\"")
+            .unwrap();
+        let output2 =
+            render_msg!("char_2", &template2, "source" => &goblin, "target" => &player).unwrap();
+        assert_eq!(output2, "The goblin says, \"Aldran is a fool!\"");
+
+        // Scenario 3: Quote in the middle of a sentence with a common noun (Capitalized Article)
+        // By using {The:source}, we force the engine to capitalize the article regardless of the segmenter.
+        let template3 = cache
+            .get_or_compile("{target} [target:say], \"{The:source} [source:be] a fool!\"")
+            .unwrap();
+        let output3 =
+            render_msg!("char_2", &template3, "source" => &goblin, "target" => &player).unwrap();
+        assert_eq!(output3, "Aldran says, \"The goblin is a fool!\"");
+
+        // Scenario 4: Indefinite article capitalization
+        let template4 = cache
+            .get_or_compile("{target} [target:yell], \"{A:source} [source:be] approaching!\"")
+            .unwrap();
+        let output4 =
+            render_msg!("char_2", &template4, "source" => &goblin, "target" => &player).unwrap();
+        assert_eq!(output4, "Aldran yells, \"A goblin is approaching!\"");
+    }
+
     pub struct GroupEntity<'a> {
         pub members: Vec<&'a dyn TemplateEntity>,
     }
