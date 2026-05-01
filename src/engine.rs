@@ -89,20 +89,18 @@ impl Template {
 
             if c == '\\' {
                 chars.next();
-                #[allow(clippy::collapsible_if)]
-                if let Some(&(next_i, next_c)) = chars.peek() {
-                    if next_c == '{'
+                if let Some(&(next_i, next_c)) = chars.peek()
+                    && (next_c == '{'
                         || next_c == '['
                         || next_c == '}'
                         || next_c == ']'
-                        || next_c == '\\'
-                    {
-                        if i > last_literal_start {
-                            tokens.push(Token::Literal(raw[last_literal_start..i].to_string()));
-                        }
-                        last_literal_start = next_i;
-                        chars.next();
+                        || next_c == '\\')
+                {
+                    if i > last_literal_start {
+                        tokens.push(Token::Literal(raw[last_literal_start..i].to_string()));
                     }
+                    last_literal_start = next_i;
+                    chars.next();
                 }
                 continue;
             }
@@ -174,6 +172,13 @@ impl Template {
                         '{',
                     ));
                 }
+                if p2_str.split('.').any(str::is_empty) {
+                    return Err(validation_error(
+                        "Entity tag has an empty property segment",
+                        content,
+                        '{',
+                    ));
+                }
                 Ok(Token::EntityRef {
                     key: p2_str.to_lowercase(),
                     article: Some(p1_str.to_string()),
@@ -195,6 +200,13 @@ impl Template {
                         '{',
                     ));
                 }
+                if p1_str.split('.').any(str::is_empty) {
+                    return Err(validation_error(
+                        "Pronoun tag has an empty property segment",
+                        content,
+                        '{',
+                    ));
+                }
                 Ok(Token::PronounRef {
                     key: p1_str.to_lowercase(),
                     p_type: p2.to_lowercase(),
@@ -210,6 +222,13 @@ impl Template {
             if p1_str.is_empty() {
                 return Err(validation_error(
                     "Entity tag has an empty key",
+                    content,
+                    '{',
+                ));
+            }
+            if p1_str.split('.').any(str::is_empty) {
+                return Err(validation_error(
+                    "Entity tag has an empty property segment",
                     content,
                     '{',
                 ));
@@ -239,6 +258,13 @@ impl Template {
             if p1_str.is_empty() {
                 return Err(validation_error(
                     "Verb tag has an empty subject key",
+                    content,
+                    '[',
+                ));
+            }
+            if p1_str.split('.').any(str::is_empty) {
+                return Err(validation_error(
+                    "Verb tag has an empty property segment",
                     content,
                     '[',
                 ));
@@ -340,24 +366,19 @@ impl PerspectiveEngine {
         }
 
         // 2. Try dot notation traversal (e.g., "source.left_arm.weapon")
-        if let Some((root_key, prop_path)) = key.split_once('.') {
-            #[allow(clippy::collapsible_if)]
-            if let Some(mut current) = ctx.entities.get(root_key).copied() {
-                let mut current_path_end = root_key.len();
-                for prop in prop_path.split('.') {
-                    if prop.is_empty() {
-                        current_path_end += 1; // Step over the extra dot
-                        continue;
-                    }
+        let mut segments = key.split('.');
+        let root_key = segments.next().unwrap_or(key);
 
-                    let current_path = &key[..current_path_end];
-                    current = current.get_property(prop).ok_or_else(|| {
-                        format!("Missing property '{prop}' on entity '{current_path}'")
-                    })?;
-                    current_path_end += prop.len() + 1; // +1 to step over the dot
-                }
-                return Ok(current);
+        if let Some(mut current) = ctx.entities.get(root_key).copied() {
+            let mut current_path = root_key;
+            for prop in segments {
+                current = current.get_property(prop).ok_or_else(|| {
+                    format!("Missing property '{prop}' on entity '{current_path}'")
+                })?;
+                // Accumulate the traversed path slice by extending it over the dot and property
+                current_path = &key[..current_path.len() + 1 + prop.len()];
             }
+            return Ok(current);
         }
 
         tracing::error!("Failed to render template: Missing entity for key '{key}'");
@@ -525,17 +546,13 @@ impl PerspectiveEngine {
         let is_active_subject = ctx.active_subject.borrow().as_deref() == Some(key.as_str());
 
         // Check if this entity is the current subject of the narrative.
-        // The inner block ensures the borrow is dropped before any recursive calls are made.
-        let already_seen = {
-            let mut last = ctx.last_mentioned.borrow_mut();
-            let seen = last.as_deref() == Some(key.as_str());
-            *last = Some(key.clone()); // Update memory, as we are currently talking about them!
-            seen
-        };
+        let already_seen = ctx.last_mentioned.borrow().as_deref() == Some(key.as_str());
 
         let is_reflexive = p_type == "reflex";
 
         if already_seen || is_active_subject || is_viewer || is_reflexive {
+            *ctx.last_mentioned.borrow_mut() = Some(key.clone()); // Update memory, as we are currently talking about them!
+
             let pronoun = resolve_pronoun(entity.gender(), p_type, is_viewer, entity.is_plural())?;
             if *is_capitalized {
                 raw_output.push_str(&crate::grammar::capitalize_first(pronoun));

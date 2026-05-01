@@ -1542,12 +1542,13 @@ mod tests {
             "Missing property 'edge' on entity 'source.weapon'"
         );
 
-        // Verify malformed double-dot paths safely ignore the empty segment
-        let double_dot_template = cache
+        // Verify malformed double-dot paths return a clear error at compile time
+        let double_dot_err = cache
             .get_or_compile("{a:source..weapon} is drawn.")
-            .unwrap();
-        let double_dot_out =
-            render_msg!("char_2", &double_dot_template, "source" => &player).unwrap();
-        assert_eq!(double_dot_out, "A rusty sword is drawn.");
+            .unwrap_err();
+        assert_eq!(
+            double_dot_err,
+            "Entity tag has an empty property segment: {a:source..weapon}"
+        );
     }
 }
