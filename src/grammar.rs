@@ -1,0 +1,122 @@
+use crate::models::Gender;
+use std::borrow::Cow;
+use phf::phf_map;
+
+// O(1) static lookup table for the most common irregular verbs
+// This prevents you from having to evaluate slow logic trees for basic words.
+static IRREGULAR_VERBS: phf::Map<&'static str, &'static str> = phf_map! {
+    "be" => "is",
+    "have" => "has",
+    "do" => "does",
+    "go" => "goes",
+    "say" => "says",
+
+    // Modal verbs mapped to themselves to prevent "s" suffixes
+    "can" => "can",
+    "could" => "could",
+    "will" => "will",
+    "would" => "would",
+    "shall" => "shall",
+    "should" => "should",
+    "may" => "may",
+    "might" => "might",
+    "must" => "must",
+};
+
+/// Returns the correct pronoun based on gender, type, and perspective.
+pub fn resolve_pronoun(gender: Gender, p_type: &str, is_viewer: bool, is_plural: bool) -> Result<&'static str, String> {
+    if is_viewer {
+        if is_plural {
+            // 1st Person Plural (The viewer is part of this group)
+            return match p_type {
+                "subj" => Ok("we"),
+                "obj" => Ok("us"),
+                "poss" => Ok("our"),
+                "abs_poss" => Ok("ours"),
+                "reflex" => Ok("ourselves"),
+                _ => Err(format!("Unknown pronoun type: {}", p_type)),
+            };
+        } else {
+            // 2nd Person Singular (The viewer is the sole actor)
+            return match p_type {
+                "subj" | "obj" => Ok("you"),
+                "poss" => Ok("your"),
+                "abs_poss" => Ok("yours"),
+                "reflex" => Ok("yourself"),
+                _ => Err(format!("Unknown pronoun type: {}", p_type)),
+            };
+        }
+    }
+
+    // Comprehensive 5-case pronoun matrix
+    match (gender, p_type) {
+        (Gender::Male, "subj") => Ok("he"),
+        (Gender::Male, "obj") => Ok("him"),
+        (Gender::Male, "poss") => Ok("his"),
+        (Gender::Male, "abs_poss") => Ok("his"),
+        (Gender::Male, "reflex") => Ok("himself"),
+        
+        (Gender::Female, "subj") => Ok("she"),
+        (Gender::Female, "obj") => Ok("her"),
+        (Gender::Female, "poss") => Ok("her"),
+        (Gender::Female, "abs_poss") => Ok("hers"),
+        (Gender::Female, "reflex") => Ok("herself"),
+        
+        (Gender::Neutral, "subj") => Ok("it"),
+        (Gender::Neutral, "obj") => Ok("it"),
+        (Gender::Neutral, "poss") => Ok("its"),
+        (Gender::Neutral, "abs_poss") => Ok("its"),
+        (Gender::Neutral, "reflex") => Ok("itself"),
+        
+        // This naturally supports swarms and non-binary characters
+        (Gender::Plural, "subj") => Ok("they"),
+        (Gender::Plural, "obj") => Ok("them"),
+        (Gender::Plural, "poss") => Ok("their"),
+        (Gender::Plural, "abs_poss") => Ok("theirs"),
+        (Gender::Plural, "reflex") => Ok("themselves"),
+        
+        _ => Err(format!("Unknown pronoun type: {}", p_type)),
+    }
+}
+
+/// Conjugates a base verb into the appropriate person and number.
+pub fn conjugate_verb<'a>(base_verb: &'a str, is_viewer: bool, is_plural: bool) -> Cow<'a, str> {
+    let lower_verb = base_verb.to_lowercase();
+
+    // 1st/2nd person (viewer) AND 3rd-person plural subjects use the base uninflected verb,
+    // EXCEPT for the highly irregular verb "to be" which becomes "are".
+    if is_viewer || is_plural {
+        if lower_verb == "be" {
+            return Cow::Borrowed("are");
+        }
+        // If you want strict 1st person singular ("I am") you can split `is_viewer` logic later, 
+        // but for Actor Stance ("You"), "are" is always correct.
+        return Cow::Borrowed(base_verb);
+    }
+
+    // 1. Check our static PHF map for irregular overrides (3rd person singular)
+    if let Some(&irregular) = IRREGULAR_VERBS.get(lower_verb.as_str()) {
+        return Cow::Borrowed(irregular);
+    }
+
+    // 2. Fallback algorithmic suffix rules for standard verbs
+    if lower_verb.ends_with("ch") || lower_verb.ends_with("sh") || lower_verb.ends_with('s') || lower_verb.ends_with('x') || lower_verb.ends_with('z') {
+        Cow::Owned(format!("{}es", base_verb))
+    } else if lower_verb.ends_with('y') && !is_vowel_before_y(&lower_verb) {
+        let trimmed = &base_verb[..base_verb.len() - 1];
+        Cow::Owned(format!("{}ies", trimmed))
+    } else {
+        Cow::Owned(format!("{}s", base_verb))
+    }
+}
+
+fn is_vowel_before_y(verb: &str) -> bool {
+    let chars: Vec<char> = verb.chars().collect();
+    if chars.len() < 2 { return false; }
+    matches!(chars[chars.len() - 2], 'a' | 'e' | 'i' | 'o' | 'u')
+}
+
+/// Dynamically returns "a" or "an" based on the phonetic pronunciation of the following word.
+pub fn get_indefinite_article(word: &str) -> &str {
+    in_definite::get_a_or_an(word)
+}
