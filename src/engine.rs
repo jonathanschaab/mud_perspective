@@ -389,7 +389,9 @@ impl PerspectiveEngine {
         raw_output: &mut String,
         params: &EntityRefParams<'_>,
     ) -> Result<(), String> {
-        *ctx.last_mentioned.borrow_mut() = Some(params.key.to_string());
+        if ctx.last_mentioned.borrow().as_deref() != Some(params.key) {
+            *ctx.last_mentioned.borrow_mut() = Some(params.key.to_string());
+        }
 
         let entity = Self::get_entity(ctx, params.key)?;
         let effective_viewer = if params.force_3rd_person {
@@ -550,7 +552,9 @@ impl PerspectiveEngine {
         let is_reflexive = p_type == "reflex";
 
         if already_seen || is_active_subject || is_viewer || is_reflexive {
-            *ctx.last_mentioned.borrow_mut() = Some(key.clone()); // Update memory, as we are currently talking about them!
+            if !already_seen {
+                *ctx.last_mentioned.borrow_mut() = Some(key.clone()); // Update memory
+            }
 
             let pronoun = resolve_pronoun(entity.gender(), p_type, is_viewer, entity.is_plural())?;
             if *is_capitalized {
@@ -603,7 +607,9 @@ impl PerspectiveEngine {
             } else {
                 ctx.viewer_id
             };
-            *ctx.active_subject.borrow_mut() = Some(key.clone());
+            if ctx.active_subject.borrow().as_deref() != Some(key.as_str()) {
+                *ctx.active_subject.borrow_mut() = Some(key.clone());
+            }
             (entity.contains_viewer(effective_viewer), entity.is_plural())
         } else {
             // Safe default to 3rd-person singular if no subject is bound
