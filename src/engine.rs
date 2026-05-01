@@ -387,7 +387,7 @@ impl PerspectiveEngine {
         raw_output.push_str(name_str);
 
         if params.is_possessive {
-            Self::append_possessive_suffix(raw_output, entity.is_plural());
+            raw_output.push_str(Self::get_possessive_suffix(name_str, entity.is_plural()));
         }
         Ok(())
     }
@@ -432,7 +432,7 @@ impl PerspectiveEngine {
 
         let mut final_str = list_str.into_owned();
         if params.is_possessive {
-            Self::append_possessive_suffix(&mut final_str, entity.is_plural());
+            final_str.push_str(Self::get_possessive_suffix(&final_str, entity.is_plural()));
         }
 
         push_capitalized_if(raw_output, &final_str, params.is_capitalized);
@@ -461,16 +461,11 @@ impl PerspectiveEngine {
     }
 
     #[inline]
-    fn append_possessive_suffix(output: &mut String, is_plural: bool) {
-        if matches!(Self::get_last_visible_char(output), Some('s' | 'S')) {
-            if is_plural {
-                output.push('\'');
-            } else {
-                output.push_str("'s");
-            }
-        } else {
-            output.push_str("'s");
+    fn get_possessive_suffix(name: &str, is_plural: bool) -> &'static str {
+        if matches!(Self::get_last_visible_char(name), Some('s' | 'S')) && is_plural {
+            return "'";
         }
+        "'s"
     }
 
     fn render_pronoun_ref(
