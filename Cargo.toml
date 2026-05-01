@@ -1,0 +1,17 @@
+[package]
+name = "mud_perspective"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = ["ansi", "mxp", "msp"]
+ansi = []
+mxp = []
+msp = []
+
+[dependencies]
+in_definite = "1.1.2"
+moka = { version = "0.12", features = ["sync"] }
+phf = { version = "0.13.1", features = ["macros"] }
+tracing = "0.1"
+unicode-segmentation = "1.13.2"
