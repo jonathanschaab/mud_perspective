@@ -191,6 +191,9 @@ pub fn get_indefinite_article(word: &str) -> &str {
 
 /// Resolves the correct article (definite or indefinite) for an entity.
 /// Automatically handles proper noun suppression, viewer suppression, and plural adaptation.
+///
+/// **Note:** The returned string includes a trailing space (e.g., `"The "`, `"a "`) to ensure
+/// correct formatting when appended directly before the entity name.
 pub fn resolve_article(
     article: &str,
     entity_name: &str,
