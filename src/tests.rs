@@ -1649,6 +1649,74 @@ mod tests {
     }
 
     #[test]
+    fn test_all_pinned_entities_exceed_limit() {
+        let m1 = MockEntity {
+            id: "m1".to_string(),
+            name: "Bob".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+        let m2 = MockEntity {
+            id: "m2".to_string(),
+            name: "Tom".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+        let m3 = MockEntity {
+            id: "m3".to_string(),
+            name: "Jim".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+
+        let cache = TemplateCache::new(100);
+
+        // Limit is 2. We pin 3 entities.
+        let ctx = RenderContext::new("viewer")
+            .with_anaphora_limit(2)
+            .with_entity("bob", &m1)
+            .with_entity("tom", &m2)
+            .with_entity("jim", &m3)
+            .with_pinned_entity("bob")
+            .with_pinned_entity("tom")
+            .with_pinned_entity("jim");
+
+        // Verify that all 3 pinned entities are retained, exceeding the limit of 2.
+        assert_eq!(ctx.recent_entities.borrow().len(), 3);
+
+        // Add an unpinned entity to trigger another eviction check
+        let m4 = MockEntity {
+            id: "m4".to_string(),
+            name: "Dan".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+        let ctx = ctx.with_entity("dan", &m4);
+        let _ = PerspectiveEngine::render(&cache.get_or_compile("{dan} arrives.").unwrap(), &ctx)
+            .unwrap();
+
+        // The limit is still 2. The anaphora check sees 4 entities, but 3 are pinned.
+        // It will evict Dan immediately because he is the only unpinned entity.
+        assert_eq!(ctx.recent_entities.borrow().len(), 3);
+
+        // Verify Dan was evicted and the remaining 3 are the pinned ones
+        let keys: Vec<String> = ctx
+            .recent_entities
+            .borrow()
+            .iter()
+            .map(|r| r.key.clone())
+            .collect();
+        assert!(!keys.contains(&"dan".to_string()));
+        assert!(keys.contains(&"bob".to_string()));
+        assert!(keys.contains(&"tom".to_string()));
+        assert!(keys.contains(&"jim".to_string()));
+    }
+
+    #[test]
     fn test_anaphora_viewer_exemption() {
         let player = MockEntity {
             id: "char_1".to_string(),
@@ -2723,5 +2791,122 @@ mod tests {
             PerspectiveEngine::render(&t4, &ctx4).unwrap(),
             "The wolves look at Aldran and Bob. Aldran and Bob smile."
         );
+    }
+
+    #[test]
+    fn test_empty_anaphora_extraction_and_injection() {
+        let player = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+
+        // 1. Extract from a brand new, empty context
+        let ctx_empty = RenderContext::new("viewer");
+        let empty_state = ctx_empty.extract_anaphora();
+
+        assert!(empty_state.last_mentioned.is_none());
+        assert!(empty_state.active_subject.is_none());
+        assert!(empty_state.recent_entities.is_empty());
+
+        // 2. Inject into a new context and verify behavior
+        let cache = TemplateCache::new(100);
+        let template = cache.get_or_compile("{source:Subj} [source:nod].").unwrap();
+
+        let ctx_injected = RenderContext::new("viewer")
+            .with_entity("source", &player)
+            .with_anaphora(empty_state);
+
+        // Because the state is completely empty, it should safely fall back to the full name instead of using a pronoun.
+        let out = PerspectiveEngine::render(&template, &ctx_injected).unwrap();
+        assert_eq!(out, "Aldran nods.");
+    }
+
+    #[test]
+    fn test_empty_template_string() {
+        let cache = TemplateCache::new(100);
+        let template = cache.get_or_compile("").unwrap();
+
+        let ctx = RenderContext::new("viewer");
+        let output = PerspectiveEngine::render(&template, &ctx).unwrap();
+
+        assert_eq!(output, "");
+    }
+
+    #[test]
+    fn test_with_last_mentioned_preserves_pinned_status() {
+        let bob = MockEntity {
+            id: "m1".to_string(),
+            name: "Bob".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+        let tom = MockEntity {
+            id: "m2".to_string(),
+            name: "Tom".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+
+        let cache = TemplateCache::new(100);
+
+        let ctx = RenderContext::new("viewer")
+            .with_anaphora_limit(1) // Extremely strict limit
+            .with_entity("bob", &bob)
+            .with_entity("tom", &tom)
+            .with_pinned_entity("bob") // Bob is pinned
+            .with_last_mentioned("bob"); // Triggers the LRU refresh path
+
+        // Render Tom to force an eviction check (Memory is now [Bob, Tom])
+        let _ = PerspectiveEngine::render(&cache.get_or_compile("{tom} arrives.").unwrap(), &ctx)
+            .unwrap();
+
+        // If `with_last_mentioned` accidentally cleared Bob's flags, he would have been evicted as the oldest.
+        // Because his IS_PINNED flag was preserved, Tom (the newest but unpinned) is instantly evicted instead!
+        assert_eq!(ctx.recent_entities.borrow()[0].key, "bob");
+    }
+
+    #[test]
+    fn test_with_anaphora_preserves_pinned_status() {
+        let bob = MockEntity {
+            id: "m1".to_string(),
+            name: "Bob".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+        let tom = MockEntity {
+            id: "m2".to_string(),
+            name: "Tom".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+
+        // 1. Pin an entity and extract the state
+        let ctx1 = RenderContext::new("viewer")
+            .with_entity("bob", &bob)
+            .with_pinned_entity("bob");
+        let state = ctx1.extract_anaphora();
+
+        // 2. Inject into a new context with a strict eviction limit
+        let cache = TemplateCache::new(100);
+        let ctx2 = RenderContext::new("viewer")
+            .with_anaphora_limit(1)
+            .with_entity("bob", &bob)
+            .with_entity("tom", &tom)
+            .with_anaphora(state);
+
+        // Render Tom to force an eviction check. Memory becomes [Bob, Tom] and then limits are enforced.
+        let _ = PerspectiveEngine::render(&cache.get_or_compile("{tom} arrives.").unwrap(), &ctx2)
+            .unwrap();
+
+        // Because the state extraction/injection preserved Bob's IS_PINNED flag, Tom is evicted instead.
+        assert_eq!(ctx2.recent_entities.borrow().len(), 1);
+        assert_eq!(ctx2.recent_entities.borrow()[0].key, "bob");
     }
 }

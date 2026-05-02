@@ -114,6 +114,7 @@ pub struct RenderContext<'a> {
     pub stance: ActorStance,
     /// The maximum number of entities to track for anaphora resolution before evicting the oldest.
     /// Defaults to 15. Set to 0 for unbounded growth.
+    /// If all entities in memory are pinned, this limit will be temporarily exceeded to preserve narrative continuity.
     pub anaphora_limit: usize,
     /// A mapping of template syntax keys (e.g., "source") to their actual game entities.
     /// Keys are normalized to lowercase by the engine, so ensure your builder mapping uses lowercase keys.
@@ -215,6 +216,9 @@ impl<'a> RenderContext<'a> {
     }
 
     /// Pins an entity in the anaphora memory so it will never be automatically evicted.
+    ///
+    /// If the number of pinned entities exceeds the anaphora limit, the limit will be
+    /// temporarily bypassed to prevent eviction.
     #[must_use]
     pub fn with_pinned_entity(self, key: &str) -> Self {
         self.pin_anaphora(key);
@@ -312,6 +316,9 @@ impl<'a> RenderContext<'a> {
     }
 
     /// Pins an entity in the anaphora memory so it will never be automatically evicted.
+    ///
+    /// If the number of pinned entities exceeds the anaphora limit, the limit will be
+    /// temporarily bypassed to prevent eviction.
     pub fn pin_anaphora(&self, key: &str) {
         if let Some(entity) = self.entities.get(key) {
             let mut recents = self.recent_entities.borrow_mut();
