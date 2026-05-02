@@ -121,6 +121,18 @@ let ctx_third = RenderContext::new("char_1")
 // Output: "Aldran walks forward."
 ```
 
+### **2.2 Custom Runtime Verbs**
+
+The engine also allows developers to expand its vocabulary at runtime by injecting custom irregular verbs or dialect-specific forms. This makes it easy to add new verbs dynamically without modifying the static core map.
+
+```rust
+use mud_perspective::grammar::{add_irregular_verb, remove_irregular_verb, clear_irregular_verbs};
+
+add_irregular_verb("teleport", "teleports").unwrap();
+remove_irregular_verb("teleport").unwrap();
+clear_irregular_verbs().unwrap();
+```
+
 ### 3. Handling Groups and Swarms
 
 The library provides a built-in `GroupEntity` to easily represent dynamic groups of characters or objects. It automatically handles Oxford comma formatting, injects "you" if the viewer is in the group, and evaluates as plural so verbs and pronouns automatically conjugate correctly ("attack" instead of "attacks", "themselves", etc.).
@@ -207,8 +219,6 @@ While functional for standard MUD environments, the current architecture has sev
 
 1. **English-Only Morphology:** The verb conjugation and pronoun resolution algorithms are strictly hardcoded for English grammar. Supporting languages with complex declensions or grammatical gender agreement (e.g., Romance or Slavic languages) would require a fundamental rewrite of the grammar.rs module.  
 2. **Abbreviation Boundary Detection:** The typography post-processor relies on standard Unicode sentence segmentation to capitalize the first letter of each sentence. Because it lacks a comprehensive natural language abbreviation dictionary, it may incorrectly capitalize words immediately following common abbreviations (e.g., treating the period in "Mr. Smith" as a hard sentence boundary).
-
-3. **Static Irregular Verb Map:** While the internal Perfect Hash Function (PHF) map covers a curated core set of verbs, developers can safely inject custom irregular verbs at runtime using `mud_perspective::grammar::add_irregular_verb("base", "conjugated")` (and remove them using `remove_irregular_verb` or `clear_irregular_verbs`) to dynamically expand the engine's vocabulary.
-4. **Dynamic Tense Shifting:** The engine does not have a concept of narrative time. To output past-tense text, the builder must explicitly tag the past-tense form in the template (e.g., `[source:ran]`, not `[source:run]`).
-5. **Past Tense Inflection by Person:** In modern English, "to be" is the only verb that changes form in the past tense based on the subject (*I was, you were*). The engine hardcodes this specific exception, but cannot dynamically handle hypothetical or custom verbs that inflect by person in the past tense.
-6. **True Colliding Verbs:** The engine maps strings to strings and cannot determine the semantic context of a verb. For verbs where the past tense changes based on context (e.g., "I *bore* a sword" vs "The market *beared* it"), the static map cannot dynamically choose the correct form.
+3. **Dynamic Tense Shifting:** The engine does not have a concept of narrative time. To output past-tense text, the builder must explicitly tag the past-tense form in the template (e.g., `[source:ran]`, not `[source:run]`).
+4. **Past Tense Inflection by Person:** In modern English, "to be" is the only verb that changes form in the past tense based on the subject (*I was, you were*). The engine hardcodes this specific exception, but cannot dynamically handle hypothetical or custom verbs that inflect by person in the past tense.
+5. **True Colliding Verbs:** The engine maps strings to strings and cannot determine the semantic context of a verb. For verbs where the past tense changes based on context (e.g., "I *bore* a sword" vs "The market *beared* it"), the static map cannot dynamically choose the correct form.

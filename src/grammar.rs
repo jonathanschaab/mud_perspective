@@ -25,26 +25,23 @@ pub fn add_irregular_verb(base: &str, conjugated: &str) -> Result<(), String> {
         ));
     }
 
-    let mut err = None;
-
-    // RCU automatically handles concurrent write retries safely.
-    get_custom_verbs().rcu(|current_map| {
+    let custom_verbs = get_custom_verbs();
+    loop {
+        let current_map = custom_verbs.load();
         if current_map.contains_key(&lower_base) {
-            err = Some(format!(
+            return Err(format!(
                 "Verb '{lower_base}' already exists in the runtime dictionary."
             ));
-            return Arc::clone(current_map);
         }
+
         let mut new_map = (**current_map).clone();
         new_map.insert(lower_base.clone(), conjugated.to_lowercase());
-        Arc::new(new_map)
-    });
 
-    if let Some(e) = err {
-        return Err(e);
+        let prev = custom_verbs.compare_and_swap(&current_map, Arc::new(new_map));
+        if Arc::ptr_eq(&prev, &current_map) {
+            break Ok(());
+        }
     }
-
-    Ok(())
 }
 
 /// Forces the addition of a custom irregular verb override, overwriting any existing
@@ -74,20 +71,23 @@ pub fn force_add_irregular_verb(base: &str, conjugated: &str) -> Result<(), Stri
 /// This function is infallible in the current implementation, but returns a `Result`
 /// for API backwards compatibility.
 pub fn remove_irregular_verb(base: &str) -> Result<bool, String> {
-    let mut removed = false;
     let lower_base = base.to_lowercase();
 
-    get_custom_verbs().rcu(|current_map| {
+    let custom_verbs = get_custom_verbs();
+    loop {
+        let current_map = custom_verbs.load();
         if !current_map.contains_key(&lower_base) {
-            removed = false;
-            return Arc::clone(current_map);
+            break Ok(false);
         }
-        let mut new_map = (**current_map).clone();
-        removed = new_map.remove(&lower_base).is_some();
-        Arc::new(new_map)
-    });
 
-    Ok(removed)
+        let mut new_map = (**current_map).clone();
+        new_map.remove(&lower_base);
+
+        let prev = custom_verbs.compare_and_swap(&current_map, Arc::new(new_map));
+        if Arc::ptr_eq(&prev, &current_map) {
+            break Ok(true);
+        }
+    }
 }
 
 /// Clears all custom irregular verb overrides from the runtime dictionary.
