@@ -110,7 +110,21 @@ pub struct RenderContext<'a> {
     pub active_subject: RefCell<Option<String>>,
     /// Tracks all entities mentioned since the last anaphora clear.
     /// Used to detect ambiguous pronoun collisions between any non-subject entities.
-    pub recent_entities: RefCell<Vec<String>>,
+    pub recent_entities: RefCell<Vec<RecentEntity>>,
+}
+
+/// Cached properties of a recently mentioned entity to avoid redundant trait method calls.
+pub struct RecentEntity {
+    /// The template key of the entity.
+    pub key: String,
+    /// The cached grammatical gender.
+    pub gender: Gender,
+    /// The cached grammatical plurality.
+    pub is_plural: bool,
+    /// Cached result of `contains_viewer` for the standard viewer ID.
+    pub is_viewer_normal: bool,
+    /// Cached result of `contains_viewer` for the forced Director Stance (`NULL_VIEWER`).
+    pub is_viewer_forced: bool,
 }
 
 impl<'a> RenderContext<'a> {
@@ -148,7 +162,15 @@ impl<'a> RenderContext<'a> {
     #[must_use]
     pub fn with_last_mentioned(self, key: &str) -> Self {
         *self.last_mentioned.borrow_mut() = Some(key.to_string());
-        self.recent_entities.borrow_mut().push(key.to_string());
+        if let Some(entity) = self.entities.get(key) {
+            self.recent_entities.borrow_mut().push(RecentEntity {
+                key: key.to_string(),
+                gender: entity.gender(),
+                is_plural: entity.is_plural(),
+                is_viewer_normal: entity.contains_viewer(self.viewer_id),
+                is_viewer_forced: entity.contains_viewer(NULL_VIEWER),
+            });
+        }
         self
     }
 

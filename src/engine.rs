@@ -77,13 +77,16 @@ impl Template {
         let mut chars = raw.char_indices().peekable();
         let mut last_literal_start = 0;
 
-        while let Some(&(i, c)) = chars.peek() {
-            #[allow(unused_variables)]
-            let remainder = &raw[i..];
+        #[cfg(any(feature = "mxp", feature = "msp", feature = "ansi"))]
+        let has_tags = has_protocol_tags(raw);
 
+        while let Some(&(i, c)) = chars.peek() {
             #[cfg(any(feature = "mxp", feature = "msp", feature = "ansi"))]
-            if skip_protocol_tags(&mut chars, remainder, i).is_some() {
-                continue;
+            if has_tags {
+                let remainder = &raw[i..];
+                if skip_protocol_tags(&mut chars, remainder, i).is_some() {
+                    continue;
+                }
             }
 
             if c == '\\' {
@@ -344,10 +347,10 @@ impl PerspectiveEngine {
         raw_output: &mut String,
         params: &EntityRefParams<'_>,
     ) -> Result<(), String> {
-        update_memory(&ctx.last_mentioned, params.key);
-        track_recent_entity(ctx, params.key);
-
         let entity = Self::get_entity(ctx, params.key)?;
+        update_memory(&ctx.last_mentioned, params.key);
+        track_recent_entity(ctx, params.key, entity);
+
         let effective_viewer = effective_viewer_id(ctx, params.force_3rd_person);
 
         // --- Handle Groups / Distributed Lists ---
@@ -438,25 +441,35 @@ impl PerspectiveEngine {
 
     #[inline]
     fn get_last_visible_char(input: &str) -> Option<char> {
-        let mut chars = input.char_indices().peekable();
-        let mut last_visible = None;
-
-        while let Some(&(i, c)) = chars.peek() {
-            #[allow(unused_variables)]
-            let remainder = &input[i..];
-
-            #[cfg(any(feature = "mxp", feature = "msp", feature = "ansi"))]
-            if skip_protocol_tags(&mut chars, remainder, i).is_some() {
-                continue;
-            }
-
-            chars.next();
-            if !c.is_whitespace() {
-                last_visible = Some(c);
-            }
+        #[cfg(not(any(feature = "mxp", feature = "msp", feature = "ansi")))]
+        {
+            input.trim_end().chars().last()
         }
 
-        last_visible
+        #[cfg(any(feature = "mxp", feature = "msp", feature = "ansi"))]
+        {
+            // Fast-path: If no protocol triggers exist, use Rust's native O(1) reverse iterator
+            if !has_protocol_tags(input) {
+                return input.trim_end().chars().last();
+            }
+
+            let mut chars = input.char_indices().peekable();
+            let mut last_visible = None;
+
+            while let Some(&(i, c)) = chars.peek() {
+                let remainder = &input[i..];
+                if skip_protocol_tags(&mut chars, remainder, i).is_some() {
+                    continue;
+                }
+
+                chars.next();
+                if !c.is_whitespace() {
+                    last_visible = Some(c);
+                }
+            }
+
+            last_visible
+        }
     }
 
     #[inline]
@@ -498,14 +511,16 @@ impl PerspectiveEngine {
 
         if !can_use_pronoun && already_seen {
             let mut ambiguous = false;
-            for other_key in ctx.recent_entities.borrow().iter() {
-                if other_key != key
-                    && let Ok(other_entity) = Self::get_entity(ctx, other_key)
-                {
-                    let other_is_viewer = other_entity.contains_viewer(effective_viewer);
+            for other in ctx.recent_entities.borrow().iter() {
+                if other.key != *key {
+                    let other_is_viewer = if *force_3rd_person {
+                        other.is_viewer_forced
+                    } else {
+                        other.is_viewer_normal
+                    };
                     if !other_is_viewer
-                        && entity.gender() == other_entity.gender()
-                        && entity.is_plural() == other_entity.is_plural()
+                        && entity.gender() == other.gender
+                        && entity.is_plural() == other.is_plural
                     {
                         ambiguous = true;
                         break;
@@ -521,7 +536,7 @@ impl PerspectiveEngine {
         if can_use_pronoun {
             if !already_seen {
                 update_memory(&ctx.last_mentioned, key);
-                track_recent_entity(ctx, key);
+                track_recent_entity(ctx, key, entity);
             }
 
             let pronoun = resolve_pronoun(entity.gender(), p_type, is_viewer, entity.is_plural())?;
@@ -610,22 +625,26 @@ impl PerspectiveEngine {
 
         let mut chars = input.char_indices().peekable();
 
+        #[cfg(any(feature = "mxp", feature = "msp", feature = "ansi"))]
+        let has_tags = has_protocol_tags(input);
+
         while let Some(&(i, c)) = chars.peek() {
             // If we cross into a new sentence boundary, reset the capitalization flag
             if catch_up_bounds(i, &mut next_sentence_start) {
                 capitalized = false;
             }
 
-            #[allow(unused_variables)]
-            let remainder = &input[i..];
             #[allow(unused_mut)]
             let mut skipped_tag = false;
 
             // 1, 2, & 3. Skip MXP Tags, MSP Triggers, and ANSI Escape Sequences
             #[cfg(any(feature = "mxp", feature = "msp", feature = "ansi"))]
-            if let Some(end_offset) = skip_protocol_tags(&mut chars, remainder, i) {
-                output.push_str(&remainder[..=end_offset]);
-                skipped_tag = true;
+            if has_tags {
+                let remainder = &input[i..];
+                if let Some(end_offset) = skip_protocol_tags(&mut chars, remainder, i) {
+                    output.push_str(&remainder[..=end_offset]);
+                    skipped_tag = true;
+                }
             }
 
             if skipped_tag {
@@ -828,10 +847,16 @@ fn push_capitalized_if(output: &mut String, text: &str, should_capitalize: bool)
 }
 
 #[inline]
-fn track_recent_entity(ctx: &RenderContext<'_>, key: &str) {
+fn track_recent_entity(ctx: &RenderContext<'_>, key: &str, entity: &dyn TemplateEntity) {
     let mut recents = ctx.recent_entities.borrow_mut();
-    if !recents.iter().any(|k| k == key) {
-        recents.push(key.to_string());
+    if !recents.iter().any(|r| r.key == key) {
+        recents.push(crate::models::RecentEntity {
+            key: key.to_string(),
+            gender: entity.gender(),
+            is_plural: entity.is_plural(),
+            is_viewer_normal: entity.contains_viewer(ctx.viewer_id),
+            is_viewer_forced: entity.contains_viewer(crate::models::NULL_VIEWER),
+        });
     }
 }
 
@@ -915,6 +940,25 @@ fn reject_if(
     } else {
         Ok(())
     }
+}
+
+#[cfg(any(feature = "mxp", feature = "msp", feature = "ansi"))]
+#[inline]
+fn has_protocol_tags(input: &str) -> bool {
+    let mut has_tags = false;
+    #[cfg(feature = "ansi")]
+    {
+        has_tags |= input.contains('\x1b');
+    }
+    #[cfg(feature = "mxp")]
+    {
+        has_tags |= input.contains('<');
+    }
+    #[cfg(feature = "msp")]
+    {
+        has_tags |= input.contains("!!");
+    }
+    has_tags
 }
 
 #[inline]
