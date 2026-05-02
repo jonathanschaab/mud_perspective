@@ -1335,6 +1335,60 @@ mod tests {
     }
 
     #[test]
+    fn test_standalone_verb_anaphora_tracking() {
+        let bob = MockEntity {
+            id: "char_2".to_string(),
+            name: "Bob".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+        let aldran = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+        let jill = MockEntity {
+            id: "char_4".to_string(),
+            name: "Jill".to_string(),
+            gender: Gender::Female,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+
+        let cache = TemplateCache::new(100);
+
+        // 1. Ambiguous tracking via verb tag
+        // Bob is ONLY introduced via a verb tag. If the engine fails to track him,
+        // it will erroneously use "He" for Aldran because it forgets a second male is present.
+        let ctx1 = RenderContext::new("viewer")
+            .with_entity("bob", &bob)
+            .with_entity("aldran", &aldran);
+        let t1 = cache
+            .get_or_compile("Bob [bob:attack] {aldran}. {aldran:Subj} [aldran:fall].")
+            .unwrap();
+        assert_eq!(
+            PerspectiveEngine::render(&t1, &ctx1).unwrap(),
+            "Bob attacks Aldran. Aldran falls."
+        );
+
+        // 2. Unambiguous tracking via verb tag
+        // Jill is introduced via a verb tag. Because she is Female, Aldran (Male) can safely use "He".
+        let ctx2 = RenderContext::new("viewer")
+            .with_entity("jill", &jill)
+            .with_entity("aldran", &aldran);
+        let t2 = cache
+            .get_or_compile("Jill [jill:attack] {aldran}. {aldran:Subj} [aldran:fall].")
+            .unwrap();
+        assert_eq!(
+            PerspectiveEngine::render(&t2, &ctx2).unwrap(),
+            "Jill attacks Aldran. He falls."
+        );
+    }
+
+    #[test]
     fn test_anaphora_fallback_capitalization() {
         let monster = MockEntity {
             id: "mob_1".to_string(),

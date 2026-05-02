@@ -584,6 +584,8 @@ impl PerspectiveEngine {
             let entity = Self::get_entity(ctx, key)?;
             let effective_viewer = effective_viewer_id(ctx, *force_3rd_person);
             update_memory(&ctx.active_subject, key);
+            update_memory(&ctx.last_mentioned, key);
+            track_recent_entity(ctx, key, entity);
             (entity.contains_viewer(effective_viewer), entity.is_plural())
         } else {
             // Safe default to 3rd-person singular if no subject is bound
