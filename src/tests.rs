@@ -1267,6 +1267,53 @@ mod tests {
     }
 
     #[test]
+    fn test_anaphora_ambiguity_resolution() {
+        let bob = MockEntity {
+            id: "char_2".to_string(),
+            name: "Bob".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+        let aldran = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+        let goblin = MockEntity {
+            id: "mob_1".to_string(),
+            name: "goblin".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+        let ctx = RenderContext::new("viewer")
+            .with_entity("bob", &bob)
+            .with_entity("aldran", &aldran)
+            .with_entity("goblin", &goblin);
+
+        // 1. Unambiguous object reference (Goblin -> Neutral, Aldran -> Male)
+        let t1 = cache
+            .get_or_compile("{the:goblin} [goblin:hit] {aldran}. {aldran:Subj} [aldran:smile].")
+            .unwrap();
+        let out1 = PerspectiveEngine::render(&t1, &ctx).unwrap();
+        assert_eq!(out1, "The goblin hits Aldran. He smiles.");
+
+        // 2. Ambiguous object reference (Bob -> Male, Aldran -> Male)
+        // Using "He" for Aldran is ambiguous, so the engine must fall back to "Aldran"
+        ctx.clear_anaphora();
+        let t2 = cache
+            .get_or_compile("{bob} [bob:hit] {aldran}. {aldran:Subj} [aldran:smile].")
+            .unwrap();
+        let out2 = PerspectiveEngine::render(&t2, &ctx).unwrap();
+        assert_eq!(out2, "Bob hits Aldran. Aldran smiles.");
+    }
+
+    #[test]
     fn test_anaphora_fallback_capitalization() {
         let monster = MockEntity {
             id: "mob_1".to_string(),
@@ -1279,11 +1326,11 @@ mod tests {
         let cache = TemplateCache::new(100);
         let ctx = RenderContext::new("viewer").with_entity("target", &monster);
 
-        // {Target:subj} requests a capitalized pronoun ("It").
+        // {target:Subj} requests a capitalized pronoun ("It").
         // Since it's the first mention, it falls back to the full noun with an article.
         // We expect "The giant spider", NOT "The Giant Spider" or "The Giant spider".
         let template = cache
-            .get_or_compile("{Target:subj} [target:hiss].")
+            .get_or_compile("{target:Subj} [target:hiss].")
             .unwrap();
         let output = PerspectiveEngine::render(&template, &ctx).unwrap();
         assert_eq!(output, "The giant spider hisses.");
@@ -1616,5 +1663,36 @@ mod tests {
         // Regular singular common noun with ANSI code at the end -> expects 's
         let out_goblin = render_msg!("char_2", &template, "target" => &colored_goblin).unwrap();
         assert_eq!(out_goblin, "You take the \x1b[33mgoblin\x1b[0m's gold.");
+    }
+
+    #[test]
+    fn test_trailing_whitespace_possessive_suffixes() {
+        let wolves_spaced = MockEntity {
+            id: "mob_1".to_string(),
+            name: "wolves ".to_string(),
+            gender: Gender::Plural,
+            is_plural: true,
+            is_proper_noun: false,
+        };
+        let boss_spaced = MockEntity {
+            id: "mob_2".to_string(),
+            name: "boss   ".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+        let template = cache
+            .get_or_compile("You take {the:target's} gold.")
+            .unwrap();
+
+        // Plural ending in 's' followed by space -> expects '
+        let out_wolves = render_msg!("char_2", &template, "target" => &wolves_spaced).unwrap();
+        assert_eq!(out_wolves, "You take the wolves ' gold.");
+
+        // Singular ending in 's' followed by multiple spaces -> expects 's
+        let out_boss = render_msg!("char_2", &template, "target" => &boss_spaced).unwrap();
+        assert_eq!(out_boss, "You take the boss   's gold.");
     }
 }

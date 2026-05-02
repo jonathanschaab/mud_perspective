@@ -454,7 +454,9 @@ impl PerspectiveEngine {
             }
 
             chars.next();
-            last_visible = Some(c);
+            if !c.is_whitespace() {
+                last_visible = Some(c);
+            }
         }
 
         last_visible
@@ -495,7 +497,28 @@ impl PerspectiveEngine {
 
         let is_reflexive = p_type == "reflex";
 
-        if already_seen || is_active_subject || is_viewer || is_reflexive {
+        let mut can_use_pronoun = is_active_subject || is_viewer || is_reflexive;
+
+        if !can_use_pronoun && already_seen {
+            let unambiguous = if let Some(subj_key) = ctx.active_subject.borrow().as_deref() {
+                if let Ok(subj_entity) = Self::get_entity(ctx, subj_key) {
+                    let subj_is_viewer = subj_entity.contains_viewer(effective_viewer);
+                    is_viewer != subj_is_viewer
+                        || entity.gender() != subj_entity.gender()
+                        || entity.is_plural() != subj_entity.is_plural()
+                } else {
+                    true
+                }
+            } else {
+                true
+            };
+
+            if unambiguous {
+                can_use_pronoun = true;
+            }
+        }
+
+        if can_use_pronoun {
             if !already_seen {
                 update_memory(&ctx.last_mentioned, key);
             }
@@ -503,7 +526,7 @@ impl PerspectiveEngine {
             let pronoun = resolve_pronoun(entity.gender(), p_type, is_viewer, entity.is_plural())?;
             push_capitalized_if(raw_output, pronoun, *is_capitalized);
         } else {
-            // Smart Anaphora Resolution: The entity hasn't been introduced yet!
+            // Smart Anaphora Resolution: The entity hasn't been introduced yet, or a pronoun would be ambiguous!
             // Evaluate it as if the builder had written `{the:key}` instead.
             let is_possessive = p_type == "poss" || p_type == "abs_poss";
             let fallback_params = EntityRefParams {
