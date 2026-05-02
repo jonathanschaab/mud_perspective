@@ -45,6 +45,8 @@ pub enum Token {
         is_capitalized: bool,
         /// A flag indicating if the builder explicitly forced 3rd-person conjugation (e.g. [+source:pulse]).
         force_3rd_person: bool,
+        /// A sequence of explicit overrides that bypasses the algorithm entirely (e.g., `[source:be|am|are|is]`).
+        forced_conjugation: Option<Vec<String>>,
     },
 }
 
@@ -215,7 +217,7 @@ impl Template {
         let (p1, p2_opt) = split_tag(content, '[', "Malformed verb tag")?;
         let (p1_str, force_3rd_person) = parse_stance_prefixes(p1);
 
-        let (subject_key, base_verb) = if let Some(p2) = p2_opt {
+        let (subject_key, verb_part) = if let Some(p2) = p2_opt {
             reject_if(
                 p1_str.is_empty(),
                 "Verb tag has an empty subject key",
@@ -233,7 +235,29 @@ impl Template {
             (None, p1_str)
         };
 
-        let original_verb = base_verb.to_string();
+        let (actual_verb, forced_conjugation) = if let Some((v, forced)) = verb_part.split_once('|')
+        {
+            reject_if(
+                v.is_empty() || forced.is_empty(),
+                "Verb tag has an empty verb or forced conjugation segment",
+                content,
+                '[',
+            )?;
+            let parts: Vec<String> = forced.split('|').map(str::to_string).collect();
+            for p in &parts {
+                reject_if(
+                    p.is_empty(),
+                    "Verb tag has an empty forced conjugation segment",
+                    content,
+                    '[',
+                )?;
+            }
+            (v, Some(parts))
+        } else {
+            (verb_part, None)
+        };
+
+        let original_verb = actual_verb.to_string();
         let is_capitalized = is_capitalized(&original_verb);
         let lower_verb = original_verb.to_lowercase();
 
@@ -249,6 +273,7 @@ impl Template {
             lower_verb,
             is_capitalized,
             force_3rd_person,
+            forced_conjugation,
         })
     }
 }
@@ -706,6 +731,7 @@ impl PerspectiveEngine {
             lower_verb,
             is_capitalized,
             force_3rd_person,
+            forced_conjugation,
         } = token
         else {
             return Ok(());
@@ -724,14 +750,41 @@ impl PerspectiveEngine {
             (false, false)
         };
 
-        let conjugated = conjugate_verb(
-            original_verb,
-            lower_verb,
-            *is_capitalized,
-            is_viewer,
-            is_plural,
-            ctx.stance,
-        );
+        let conjugated = if let Some(forced) = forced_conjugation {
+            let forced_str = match forced.len() {
+                1 => &forced[0],
+                2 => {
+                    if !is_viewer && !is_plural {
+                        &forced[1]
+                    } else {
+                        &forced[0]
+                    }
+                }
+                _ => {
+                    if is_viewer
+                        && ctx.stance == crate::models::ActorStance::FirstPerson
+                        && !is_plural
+                    {
+                        &forced[0]
+                    } else if !is_viewer && !is_plural {
+                        &forced[2]
+                    } else {
+                        &forced[1]
+                    }
+                }
+            };
+            crate::grammar::format_verb(forced_str, *is_capitalized).into_owned()
+        } else {
+            conjugate_verb(
+                original_verb,
+                lower_verb,
+                *is_capitalized,
+                is_viewer,
+                is_plural,
+                ctx.stance,
+            )
+            .into_owned()
+        };
         raw_output.push_str(&conjugated);
         Ok(())
     }
