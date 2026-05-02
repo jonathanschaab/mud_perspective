@@ -253,20 +253,19 @@ impl Template {
     }
 }
 
-/// A bitflags struct to pack multiple boolean formatting flags efficiently.
-#[derive(Clone, Copy)]
-struct EntityFlags(u8);
+bitflags::bitflags! {
+    /// A bitflags struct to pack multiple boolean formatting flags efficiently.
+    #[derive(Clone, Copy)]
+    struct EntityFlags: u8 {
+        const IS_CAPITALIZED = 1 << 0;
+        const FORCE_ARTICLE = 1 << 1;
+        const FORCE_3RD_PERSON = 1 << 2;
+        const IS_POSSESSIVE = 1 << 3;
+    }
+}
 
 impl EntityFlags {
-    const IS_CAPITALIZED: u8 = 1 << 0;
-    const FORCE_ARTICLE: u8 = 1 << 1;
-    const FORCE_3RD_PERSON: u8 = 1 << 2;
-    const IS_POSSESSIVE: u8 = 1 << 3;
-
     #[inline]
-    // We explicitly allow excessive bools here because this is a private, internal
-    // constructor designed specifically to pack these booleans into a single bitmask.
-    // Creating separate enums for each flag would add unnecessary boilerplate.
     #[allow(clippy::fn_params_excessive_bools)]
     const fn new(
         is_capitalized: bool,
@@ -274,37 +273,37 @@ impl EntityFlags {
         force_3rd_person: bool,
         is_possessive: bool,
     ) -> Self {
-        let mut bits = 0;
+        let mut flags = Self::empty();
         if is_capitalized {
-            bits |= Self::IS_CAPITALIZED;
+            flags = flags.union(Self::IS_CAPITALIZED);
         }
         if force_article {
-            bits |= Self::FORCE_ARTICLE;
+            flags = flags.union(Self::FORCE_ARTICLE);
         }
         if force_3rd_person {
-            bits |= Self::FORCE_3RD_PERSON;
+            flags = flags.union(Self::FORCE_3RD_PERSON);
         }
         if is_possessive {
-            bits |= Self::IS_POSSESSIVE;
+            flags = flags.union(Self::IS_POSSESSIVE);
         }
-        Self(bits)
+        flags
     }
 
     #[inline]
     const fn is_capitalized(self) -> bool {
-        self.0 & Self::IS_CAPITALIZED != 0
+        self.contains(Self::IS_CAPITALIZED)
     }
     #[inline]
     const fn force_article(self) -> bool {
-        self.0 & Self::FORCE_ARTICLE != 0
+        self.contains(Self::FORCE_ARTICLE)
     }
     #[inline]
     const fn force_3rd_person(self) -> bool {
-        self.0 & Self::FORCE_3RD_PERSON != 0
+        self.contains(Self::FORCE_3RD_PERSON)
     }
     #[inline]
     const fn is_possessive(self) -> bool {
-        self.0 & Self::IS_POSSESSIVE != 0
+        self.contains(Self::IS_POSSESSIVE)
     }
 }
 
@@ -408,13 +407,22 @@ impl PerspectiveEngine {
 
         // --- Handle Groups / Distributed Lists ---
         if let Some(members) = entity.group_members() {
-            Self::render_group_entity(raw_output, entity, members, effective_viewer, params);
+            Self::render_group_entity(
+                raw_output,
+                entity,
+                members,
+                effective_viewer,
+                params,
+                ctx.stance,
+            );
             return Ok(());
         }
 
         // --- Handle Single Entity Viewers ---
         if entity.contains_viewer(effective_viewer) {
             raw_output.push_str(viewer_name(
+                ctx.stance,
+                entity.is_plural(),
                 params.flags.is_possessive(),
                 params.flags.is_capitalized(),
             ));
@@ -455,40 +463,98 @@ impl PerspectiveEngine {
         members: &[&dyn TemplateEntity],
         effective_viewer: &str,
         params: &EntityRefParams<'_>,
+        stance: crate::models::ActorStance,
     ) {
         let (viewer_entity, visible) = crate::models::partition_group(members, effective_viewer);
 
-        let has_viewer = viewer_entity.is_some();
-        let total_visible = visible.len() + usize::from(has_viewer);
+        let total_visible = visible.len() + usize::from(viewer_entity.is_some());
         if total_visible == 0 {
             return;
         }
 
-        let mut formatted_names = Vec::with_capacity(total_visible);
-        if has_viewer {
-            formatted_names.push(std::borrow::Cow::Borrowed("you"));
+        let mut ends_with_possessive_pronoun = false;
+        let mut decomposed_we = false;
+        let mut formatted_names = Vec::with_capacity(total_visible + 1);
+        if let Some(v) = viewer_entity {
+            if stance == crate::models::ActorStance::SecondPerson {
+                if params.flags.is_possessive() {
+                    formatted_names.push(std::borrow::Cow::Borrowed("your"));
+                    if visible.is_empty() {
+                        ends_with_possessive_pronoun = true;
+                    }
+                } else {
+                    formatted_names.push(std::borrow::Cow::Borrowed("you"));
+                }
+            } else if stance == crate::models::ActorStance::FirstPerson && v.is_plural() {
+                if visible.is_empty() {
+                    if params.flags.is_possessive() {
+                        formatted_names.push(std::borrow::Cow::Borrowed("our"));
+                        ends_with_possessive_pronoun = true;
+                    } else {
+                        formatted_names.push(std::borrow::Cow::Borrowed("we"));
+                    }
+                } else {
+                    decomposed_we = true;
+                    if params.flags.is_possessive() {
+                        formatted_names.push(std::borrow::Cow::Borrowed("your"));
+                    } else {
+                        formatted_names.push(std::borrow::Cow::Borrowed("you"));
+                    }
+                }
+            }
         }
 
+        let will_append_my = if let Some(v) = viewer_entity
+            && stance == crate::models::ActorStance::FirstPerson
+            && (!v.is_plural() || decomposed_we)
+        {
+            true
+        } else {
+            false
+        };
+
+        let distribute_possessives = viewer_entity.is_some() && params.flags.is_possessive();
+
         for (m, name) in visible {
-            if let Some(resolved_art) = params.article.as_ref().and_then(|art| {
-                resolve_article(
-                    art,
-                    &name,
-                    m.is_proper_noun_for(effective_viewer),
-                    m.is_plural(),
-                    params.flags.force_article(),
-                )
-            }) {
-                formatted_names.push(std::borrow::Cow::Owned(format!("{resolved_art}{name}")));
-                continue;
+            let mut final_name = if let Some(resolved_art) =
+                params.article.as_ref().and_then(|art| {
+                    resolve_article(
+                        art,
+                        &name,
+                        m.is_proper_noun_for(effective_viewer),
+                        m.is_plural(),
+                        params.flags.force_article(),
+                    )
+                }) {
+                std::borrow::Cow::Owned(format!("{resolved_art}{name}"))
+            } else {
+                name
+            };
+
+            if distribute_possessives {
+                let suffix = Self::get_possessive_suffix(&final_name, m.is_plural());
+                let mut owned = final_name.into_owned();
+                owned.push_str(suffix);
+                final_name = std::borrow::Cow::Owned(owned);
             }
-            formatted_names.push(name);
+
+            formatted_names.push(final_name);
+        }
+
+        if will_append_my {
+            if params.flags.is_possessive() {
+                formatted_names.push(std::borrow::Cow::Borrowed("my"));
+                ends_with_possessive_pronoun = true;
+            } else {
+                formatted_names.push(std::borrow::Cow::Borrowed("I"));
+            }
         }
 
         let list_str = crate::grammar::format_oxford_list(formatted_names);
 
         let mut final_str = list_str.into_owned();
-        if params.flags.is_possessive() {
+        if params.flags.is_possessive() && !ends_with_possessive_pronoun && !distribute_possessives
+        {
             final_str.push_str(Self::get_possessive_suffix(&final_str, entity.is_plural()));
         }
 
@@ -559,8 +625,8 @@ impl PerspectiveEngine {
 
         let is_active_subject = ctx.active_subject.borrow().as_deref() == Some(key.as_str());
 
-        // Check if this entity is the current subject of the narrative.
-        let already_seen = ctx.last_mentioned.borrow().as_deref() == Some(key.as_str());
+        // Check if this entity has been introduced to the narrative context yet.
+        let already_seen = ctx.recent_entities.borrow().iter().any(|r| r.key == *key);
 
         let is_reflexive = p_type == "reflex";
 
@@ -577,17 +643,26 @@ impl PerspectiveEngine {
             let mut ambiguous = false;
             for other in ctx.recent_entities.borrow().iter() {
                 if other.key != *key {
-                    let other_is_viewer = if *force_3rd_person {
-                        other.is_viewer_forced
+                    let other_is_viewer = if *force_3rd_person
+                        || ctx.stance == crate::models::ActorStance::ThirdPerson
+                    {
+                        other
+                            .flags
+                            .contains(crate::models::RecentEntityFlags::IS_VIEWER_FORCED)
                     } else {
-                        other.is_viewer_normal
+                        other
+                            .flags
+                            .contains(crate::models::RecentEntityFlags::IS_VIEWER_NORMAL)
                     };
 
                     // If another character isn't the viewer ("you") but shares the exact
                     // same gender and plurality, a pronoun like "he" or "they" is ambiguous.
                     if !other_is_viewer
                         && entity.gender() == other.gender
-                        && entity.is_plural() == other.is_plural
+                        && entity.is_plural()
+                            == other
+                                .flags
+                                .contains(crate::models::RecentEntityFlags::IS_PLURAL)
                     {
                         ambiguous = true;
                         break;
@@ -607,7 +682,13 @@ impl PerspectiveEngine {
                 track_recent_entity(ctx, key, entity);
             }
 
-            let pronoun = resolve_pronoun(entity.gender(), p_type, is_viewer, entity.is_plural())?;
+            let pronoun = resolve_pronoun(
+                entity.gender(),
+                p_type,
+                is_viewer,
+                entity.is_plural(),
+                ctx.stance,
+            )?;
             push_capitalized_if(raw_output, pronoun, *is_capitalized);
         } else {
             // Smart Anaphora Resolution: The entity hasn't been introduced yet, or a pronoun would be ambiguous!
@@ -662,6 +743,7 @@ impl PerspectiveEngine {
             *is_capitalized,
             is_viewer,
             is_plural,
+            ctx.stance,
         );
         raw_output.push_str(&conjugated);
         Ok(())
@@ -922,15 +1004,39 @@ fn push_capitalized_if(output: &mut String, text: &str, should_capitalize: bool)
 #[inline]
 fn track_recent_entity(ctx: &RenderContext<'_>, key: &str, entity: &dyn TemplateEntity) {
     let mut recents = ctx.recent_entities.borrow_mut();
-    if !recents.iter().any(|r| r.key == key) {
+
+    // Move to the back to represent the most recently used (LRU)
+    if let Some(pos) = recents.iter().position(|r| r.key == key) {
+        let item = recents.remove(pos);
+        recents.push(item);
+    } else {
+        let mut flags = crate::models::RecentEntityFlags::empty();
+        if entity.is_plural() {
+            flags |= crate::models::RecentEntityFlags::IS_PLURAL;
+        }
+        if entity.contains_viewer(ctx.viewer_id) {
+            flags |= crate::models::RecentEntityFlags::IS_VIEWER_NORMAL;
+        }
+        if entity.contains_viewer(crate::models::NULL_VIEWER) {
+            flags |= crate::models::RecentEntityFlags::IS_VIEWER_FORCED;
+        }
+
         recents.push(crate::models::RecentEntity {
             key: key.to_string(),
             gender: entity.gender(),
-            is_plural: entity.is_plural(),
-            is_viewer_normal: entity.contains_viewer(ctx.viewer_id),
-            is_viewer_forced: entity.contains_viewer(crate::models::NULL_VIEWER),
+            flags,
         });
     }
+
+    // Enforce the anaphora memory capacity limit
+    let mut last_mentioned = ctx.last_mentioned.borrow_mut();
+    let mut active_subject = ctx.active_subject.borrow_mut();
+    crate::models::enforce_anaphora_limit(
+        ctx.anaphora_limit,
+        &mut recents,
+        &mut last_mentioned,
+        &mut active_subject,
+    );
 }
 
 #[inline]
@@ -987,12 +1093,30 @@ fn create_entity_ref(
 }
 
 #[inline]
-const fn viewer_name(is_possessive: bool, is_capitalized: bool) -> &'static str {
-    match (is_possessive, is_capitalized) {
-        (true, true) => "Your",
-        (true, false) => "your",
-        (false, true) => "You",
-        (false, false) => "you",
+const fn viewer_name(
+    stance: crate::models::ActorStance,
+    is_plural: bool,
+    is_possessive: bool,
+    is_capitalized: bool,
+) -> &'static str {
+    match stance {
+        crate::models::ActorStance::FirstPerson => match (is_plural, is_possessive, is_capitalized)
+        {
+            (false, true, true) => "My",
+            (false, true, false) => "my",
+            (false, false, _) => "I",
+            (true, true, true) => "Our",
+            (true, true, false) => "our",
+            (true, false, true) => "We",
+            (true, false, false) => "we",
+        },
+        crate::models::ActorStance::SecondPerson => match (is_possessive, is_capitalized) {
+            (true, true) => "Your",
+            (true, false) => "your",
+            (false, true) => "You",
+            (false, false) => "you",
+        },
+        crate::models::ActorStance::ThirdPerson => "",
     }
 }
 
@@ -1056,7 +1180,7 @@ fn validate_property_segments(
 
 #[inline]
 fn effective_viewer_id<'a>(ctx: &RenderContext<'a>, force_3rd_person: bool) -> &'a str {
-    if force_3rd_person {
+    if force_3rd_person || ctx.stance == crate::models::ActorStance::ThirdPerson {
         NULL_VIEWER
     } else {
         ctx.viewer_id

@@ -222,6 +222,7 @@ dependencies = [
 name = "mud_perspective"
 version = "0.1.0"
 dependencies = [
+ "bitflags",
  "in_definite",
  "moka",
  "phf",

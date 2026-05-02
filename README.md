@@ -97,9 +97,35 @@ let output_director = render_msg!("char_3", &template, "source" => &player, "tar
 // Output: "Aldran watches as the goblin approaches."
 ```
 
+### **2.1 Configuring Actor Stance**
+
+By default, the engine uses the Second Person for the active viewer ("You walk forward"). You can change this behavior at render time by configuring the `RenderContext` with an `ActorStance`.
+
+```rust
+use mud_perspective::models::{ActorStance, RenderContext};
+
+// Second Person (Default)
+let ctx_second = RenderContext::new("char_1").with_entity("source", &player);
+// Output: "You walk forward."
+
+// First Person
+let ctx_first = RenderContext::new("char_1")
+    .with_stance(ActorStance::FirstPerson)
+    .with_entity("source", &player);
+// Output: "I walk forward."
+
+// Third Person
+let ctx_third = RenderContext::new("char_1")
+    .with_stance(ActorStance::ThirdPerson)
+    .with_entity("source", &player);
+// Output: "Aldran walks forward."
+```
+
 ### 3. Handling Groups and Swarms
 
 The library provides a built-in `GroupEntity` to easily represent dynamic groups of characters or objects. It automatically handles Oxford comma formatting, injects "you" if the viewer is in the group, and evaluates as plural so verbs and pronouns automatically conjugate correctly ("attack" instead of "attacks", "themselves", etc.).
+
+Furthermore, the engine implements grammatical rules for mixed-person groups. If a group evaluates in the First Person alongside other entities, it decomposes and orders the pronouns (e.g., `"You, the goblin, and I"`). It also distributes joint possessive suffixes across the list if a possessive pronoun is involved (e.g., `"your, the goblin's, and my gold"`), and collapses mixed-group objective pronouns into `"us"`.
 
 ```rust
 use mud_perspective::models::GroupEntity;
@@ -107,15 +133,16 @@ use mud_perspective::models::GroupEntity;
 let party = GroupEntity { members: vec![&player, &ally] };
 let template = cache.get_or_compile("{source} [source:open] the door.").unwrap();
 
-// Player's Perspective: "You and Bob open the door."
+// Player's Perspective (Second Person): "You and Bob open the door."
+// Player's Perspective (First Person): "Bob and I open the door."
 // Bystander's Perspective: "Aldran and Bob open the door."
 ```
 
 ### **4. Syntax Reference**
 
 * **Entities:** {key} inserts the entity's display name. Use {Key} to force capitalization mid-sentence. Prepend a plus (`{+key}`) to force the engine to render the character's 3rd-person name (Director Stance) even if the viewer is that character.
-* **Nested Properties:** Use dot-notation (e.g., `{source.weapon}`) to dynamically traverse nested entities. The parent entity must implement `get_property`. Nested properties seamlessly inherit all formatting rules for articles, pronouns, and possessive suffixes.
-* **Possessive Nouns:** Append `'s` to any entity tag (e.g., `{source's}` or `{the:source's}`) to dynamically generate the correct possessive noun suffix. If the entity is the viewer, it automatically renders as "your". Plural entities ending in "s" (like "wolves") will correctly render with just an apostrophe ("wolves'").
+* **Nested Properties:** Use dot-notation (e.g., `{source.weapon}`) to dynamically traverse nested entities. The parent entity must implement `get_property`. Nested properties inherit all formatting rules for articles, pronouns, and possessive suffixes.
+* **Possessive Nouns:** Append `'s` to any entity tag (e.g., `{source's}` or `{the:source's}`) to dynamically generate the correct possessive noun suffix. If the entity is the viewer, it automatically renders as "your" or "my". Plural entities ending in "s" (like "wolves") will correctly render with just an apostrophe ("wolves'"). Group Entities distribute possessives across all members if mixed with a pronoun (e.g., "your and the goblin's"), or append to the final item (e.g., "Aldran and the goblin's").
 * **Articles / Demonstratives:** {a:key}, {the:key}, {this:key}, or {that:key} prepends the appropriate word. Indefinite articles ("a") automatically adapt to "some" for plural entities, and demonstratives automatically adapt to plural ("these", "those"). Use {A:key}, {The:key}, etc. to force capitalization mid-sentence. These are automatically suppressed if the entity evaluates to the viewer ("you") or is flagged as a proper noun. You can force an article to render for a proper noun by prepending a plus sign (e.g., `{+this:key}`).
 * **Pronouns:** {key:type}. Supported types include subj (he/she/it/they), obj (him/her/it/them), poss (his/her/their), abs_poss (his/hers/theirs), and reflex (himself/themselves). Capitalize the type (e.g., {key:Subj}) to force capitalization mid-sentence. Prepend a plus (`{+key:subj}`) to force a 3rd-person pronoun (e.g., he/she/it/they) even if the viewer is the entity. The engine features automatic Anaphora Resolution to prevent pronoun ambiguity (see Section 5).
 
@@ -125,13 +152,15 @@ let template = cache.get_or_compile("{source} [source:open] the door.").unwrap()
 
 ### **5. Smart Pronouns & Anaphora Resolution**
 
-The engine features a highly intelligent Anaphora Resolution system. It allows you to write templates almost entirely with pronouns (e.g., `{target:Subj} [target:look] at {target:reflex}.`), and dynamically decides when to introduce the full name ("The goblin looks at itself.") and when to safely use pronouns ("It looks at itself.").
+The engine features an Anaphora Resolution system. It allows you to write templates almost entirely with pronouns (e.g., `{target:Subj} [target:look] at {target:reflex}.`), and dynamically decides when to introduce the full name ("The goblin looks at itself.") and when to use pronouns ("It looks at itself.").
 
-* **How it Triggers:** Whenever the engine encounters a pronoun tag, it checks the context's memory. If the entity hasn't been introduced yet, it will seamlessly expand the pronoun into a fully formatted noun (including definite articles or possessive suffixes, like `the goblin's`).
-* **Ambiguity Detection:** In plain terms, the engine behaves like a reader. If a pronoun is requested for an entity that isn't the active subject, the engine evaluates the "cast" of recently mentioned characters. If any other recently mentioned character shares the exact same grammatical gender and plurality (e.g., two male characters in the same sentence), the engine recognizes that outputting "He" would confuse the reader. It safely falls back to the full name to guarantee absolute clarity.
+* **How it Triggers:** Whenever the engine encounters a pronoun tag, it checks the context's memory. If the entity hasn't been introduced yet, it will expand the pronoun into a fully formatted noun (including definite articles or possessive suffixes, like `the goblin's`).
+* **Ambiguity Detection:** In plain terms, the engine behaves like a reader. If a pronoun is requested for an entity that isn't the active subject, the engine evaluates the "cast" of recently mentioned characters. If any other recently mentioned character shares the exact same grammatical gender and plurality (e.g., two male characters in the same sentence), the engine recognizes that outputting "He" would confuse the reader. It falls back to the full name to guarantee clarity.
 * **Cross-Context Memory:** The anaphora memory lives inside the `RenderContext`. 
-  * **Chaining:** You can safely render multiple templates in a row using the same context, and the engine will maintain perfect narrative continuity across the templates.
-  * **Game Ticks:** If your game loop spans across multiple server ticks or async events, you can extract the narrative focus using `ctx.last_mentioned()` and inject it into a brand new context later using `RenderContext::new(...).with_last_mentioned(&subject_key)`.
+  * **Chaining:** You can render multiple templates in a row using the same context, and the engine will maintain narrative continuity across the templates.
+  * **Game Ticks:** If your game loop spans across multiple server ticks or async events, you can extract the full narrative state using `let state = ctx.extract_anaphora()` and inject it into a brand new context later using `RenderContext::new(...).with_anaphora(state)`. This ensures ambiguity detection carries over.
+* **Memory Limits (LRU):** To prevent memory from growing unbounded during extremely long, continuous encounters, the anaphora memory acts as a Least-Recently-Used (LRU) cache defaulting to 15 entities. You can configure this limit using `ctx.with_anaphora_limit(size)`.
+* **Pinning & Manual Control:** In crowded scenarios, important characters might get pushed out of the LRU cache by a flurry of secondary actors. Protect them by pinning them into memory using `ctx.with_pinned_entity("key")` or `ctx.pin_anaphora("key")`. You can unpin them using `ctx.unpin_anaphora("key")`. You can also explicitly remove entities using `ctx.without_anaphora("key")` or `ctx.forget_anaphora("key")`.
 * **Resetting Memory:** To manually clear the engine's memory, call `ctx.clear_anaphora()`. You should do this whenever narrative continuity is broken to prevent awkward, lingering pronoun references. Good times to call this include:
   * When a player moves to a new room or area.
   * When a significant amount of time passes between events.
@@ -140,7 +169,7 @@ The engine features a highly intelligent Anaphora Resolution system. It allows y
 
 #### **Example: Multi-Sentence Combat Log**
 
-Using pronouns and active subject tracking allows builders to write fluid, multi-sentence descriptions that organically adapt to any combination of actors.
+Using pronouns and active subject tracking allows builders to write multi-sentence descriptions that adapt to any combination of actors.
 
 ```rust
 let template = cache.get_or_compile(

@@ -1,4 +1,4 @@
-use crate::models::Gender;
+use crate::models::{ActorStance, Gender};
 use phf::phf_map;
 use std::borrow::Cow;
 
@@ -80,6 +80,22 @@ static VIEWER_PLURAL_PRONOUNS: PronounSet = PronounSet {
     reflex: "yourselves",
 };
 
+static FIRST_PERSON_SINGULAR_PRONOUNS: PronounSet = PronounSet {
+    subj: "I",
+    obj: "me",
+    poss: "my",
+    abs_poss: "mine",
+    reflex: "myself",
+};
+
+static FIRST_PERSON_PLURAL_PRONOUNS: PronounSet = PronounSet {
+    subj: "we",
+    obj: "us",
+    poss: "our",
+    abs_poss: "ours",
+    reflex: "ourselves",
+};
+
 /// Returns the correct pronoun based on gender, type, and perspective.
 ///
 /// # Errors
@@ -89,12 +105,24 @@ pub fn resolve_pronoun(
     p_type: &str,
     is_viewer: bool,
     is_plural: bool,
+    stance: ActorStance,
 ) -> Result<&'static str, String> {
     let (pronoun_set, context) = if is_viewer {
-        let set = if is_plural {
-            &VIEWER_PLURAL_PRONOUNS
-        } else {
-            &VIEWER_SINGULAR_PRONOUNS
+        let set = match stance {
+            ActorStance::FirstPerson => {
+                if is_plural {
+                    &FIRST_PERSON_PLURAL_PRONOUNS
+                } else {
+                    &FIRST_PERSON_SINGULAR_PRONOUNS
+                }
+            }
+            _ => {
+                if is_plural {
+                    &VIEWER_PLURAL_PRONOUNS
+                } else {
+                    &VIEWER_SINGULAR_PRONOUNS
+                }
+            }
         };
         (set, "Actor Stance")
     } else {
@@ -125,18 +153,34 @@ pub fn conjugate_verb<'a>(
     is_capitalized: bool,
     is_viewer: bool,
     is_plural: bool,
+    stance: ActorStance,
 ) -> Cow<'a, str> {
-    // 1st/2nd person (viewer) AND 3rd-person plural subjects use the base uninflected verb,
-    // EXCEPT for the highly irregular verb "to be" which becomes "are".
-    if is_viewer || is_plural {
+    if is_viewer {
+        if stance == ActorStance::FirstPerson && !is_plural {
+            if lower_verb == "be" {
+                return format_verb("am", is_capitalized);
+            }
+            if lower_verb == "was" {
+                return format_verb("was", is_capitalized);
+            }
+        } else {
+            if lower_verb == "be" {
+                return format_verb("are", is_capitalized);
+            }
+            if lower_verb == "was" {
+                return format_verb("were", is_capitalized);
+            }
+        }
+        return Cow::Borrowed(original_verb);
+    }
+
+    if is_plural {
         if lower_verb == "be" {
             return format_verb("are", is_capitalized);
         }
         if lower_verb == "was" {
             return format_verb("were", is_capitalized);
         }
-        // If you want strict 1st person singular ("I am") you can split `is_viewer` logic later,
-        // but for Actor Stance ("You"), "are" is always correct.
         return Cow::Borrowed(original_verb);
     }
 
