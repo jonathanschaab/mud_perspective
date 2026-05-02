@@ -1289,12 +1289,20 @@ mod tests {
             is_plural: false,
             is_proper_noun: false,
         };
+        let jill = MockEntity {
+            id: "char_4".to_string(),
+            name: "Jill".to_string(),
+            gender: Gender::Female,
+            is_plural: false,
+            is_proper_noun: true,
+        };
 
         let cache = TemplateCache::new(100);
         let ctx = RenderContext::new("viewer")
             .with_entity("bob", &bob)
             .with_entity("aldran", &aldran)
-            .with_entity("goblin", &goblin);
+            .with_entity("goblin", &goblin)
+            .with_entity("jill", &jill);
 
         // 1. Unambiguous object reference (Goblin -> Neutral, Aldran -> Male)
         let t1 = cache
@@ -1311,6 +1319,19 @@ mod tests {
             .unwrap();
         let out2 = PerspectiveEngine::render(&t2, &ctx).unwrap();
         assert_eq!(out2, "Bob hits Aldran. Aldran smiles.");
+
+        // 3. Ambiguous object reference with 3+ entities (Jill -> Female, Bob -> Male, Aldran -> Male)
+        // Active subject is Jill. Target is Aldran. Jill is Female, Aldran is Male (unambiguous vs subject).
+        // BUT Bob is Male. So "He" is ambiguous between Bob and Aldran.
+        ctx.clear_anaphora();
+        let t3 = cache
+            .get_or_compile(
+                "{jill} [jill:tell] {bob} about {aldran}. {aldran:Subj} [aldran:smile].",
+            )
+            .unwrap();
+        let out3 = PerspectiveEngine::render(&t3, &ctx).unwrap();
+        // Because Bob is in the `recent_entities` memory, "He" is correctly bypassed!
+        assert_eq!(out3, "Jill tells Bob about Aldran. Aldran smiles.");
     }
 
     #[test]

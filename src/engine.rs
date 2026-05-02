@@ -82,8 +82,7 @@ impl Template {
             let remainder = &raw[i..];
 
             #[cfg(any(feature = "mxp", feature = "msp", feature = "ansi"))]
-            if let Some(end_offset) = find_skipped_tag_end(remainder) {
-                advance_chars_until(&mut chars, i + end_offset);
+            if skip_protocol_tags(&mut chars, remainder, i).is_some() {
                 continue;
             }
 
@@ -192,13 +191,12 @@ impl Template {
             // 1-part case: {key}
             let (p1_str, force_3rd_person, is_possessive) = parse_entity_modifiers(p1);
 
-            if p1_str.is_empty() {
-                return Err(validation_error(
-                    "Entity tag has an empty key",
-                    content,
-                    '{',
-                ));
-            }
+            reject_if(
+                p1_str.is_empty(),
+                "Entity tag has an empty key",
+                content,
+                '{',
+            )?;
             create_entity_ref(
                 p1_str,
                 None,
@@ -215,13 +213,12 @@ impl Template {
         let (p1_str, force_3rd_person) = parse_stance_prefixes(p1);
 
         let (subject_key, base_verb) = if let Some(p2) = p2_opt {
-            if p1_str.is_empty() {
-                return Err(validation_error(
-                    "Verb tag has an empty subject key",
-                    content,
-                    '[',
-                ));
-            }
+            reject_if(
+                p1_str.is_empty(),
+                "Verb tag has an empty subject key",
+                content,
+                '[',
+            )?;
             validate_property_segments(
                 p1_str,
                 "Verb tag has an empty property segment",
@@ -348,6 +345,7 @@ impl PerspectiveEngine {
         params: &EntityRefParams<'_>,
     ) -> Result<(), String> {
         update_memory(&ctx.last_mentioned, params.key);
+        track_recent_entity(ctx, params.key);
 
         let entity = Self::get_entity(ctx, params.key)?;
         let effective_viewer = effective_viewer_id(ctx, params.force_3rd_person);
@@ -448,8 +446,7 @@ impl PerspectiveEngine {
             let remainder = &input[i..];
 
             #[cfg(any(feature = "mxp", feature = "msp", feature = "ansi"))]
-            if let Some(end_offset) = find_skipped_tag_end(remainder) {
-                advance_chars_until(&mut chars, i + end_offset);
+            if skip_protocol_tags(&mut chars, remainder, i).is_some() {
                 continue;
             }
 
@@ -500,20 +497,23 @@ impl PerspectiveEngine {
         let mut can_use_pronoun = is_active_subject || is_viewer || is_reflexive;
 
         if !can_use_pronoun && already_seen {
-            let unambiguous = if let Some(subj_key) = ctx.active_subject.borrow().as_deref() {
-                if let Ok(subj_entity) = Self::get_entity(ctx, subj_key) {
-                    let subj_is_viewer = subj_entity.contains_viewer(effective_viewer);
-                    is_viewer != subj_is_viewer
-                        || entity.gender() != subj_entity.gender()
-                        || entity.is_plural() != subj_entity.is_plural()
-                } else {
-                    true
+            let mut ambiguous = false;
+            for other_key in ctx.recent_entities.borrow().iter() {
+                if other_key != key
+                    && let Ok(other_entity) = Self::get_entity(ctx, other_key)
+                {
+                    let other_is_viewer = other_entity.contains_viewer(effective_viewer);
+                    if !other_is_viewer
+                        && entity.gender() == other_entity.gender()
+                        && entity.is_plural() == other_entity.is_plural()
+                    {
+                        ambiguous = true;
+                        break;
+                    }
                 }
-            } else {
-                true
-            };
+            }
 
-            if unambiguous {
+            if !ambiguous {
                 can_use_pronoun = true;
             }
         }
@@ -521,6 +521,7 @@ impl PerspectiveEngine {
         if can_use_pronoun {
             if !already_seen {
                 update_memory(&ctx.last_mentioned, key);
+                track_recent_entity(ctx, key);
             }
 
             let pronoun = resolve_pronoun(entity.gender(), p_type, is_viewer, entity.is_plural())?;
@@ -622,9 +623,8 @@ impl PerspectiveEngine {
 
             // 1, 2, & 3. Skip MXP Tags, MSP Triggers, and ANSI Escape Sequences
             #[cfg(any(feature = "mxp", feature = "msp", feature = "ansi"))]
-            if let Some(end_offset) = find_skipped_tag_end(remainder) {
+            if let Some(end_offset) = skip_protocol_tags(&mut chars, remainder, i) {
                 output.push_str(&remainder[..=end_offset]);
-                advance_chars_until(&mut chars, i + end_offset);
                 skipped_tag = true;
             }
 
@@ -706,6 +706,21 @@ fn consume_until_closed(
     }
 
     Ok(end_idx)
+}
+
+#[cfg(any(feature = "mxp", feature = "msp", feature = "ansi"))]
+#[inline]
+fn skip_protocol_tags(
+    chars: &mut std::iter::Peekable<std::str::CharIndices<'_>>,
+    remainder: &str,
+    i: usize,
+) -> Option<usize> {
+    if let Some(end_offset) = find_skipped_tag_end(remainder) {
+        advance_chars_until(chars, i + end_offset);
+        Some(end_offset)
+    } else {
+        None
+    }
 }
 
 #[cfg(any(feature = "mxp", feature = "msp", feature = "ansi"))]
@@ -792,9 +807,7 @@ fn split_tag<'a>(
     let mut parts = content.split(':');
     let p1 = parts.next().unwrap_or_default();
     let p2 = parts.next();
-    if parts.next().is_some() {
-        return Err(validation_error(malformed_msg, content, open_char));
-    }
+    reject_if(parts.next().is_some(), malformed_msg, content, open_char)?;
     Ok((p1, p2))
 }
 
@@ -811,6 +824,14 @@ fn push_capitalized_if(output: &mut String, text: &str, should_capitalize: bool)
         output.push_str(&crate::grammar::capitalize_first(text));
     } else {
         output.push_str(text);
+    }
+}
+
+#[inline]
+fn track_recent_entity(ctx: &RenderContext<'_>, key: &str) {
+    let mut recents = ctx.recent_entities.borrow_mut();
+    if !recents.iter().any(|k| k == key) {
+        recents.push(key.to_string());
     }
 }
 
@@ -883,17 +904,32 @@ fn is_capitalized(s: &str) -> bool {
 }
 
 #[inline]
+fn reject_if(
+    condition: bool,
+    error_msg: &str,
+    content: &str,
+    open_char: char,
+) -> Result<(), String> {
+    if condition {
+        Err(validation_error(error_msg, content, open_char))
+    } else {
+        Ok(())
+    }
+}
+
+#[inline]
 fn validate_property_segments(
     path: &str,
     error_msg: &str,
     content: &str,
     open_char: char,
 ) -> Result<(), String> {
-    if path.split('.').any(str::is_empty) {
-        Err(validation_error(error_msg, content, open_char))
-    } else {
-        Ok(())
-    }
+    reject_if(
+        path.split('.').any(str::is_empty),
+        error_msg,
+        content,
+        open_char,
+    )
 }
 
 #[inline]

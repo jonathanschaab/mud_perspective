@@ -108,6 +108,9 @@ pub struct RenderContext<'a> {
     /// Tracks the active subject of the current clause (set by verb tags).
     /// Ensures possessive pronouns naturally bind to the subject of the sentence.
     pub active_subject: RefCell<Option<String>>,
+    /// Tracks all entities mentioned since the last anaphora clear.
+    /// Used to detect ambiguous pronoun collisions between any non-subject entities.
+    pub recent_entities: RefCell<Vec<String>>,
 }
 
 impl<'a> RenderContext<'a> {
@@ -122,6 +125,7 @@ impl<'a> RenderContext<'a> {
             entities: HashMap::new(),
             last_mentioned: RefCell::new(None),
             active_subject: RefCell::new(None),
+            recent_entities: RefCell::new(Vec::new()),
         }
     }
 
@@ -144,6 +148,7 @@ impl<'a> RenderContext<'a> {
     #[must_use]
     pub fn with_last_mentioned(self, key: &str) -> Self {
         *self.last_mentioned.borrow_mut() = Some(key.to_string());
+        self.recent_entities.borrow_mut().push(key.to_string());
         self
     }
 
@@ -160,6 +165,7 @@ impl<'a> RenderContext<'a> {
     pub fn clear_anaphora(&self) {
         *self.last_mentioned.borrow_mut() = None;
         *self.active_subject.borrow_mut() = None;
+        self.recent_entities.borrow_mut().clear();
     }
 }
 
