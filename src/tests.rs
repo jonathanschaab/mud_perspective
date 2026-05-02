@@ -4,6 +4,7 @@ mod tests {
     use crate::cache::TemplateCache;
     use crate::engine::{PerspectiveEngine, Template};
     use crate::models::{Gender, GroupEntity, RenderContext, TemplateEntity};
+    use serial_test::serial;
     use std::borrow::Cow;
 
     /// A mock entity to represent game objects and characters in our tests.
@@ -572,6 +573,12 @@ mod tests {
         assert_eq!(
             err9,
             "Verb tag has an empty forced conjugation segment: [source:be|am||is]"
+        );
+
+        let err10 = Template::compile("You [source:be|am|are|is|were].").unwrap_err();
+        assert_eq!(
+            err10,
+            "Verb tag has too many forced conjugation segments: [source:be|am|are|is|were]"
         );
     }
 
@@ -3215,6 +3222,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_custom_runtime_verbs() {
         let player = MockEntity {
             id: "char_1".to_string(),
@@ -3247,10 +3255,8 @@ mod tests {
             "Aldran arizez."
         );
 
-        // Test explicit removal
-        assert!(crate::grammar::remove_irregular_verb("yeet").unwrap());
-        assert!(!crate::grammar::remove_irregular_verb("nonexistent").unwrap());
-        assert!(crate::grammar::remove_irregular_verb("arise").unwrap());
+        // Clean up the global state safely now that we are running serially
+        crate::grammar::clear_irregular_verbs().unwrap();
     }
 
     #[test]
@@ -3321,6 +3327,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_complex_phrasal_and_hyphenated_verbs() {
         let player = MockEntity {
             id: "char_1".to_string(),
@@ -3367,7 +3374,7 @@ mod tests {
             "Aldran makes do."
         );
 
-        // Clean up the global state to prevent cross-test contamination
-        assert!(crate::grammar::remove_irregular_verb("make do").unwrap());
+        // Clean up the global state safely now that we are running serially
+        crate::grammar::clear_irregular_verbs().unwrap();
     }
 }

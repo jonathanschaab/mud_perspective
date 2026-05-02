@@ -277,12 +277,13 @@ pub fn conjugate_verb<'a>(
         let first_word_lower = &lower_verb[..space_idx];
         let remainder = &original_verb[space_idx..];
 
-        let conjugated_first = conjugate_3rd_person_singular(
-            first_word_original,
-            first_word_lower,
-            is_capitalized,
-            &custom_map,
-        );
+        let conjugated_first = if let Some(irregular) = custom_map.get(first_word_lower) {
+            format_verb(irregular, is_capitalized)
+        } else if let Some(&irregular) = IRREGULAR_VERBS.get(first_word_lower) {
+            format_verb(irregular, is_capitalized)
+        } else {
+            conjugate_regular_verb(first_word_original, first_word_lower)
+        };
 
         let mut s = conjugated_first.into_owned();
         s.push_str(remainder);
@@ -290,25 +291,10 @@ pub fn conjugate_verb<'a>(
     }
 
     // 4. Standard fallback for single words
-    conjugate_3rd_person_singular(original_verb, lower_verb, is_capitalized, &custom_map)
+    conjugate_regular_verb(original_verb, lower_verb)
 }
 
-fn conjugate_3rd_person_singular<'a>(
-    original_verb: &'a str,
-    lower_verb: &'a str,
-    is_capitalized: bool,
-    custom_map: &HashMap<String, String>,
-) -> Cow<'a, str> {
-    // Re-check dictionaries for the isolated first word if we split a phrasal verb
-    if let Some(irregular) = custom_map.get(lower_verb) {
-        return Cow::Owned(format_verb(irregular, is_capitalized).into_owned());
-    }
-
-    if let Some(&irregular) = IRREGULAR_VERBS.get(lower_verb) {
-        return format_verb(irregular, is_capitalized);
-    }
-
-    // Fallback algorithmic suffix rules
+fn conjugate_regular_verb<'a>(original_verb: &'a str, lower_verb: &'a str) -> Cow<'a, str> {
     if lower_verb.len() > 1 && lower_verb.ends_with('y') && !is_vowel_before_y(lower_verb) {
         let trimmed = &original_verb[..original_verb.len() - 1];
         Cow::Owned(format!("{trimmed}ies"))

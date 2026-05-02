@@ -45,7 +45,8 @@ pub enum Token {
         is_capitalized: bool,
         /// A flag indicating if the builder explicitly forced 3rd-person conjugation (e.g. [+source:pulse]).
         force_3rd_person: bool,
-        /// A sequence of explicit overrides that bypasses the algorithm entirely (e.g., `[source:be|am|are|is]`).
+        /// A sequence of explicit overrides that bypasses the algorithm entirely (e.g., `["am", "are", "is"]` from `[source:be|am|are|is]`).
+        /// Note: This vector does not include the base verb itself, which is stored in `original_verb`.
         forced_conjugation: Option<Vec<String>>,
     },
 }
@@ -252,6 +253,15 @@ impl Template {
                     '[',
                 )?;
             }
+            // Note: `v` (the base verb) was already split off above via `split_once('|')`.
+            // Therefore, `parts` only contains the forced overrides (e.g., `["am", "are", "is"]`).
+            // A maximum of 3 overrides is allowed, representing the 3 grammatical groups in English.
+            reject_if(
+                parts.len() > 3,
+                "Verb tag has too many forced conjugation segments",
+                content,
+                '[',
+            )?;
             (v, Some(parts))
         } else {
             (verb_part, None)
@@ -751,8 +761,9 @@ impl PerspectiveEngine {
         };
 
         let conjugated = if let Some(forced) = forced_conjugation {
+            // Note: `forced` only contains the override segments, not the base verb.
+            // e.g., for `[source:be|am|are|is]`, `forced.len()` is exactly 3.
             let forced_str = match forced.len() {
-                1 => &forced[0],
                 2 => {
                     if !is_viewer && !is_plural {
                         &forced[1]
@@ -760,7 +771,7 @@ impl PerspectiveEngine {
                         &forced[0]
                     }
                 }
-                _ => {
+                3 => {
                     if is_viewer
                         && ctx.stance == crate::models::ActorStance::FirstPerson
                         && !is_plural
@@ -772,6 +783,7 @@ impl PerspectiveEngine {
                         &forced[1]
                     }
                 }
+                _ => &forced[0],
             };
             crate::grammar::format_verb(forced_str, *is_capitalized)
         } else {
