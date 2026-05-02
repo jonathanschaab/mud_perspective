@@ -277,8 +277,12 @@ pub fn conjugate_verb<'a>(
         let first_word_lower = &lower_verb[..space_idx];
         let remainder = &original_verb[space_idx..];
 
-        let conjugated_first =
-            conjugate_3rd_person_singular(first_word_original, first_word_lower, is_capitalized);
+        let conjugated_first = conjugate_3rd_person_singular(
+            first_word_original,
+            first_word_lower,
+            is_capitalized,
+            &custom_map,
+        );
 
         let mut s = conjugated_first.into_owned();
         s.push_str(remainder);
@@ -286,16 +290,16 @@ pub fn conjugate_verb<'a>(
     }
 
     // 4. Standard fallback for single words
-    conjugate_3rd_person_singular(original_verb, lower_verb, is_capitalized)
+    conjugate_3rd_person_singular(original_verb, lower_verb, is_capitalized, &custom_map)
 }
 
 fn conjugate_3rd_person_singular<'a>(
     original_verb: &'a str,
     lower_verb: &'a str,
     is_capitalized: bool,
+    custom_map: &HashMap<String, String>,
 ) -> Cow<'a, str> {
     // Re-check dictionaries for the isolated first word if we split a phrasal verb
-    let custom_map = get_custom_verbs().load();
     if let Some(irregular) = custom_map.get(lower_verb) {
         return Cow::Owned(format_verb(irregular, is_capitalized).into_owned());
     }

@@ -773,7 +773,7 @@ impl PerspectiveEngine {
                     }
                 }
             };
-            crate::grammar::format_verb(forced_str, *is_capitalized).into_owned()
+            crate::grammar::format_verb(forced_str, *is_capitalized)
         } else {
             conjugate_verb(
                 original_verb,
@@ -783,7 +783,6 @@ impl PerspectiveEngine {
                 is_plural,
                 ctx.stance,
             )
-            .into_owned()
         };
         raw_output.push_str(&conjugated);
         Ok(())

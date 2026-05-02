@@ -4,10 +4,10 @@ use std::fs::File;
 use std::io::{BufReader, BufWriter, Write};
 use std::path::Path;
 
-fn main() {
-    let out_dir = env::var("OUT_DIR").unwrap();
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let out_dir = env::var("OUT_DIR")?;
     let path = Path::new(&out_dir).join("irregular_verbs.rs");
-    let mut file = BufWriter::new(File::create(&path).unwrap());
+    let mut file = BufWriter::new(File::create(&path)?);
 
     let mut map = phf_codegen::Map::new();
     let mut keys = HashSet::new();
@@ -36,24 +36,22 @@ fn main() {
     // Helper macro to read and insert verbs from a JSON file
     macro_rules! process_file {
         ($file_path:expr) => {
-            if let Ok(file_in) = File::open($file_path) {
-                let reader = BufReader::new(file_in);
-                if let Ok(verbs) = serde_json::from_reader::<_, Vec<Vec<Option<String>>>>(reader) {
-                    for entry in verbs {
-                        if entry.len() >= 2 {
-                            if let (Some(base), Some(third_person)) = (&entry[0], &entry[1]) {
-                                insert(base, third_person);
-                            }
-                        }
-                        if entry.len() >= 3 {
-                            if let Some(past) = &entry[2] {
-                                // Inserting the past tense form natively maps [source:ran] to 'ran'
-                                insert(past, past);
-                            }
-                        }
+            println!("cargo:rerun-if-changed={}", $file_path);
+            let file_in = File::open($file_path)?;
+            let reader = BufReader::new(file_in);
+            let verbs: Vec<Vec<Option<String>>> = serde_json::from_reader(reader)?;
+            for entry in verbs {
+                if entry.len() >= 2 {
+                    if let (Some(base), Some(third_person)) = (&entry[0], &entry[1]) {
+                        insert(base, third_person);
                     }
                 }
-                println!("cargo:rerun-if-changed={}", $file_path);
+                if entry.len() >= 3 {
+                    if let Some(past) = &entry[2] {
+                        // Inserting the past tense form natively maps [source:ran] to 'ran'
+                        insert(past, past);
+                    }
+                }
             }
         };
     }
@@ -66,6 +64,6 @@ fn main() {
         &mut file,
         "#[allow(clippy::unreadable_literal)]\nstatic IRREGULAR_VERBS: phf::Map<&'static str, &'static str> = {};",
         map.build()
-    )
-    .unwrap();
+    )?;
+    Ok(())
 }
