@@ -2603,7 +2603,9 @@ mod tests {
 
         // 2. Ambiguous Group Pronoun (Monsters and Party are both Plural)
         let t2 = cache
-            .get_or_compile("{the:monsters} [monsters:ambush] {party}. {party:Subj} [party:retaliate]!")
+            .get_or_compile(
+                "{the:monsters} [monsters:ambush] {party}. {party:Subj} [party:retaliate]!",
+            )
             .unwrap();
         let ctx2 = RenderContext::new("char_3")
             .with_entity("party", &party)
