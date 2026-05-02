@@ -443,14 +443,15 @@ impl PerspectiveEngine {
     fn get_last_visible_char(input: &str) -> Option<char> {
         #[cfg(not(any(feature = "mxp", feature = "msp", feature = "ansi")))]
         {
-            input.trim_end().chars().last()
+            input.trim_end().chars().next_back()
         }
 
         #[cfg(any(feature = "mxp", feature = "msp", feature = "ansi"))]
         {
-            // Fast-path: If no protocol triggers exist, use Rust's native O(1) reverse iterator
+            // Fast-path: If no protocol triggers exist, use Rust's native reverse iterator.
+            // (SIMD pre-scan is highly optimized, and next_back() evaluates from the end).
             if !has_protocol_tags(input) {
-                return input.trim_end().chars().last();
+                return input.trim_end().chars().next_back();
             }
 
             let mut chars = input.char_indices().peekable();
