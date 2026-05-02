@@ -21,6 +21,18 @@ pub enum Gender {
     Plural,
 }
 
+/// The grammatical stance used to refer to the viewing entity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ActorStance {
+    /// Refers to the viewer in the first person ("I", "me", "my").
+    FirstPerson,
+    /// Refers to the viewer in the second person ("you", "your"). This is the default.
+    #[default]
+    SecondPerson,
+    /// Refers to the viewer in the third person by their name (Director Stance).
+    ThirdPerson,
+}
+
 /// A generic trait implemented by game objects to allow them to be referenced
 /// dynamically within text templates.
 ///
@@ -98,6 +110,12 @@ pub trait TemplateEntity {
 pub struct RenderContext<'a> {
     /// The unique identifier of the entity actively reading the text.
     pub viewer_id: &'a str,
+    /// The narrative stance used to refer to the viewing entity.
+    pub stance: ActorStance,
+    /// The maximum number of entities to track for anaphora resolution before evicting the oldest.
+    /// Defaults to 15. Set to 0 for unbounded growth.
+    /// If all entities in memory are pinned, this limit will be temporarily exceeded to preserve narrative continuity.
+    pub anaphora_limit: usize,
     /// A mapping of template syntax keys (e.g., "source") to their actual game entities.
     /// Keys are normalized to lowercase by the engine, so ensure your builder mapping uses lowercase keys.
     pub entities: HashMap<&'a str, &'a dyn TemplateEntity>,
@@ -113,18 +131,44 @@ pub struct RenderContext<'a> {
     pub recent_entities: RefCell<Vec<RecentEntity>>,
 }
 
+bitflags::bitflags! {
+    /// Flags representing cached boolean properties of a recently mentioned entity.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct RecentEntityFlags: u8 {
+        /// The cached grammatical plurality.
+        const IS_PLURAL = 1 << 0;
+        /// Cached result of `contains_viewer` for the standard viewer ID.
+        const IS_VIEWER_NORMAL = 1 << 1;
+        /// Cached result of `contains_viewer` for the forced Director Stance (`NULL_VIEWER`).
+        const IS_VIEWER_FORCED = 1 << 2;
+        /// Whether this entity is protected from automatic LRU eviction.
+        const IS_PINNED = 1 << 3;
+    }
+}
+
 /// Cached properties of a recently mentioned entity to avoid redundant trait method calls.
+#[derive(Debug, Clone)]
 pub struct RecentEntity {
     /// The template key of the entity.
     pub key: String,
     /// The cached grammatical gender.
     pub gender: Gender,
-    /// The cached grammatical plurality.
-    pub is_plural: bool,
-    /// Cached result of `contains_viewer` for the standard viewer ID.
-    pub is_viewer_normal: bool,
-    /// Cached result of `contains_viewer` for the forced Director Stance (`NULL_VIEWER`).
-    pub is_viewer_forced: bool,
+    /// The cached boolean flags for this entity.
+    pub flags: RecentEntityFlags,
+}
+
+/// A snapshot of the engine's anaphora resolution memory.
+///
+/// Used to transfer perfect narrative continuity (including ambiguity detection)
+/// across different rendering contexts or server ticks.
+#[derive(Debug, Clone, Default)]
+pub struct AnaphoraState {
+    /// The key of the last mentioned entity.
+    pub last_mentioned: Option<String>,
+    /// The key of the active subject in the current clause.
+    pub active_subject: Option<String>,
+    /// A cache of recently introduced entities to prevent pronoun collisions.
+    pub recent_entities: Vec<RecentEntity>,
 }
 
 impl<'a> RenderContext<'a> {
@@ -136,11 +180,28 @@ impl<'a> RenderContext<'a> {
     pub fn new(viewer_id: &'a str) -> Self {
         Self {
             viewer_id,
+            stance: ActorStance::SecondPerson,
+            anaphora_limit: 15,
             entities: HashMap::new(),
             last_mentioned: RefCell::new(None),
             active_subject: RefCell::new(None),
             recent_entities: RefCell::new(Vec::new()),
         }
+    }
+
+    /// Configures the actor stance for the rendering context.
+    #[must_use]
+    pub fn with_stance(mut self, stance: ActorStance) -> Self {
+        self.stance = stance;
+        self
+    }
+
+    /// Configures the maximum number of recent entities to track for pronoun ambiguity resolution.
+    /// The memory operates as a Least-Recently-Used (LRU) cache.
+    #[must_use]
+    pub fn with_anaphora_limit(mut self, limit: usize) -> Self {
+        self.anaphora_limit = limit;
+        self
     }
 
     /// Adds an entity mapping to the context using a fluent builder pattern.
@@ -154,6 +215,23 @@ impl<'a> RenderContext<'a> {
         self
     }
 
+    /// Pins an entity in the anaphora memory so it will never be automatically evicted.
+    ///
+    /// If the number of pinned entities exceeds the anaphora limit, the limit will be
+    /// temporarily bypassed to prevent eviction.
+    #[must_use]
+    pub fn with_pinned_entity(self, key: &str) -> Self {
+        self.pin_anaphora(key);
+        self
+    }
+
+    /// Explicitly removes an entity from the anaphora memory.
+    #[must_use]
+    pub fn without_anaphora(self, key: &str) -> Self {
+        self.forget_anaphora(key);
+        self
+    }
+
     /// Manually sets the most recently mentioned entity for anaphora resolution.
     ///
     /// This allows builders to chain templates together while preserving pronoun
@@ -164,16 +242,60 @@ impl<'a> RenderContext<'a> {
         *self.last_mentioned.borrow_mut() = Some(key.to_string());
         if let Some(entity) = self.entities.get(key) {
             let mut recents = self.recent_entities.borrow_mut();
-            if !recents.iter().any(|r| r.key == key) {
+
+            // Refresh position if already present (LRU)
+            if let Some(pos) = recents.iter().position(|r| r.key == key) {
+                let item = recents.remove(pos);
+                recents.push(item);
+            } else {
+                let mut flags = RecentEntityFlags::empty();
+                flags.set(RecentEntityFlags::IS_PLURAL, entity.is_plural());
+                flags.set(
+                    RecentEntityFlags::IS_VIEWER_NORMAL,
+                    entity.contains_viewer(self.viewer_id),
+                );
+                flags.set(
+                    RecentEntityFlags::IS_VIEWER_FORCED,
+                    entity.contains_viewer(NULL_VIEWER),
+                );
+
                 recents.push(RecentEntity {
                     key: key.to_string(),
                     gender: entity.gender(),
-                    is_plural: entity.is_plural(),
-                    is_viewer_normal: entity.contains_viewer(self.viewer_id),
-                    is_viewer_forced: entity.contains_viewer(NULL_VIEWER),
+                    flags,
                 });
             }
+
+            // Enforce capacity
+            let mut last_mentioned = self.last_mentioned.borrow_mut();
+            let mut active_subject = self.active_subject.borrow_mut();
+            enforce_anaphora_limit(
+                self.anaphora_limit,
+                &mut recents,
+                &mut last_mentioned,
+                &mut active_subject,
+            );
         }
+        self
+    }
+
+    /// Extracts a full snapshot of the current anaphora memory state.
+    #[must_use]
+    pub fn extract_anaphora(&self) -> AnaphoraState {
+        AnaphoraState {
+            last_mentioned: self.last_mentioned.borrow().clone(),
+            active_subject: self.active_subject.borrow().clone(),
+            recent_entities: self.recent_entities.borrow().clone(),
+        }
+    }
+
+    /// Injects a previously extracted anaphora state to resume narrative continuity.
+    /// This replaces any current anaphora state in the context.
+    #[must_use]
+    pub fn with_anaphora(self, state: AnaphoraState) -> Self {
+        *self.last_mentioned.borrow_mut() = state.last_mentioned;
+        *self.active_subject.borrow_mut() = state.active_subject;
+        *self.recent_entities.borrow_mut() = state.recent_entities;
         self
     }
 
@@ -191,6 +313,69 @@ impl<'a> RenderContext<'a> {
         *self.last_mentioned.borrow_mut() = None;
         *self.active_subject.borrow_mut() = None;
         self.recent_entities.borrow_mut().clear();
+    }
+
+    /// Pins an entity in the anaphora memory so it will never be automatically evicted.
+    ///
+    /// If the number of pinned entities exceeds the anaphora limit, the limit will be
+    /// temporarily bypassed to prevent eviction.
+    pub fn pin_anaphora(&self, key: &str) {
+        if let Some(entity) = self.entities.get(key) {
+            let mut recents = self.recent_entities.borrow_mut();
+            if let Some(pos) = recents.iter().position(|r| r.key == key) {
+                let mut item = recents.remove(pos);
+                item.flags |= RecentEntityFlags::IS_PINNED;
+                recents.push(item);
+            } else {
+                let mut flags = RecentEntityFlags::IS_PINNED;
+                flags.set(RecentEntityFlags::IS_PLURAL, entity.is_plural());
+                flags.set(
+                    RecentEntityFlags::IS_VIEWER_NORMAL,
+                    entity.contains_viewer(self.viewer_id),
+                );
+                flags.set(
+                    RecentEntityFlags::IS_VIEWER_FORCED,
+                    entity.contains_viewer(NULL_VIEWER),
+                );
+
+                recents.push(RecentEntity {
+                    key: key.to_string(),
+                    gender: entity.gender(),
+                    flags,
+                });
+            }
+            let mut last_mentioned = self.last_mentioned.borrow_mut();
+            let mut active_subject = self.active_subject.borrow_mut();
+            enforce_anaphora_limit(
+                self.anaphora_limit,
+                &mut recents,
+                &mut last_mentioned,
+                &mut active_subject,
+            );
+        }
+    }
+
+    /// Unpins an entity in the anaphora memory, allowing it to be evicted naturally.
+    pub fn unpin_anaphora(&self, key: &str) {
+        if let Some(item) = self
+            .recent_entities
+            .borrow_mut()
+            .iter_mut()
+            .find(|r| r.key == key)
+        {
+            item.flags.remove(RecentEntityFlags::IS_PINNED);
+        }
+    }
+
+    /// Explicitly removes a specific entity from the anaphora memory.
+    pub fn forget_anaphora(&self, key: &str) {
+        if self.last_mentioned.borrow().as_deref() == Some(key) {
+            *self.last_mentioned.borrow_mut() = None;
+        }
+        if self.active_subject.borrow().as_deref() == Some(key) {
+            *self.active_subject.borrow_mut() = None;
+        }
+        self.recent_entities.borrow_mut().retain(|r| r.key != key);
     }
 }
 
@@ -350,5 +535,34 @@ impl TemplateEntity for GroupEntity<'_> {
     fn is_proper_noun_for(&self, viewer_id: &str) -> bool {
         self.single_leaf_member()
             .is_none_or(|m| m.is_proper_noun_for(viewer_id))
+    }
+}
+
+#[inline]
+pub(crate) fn enforce_anaphora_limit(
+    limit: usize,
+    recents: &mut Vec<RecentEntity>,
+    last_mentioned: &mut Option<String>,
+    active_subject: &mut Option<String>,
+) {
+    if limit > 0 {
+        while recents.len() > limit {
+            // Remove the oldest unpinned entity.
+            if let Some(pos) = recents
+                .iter()
+                .position(|r| !r.flags.contains(RecentEntityFlags::IS_PINNED))
+            {
+                let removed = recents.remove(pos);
+                if last_mentioned.as_deref() == Some(removed.key.as_str()) {
+                    *last_mentioned = None;
+                }
+                if active_subject.as_deref() == Some(removed.key.as_str()) {
+                    *active_subject = None;
+                }
+            } else {
+                // Everything is pinned, we must allow memory to exceed the normal limit.
+                break;
+            }
+        }
     }
 }

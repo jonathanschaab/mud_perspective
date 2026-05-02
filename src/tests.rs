@@ -1208,10 +1208,10 @@ mod tests {
             is_proper_noun: false,
         };
 
-        let gnome = MockEntity {
+        let slime = MockEntity {
             id: "mob_2".to_string(),
-            name: "gnome".to_string(),
-            gender: Gender::Male,
+            name: "slime".to_string(),
+            gender: Gender::Neutral,
             is_plural: false,
             is_proper_noun: false,
         };
@@ -1219,7 +1219,7 @@ mod tests {
         let cache = TemplateCache::new(100);
         let ctx = RenderContext::new("char_2")
             .with_entity("target", &goblin)
-            .with_entity("other", &gnome);
+            .with_entity("other", &slime);
 
         // 1. First time using a pronoun tag: Automatically expands to the full name!
         let t1 = cache
@@ -1248,11 +1248,11 @@ mod tests {
             )
             .unwrap();
         let out4 = PerspectiveEngine::render(&t4, &ctx).unwrap();
-        // Because the gnome was the last entity mentioned, the pronoun for the target (goblin)
-        // would be ambiguous. The engine must safely expand it back to "The goblin".
+        // Because the slime (Neutral) was just introduced, the pronoun for the target (goblin, also Neutral)
+        // is now ambiguous. The engine must safely expand it back to "The goblin" to prevent confusion.
         assert_eq!(
             out4,
-            "The goblin enters. The gnome blinks. The goblin screams."
+            "The goblin enters. The slime blinks. The goblin screams."
         );
 
         // 5. Reflexive pronouns explicitly bypass Anaphora resolution.
@@ -1263,7 +1263,7 @@ mod tests {
             .unwrap();
 
         let out5 = PerspectiveEngine::render(&t5, &ctx).unwrap();
-        assert_eq!(out5, "The gnome's sword falls, and he cuts himself.");
+        assert_eq!(out5, "The slime's sword falls, and it cuts itself.");
     }
 
     #[test]
@@ -1431,15 +1431,289 @@ mod tests {
         let ctx1 = RenderContext::new("char_2").with_entity("target", &goblin);
         let _ = PerspectiveEngine::render(&t1, &ctx1).unwrap();
 
-        // Extract the subject from context 1 and inject it into a brand new context 2
-        let subject = ctx1.last_mentioned().unwrap();
+        // Extract the full narrative state from context 1 and inject it into a brand new context 2
+        let state = ctx1.extract_anaphora();
         let ctx2 = RenderContext::new("char_2")
             .with_entity("target", &goblin)
-            .with_last_mentioned(&subject);
+            .with_anaphora(state);
 
         let out2 = PerspectiveEngine::render(&t2, &ctx2).unwrap();
         // The engine natively uses "It" instead of "The goblin" because the context was seeded!
         assert_eq!(out2, "It looks around.");
+    }
+
+    #[test]
+    fn test_anaphora_state_preserves_ambiguity() {
+        let aldran = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+        let bob = MockEntity {
+            id: "char_2".to_string(),
+            name: "Bob".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+
+        let cache = TemplateCache::new(100);
+        let t1 = cache
+            .get_or_compile("{bob} is standing next to {aldran}.")
+            .unwrap();
+        let t2 = cache
+            .get_or_compile("{aldran:Subj} [aldran:wave].")
+            .unwrap();
+
+        // Render the first sentence
+        let ctx1 = RenderContext::new("viewer")
+            .with_entity("aldran", &aldran)
+            .with_entity("bob", &bob);
+        let out1 = PerspectiveEngine::render(&t1, &ctx1).unwrap();
+        assert_eq!(out1, "Bob is standing next to Aldran.");
+
+        // Carry the state over to context 2
+        let state = ctx1.extract_anaphora();
+        let ctx2 = RenderContext::new("viewer")
+            .with_entity("aldran", &aldran)
+            .with_entity("bob", &bob)
+            .with_anaphora(state);
+
+        // Because the state includes Bob in the recent_entities memory, the engine knows
+        // that Aldran and Bob are both male and prevents the ambiguous "He waves."
+        let out2 = PerspectiveEngine::render(&t2, &ctx2).unwrap();
+        assert_eq!(out2, "Aldran waves.");
+    }
+
+    #[test]
+    fn test_anaphora_memory_limit() {
+        let aldran = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+        let bob = MockEntity {
+            id: "char_2".to_string(),
+            name: "Bob".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+        let goblin = MockEntity {
+            id: "mob_1".to_string(),
+            name: "goblin".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+
+        // We set the memory limit to 2 for this test
+        let ctx = RenderContext::new("viewer")
+            .with_anaphora_limit(2)
+            .with_entity("aldran", &aldran)
+            .with_entity("bob", &bob)
+            .with_entity("goblin", &goblin);
+
+        // 1. Introduce Aldran and Bob (Memory: Aldran, Bob)
+        let _ = PerspectiveEngine::render(
+            &cache
+                .get_or_compile("{aldran} [aldran:wave] at {bob}.")
+                .unwrap(),
+            &ctx,
+        )
+        .unwrap();
+
+        // 2. Introduce the goblin (Memory: Bob, Goblin). Aldran is evicted!
+        let _ = PerspectiveEngine::render(
+            &cache
+                .get_or_compile("{the:goblin} [goblin:approach].")
+                .unwrap(),
+            &ctx,
+        )
+        .unwrap();
+
+        // 3. Request a pronoun for Bob. He is still in memory, so he is safely remembered as the subject.
+        let out_bob = PerspectiveEngine::render(
+            &cache.get_or_compile("{bob:Subj} [bob:smile].").unwrap(),
+            &ctx,
+        )
+        .unwrap();
+        assert_eq!(out_bob, "He smiles.");
+
+        // 4. Request a pronoun for Aldran. Because he was evicted, the engine forgot he was Male,
+        // and must fall back to his name!
+        let out_aldran = PerspectiveEngine::render(
+            &cache
+                .get_or_compile("{aldran:Subj} [aldran:sigh].")
+                .unwrap(),
+            &ctx,
+        )
+        .unwrap();
+        assert_eq!(out_aldran, "Aldran sighs.");
+    }
+
+    #[test]
+    fn test_pinned_and_forgotten_anaphora() {
+        let m1 = MockEntity {
+            id: "m1".to_string(),
+            name: "Bob".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+        let m2 = MockEntity {
+            id: "m2".to_string(),
+            name: "Tom".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+        let m3 = MockEntity {
+            id: "m3".to_string(),
+            name: "Jim".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+        let m4 = MockEntity {
+            id: "m4".to_string(),
+            name: "Dan".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+
+        let cache = TemplateCache::new(100);
+
+        // Limit is 2. We pin Bob, then push him past the limit by introducing Tom, Jim, and Dan.
+        let ctx = RenderContext::new("viewer")
+            .with_anaphora_limit(2)
+            .with_entity("bob", &m1)
+            .with_entity("tom", &m2)
+            .with_entity("jim", &m3)
+            .with_entity("dan", &m4)
+            .with_pinned_entity("bob"); // Bob is pinned to memory!
+
+        let _ = PerspectiveEngine::render(&cache.get_or_compile("{tom} arrives.").unwrap(), &ctx)
+            .unwrap();
+        let _ = PerspectiveEngine::render(&cache.get_or_compile("{jim} arrives.").unwrap(), &ctx)
+            .unwrap();
+        let _ = PerspectiveEngine::render(&cache.get_or_compile("{dan} arrives.").unwrap(), &ctx)
+            .unwrap();
+
+        // Dan was the last mentioned. Bob is NOT the last mentioned, but is pinned in memory.
+        // Memory has Dan (Male) and Bob (Male). Both are male. Bob's pronoun "He" is correctly recognized as ambiguous!
+        let out_bob = PerspectiveEngine::render(
+            &cache.get_or_compile("{bob:Subj} [bob:smile].").unwrap(),
+            &ctx,
+        )
+        .unwrap();
+        assert_eq!(out_bob, "Bob smiles.");
+
+        // Now we explicitly forget Dan. The only male in memory is Bob.
+        ctx.forget_anaphora("dan");
+
+        // Now "He" for Bob should be unambiguous!
+        let out_bob2 = PerspectiveEngine::render(
+            &cache.get_or_compile("{bob:Subj} [bob:wave].").unwrap(),
+            &ctx,
+        )
+        .unwrap();
+        assert_eq!(out_bob2, "He waves.");
+
+        // Now unpin Bob and let him naturally evict.
+        ctx.unpin_anaphora("bob");
+
+        // Add Tom, Jim, Dan to push Bob out of the LRU cache
+        let _ = PerspectiveEngine::render(&cache.get_or_compile("{tom} arrives.").unwrap(), &ctx)
+            .unwrap();
+        let _ = PerspectiveEngine::render(&cache.get_or_compile("{jim} arrives.").unwrap(), &ctx)
+            .unwrap();
+        let _ = PerspectiveEngine::render(&cache.get_or_compile("{dan} arrives.").unwrap(), &ctx)
+            .unwrap();
+
+        // Now memory should be [Jim, Dan]. Bob is gone.
+        // Requesting Bob's pronoun will just treat him as a newly introduced entity and print his name.
+        let out_bob3 = PerspectiveEngine::render(
+            &cache.get_or_compile("{bob:Subj} [bob:nod].").unwrap(),
+            &ctx,
+        )
+        .unwrap();
+        assert_eq!(out_bob3, "Bob nods.");
+    }
+
+    #[test]
+    fn test_all_pinned_entities_exceed_limit() {
+        let m1 = MockEntity {
+            id: "m1".to_string(),
+            name: "Bob".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+        let m2 = MockEntity {
+            id: "m2".to_string(),
+            name: "Tom".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+        let m3 = MockEntity {
+            id: "m3".to_string(),
+            name: "Jim".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+
+        let cache = TemplateCache::new(100);
+
+        // Limit is 2. We pin 3 entities.
+        let ctx = RenderContext::new("viewer")
+            .with_anaphora_limit(2)
+            .with_entity("bob", &m1)
+            .with_entity("tom", &m2)
+            .with_entity("jim", &m3)
+            .with_pinned_entity("bob")
+            .with_pinned_entity("tom")
+            .with_pinned_entity("jim");
+
+        // Verify that all 3 pinned entities are retained, exceeding the limit of 2.
+        assert_eq!(ctx.recent_entities.borrow().len(), 3);
+
+        // Add an unpinned entity to trigger another eviction check
+        let m4 = MockEntity {
+            id: "m4".to_string(),
+            name: "Dan".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+        let ctx = ctx.with_entity("dan", &m4);
+        let _ = PerspectiveEngine::render(&cache.get_or_compile("{dan} arrives.").unwrap(), &ctx)
+            .unwrap();
+
+        // The limit is still 2. The anaphora check sees 4 entities, but 3 are pinned.
+        // It will evict Dan immediately because he is the only unpinned entity.
+        assert_eq!(ctx.recent_entities.borrow().len(), 3);
+
+        // Verify Dan was evicted and the remaining 3 are the pinned ones
+        let keys: Vec<String> = ctx
+            .recent_entities
+            .borrow()
+            .iter()
+            .map(|r| r.key.clone())
+            .collect();
+        assert!(!keys.contains(&"dan".to_string()));
+        assert!(keys.contains(&"bob".to_string()));
+        assert!(keys.contains(&"tom".to_string()));
+        assert!(keys.contains(&"jim".to_string()));
     }
 
     #[test]
@@ -1839,5 +2113,800 @@ mod tests {
         // Singular ending in 's' followed by multiple spaces -> expects 's
         let out_boss = render_msg!("char_2", &template, "target" => &boss_spaced).unwrap();
         assert_eq!(out_boss, "You take the boss   's gold.");
+    }
+
+    #[test]
+    fn test_actor_stances() {
+        let player = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+
+        let cache = TemplateCache::new(100);
+        let template = cache
+            .get_or_compile("{source} [source:walk] forward.")
+            .unwrap();
+
+        // Second Person (Default)
+        let out_second = render_msg!("char_1", &template, "source" => &player).unwrap();
+        assert_eq!(out_second, "You walk forward.");
+
+        // First Person
+        let ctx_first = RenderContext::new("char_1")
+            .with_stance(crate::models::ActorStance::FirstPerson)
+            .with_entity("source", &player);
+        let out_first = PerspectiveEngine::render(&template, &ctx_first).unwrap();
+        assert_eq!(out_first, "I walk forward.");
+
+        // Third Person
+        let ctx_third = RenderContext::new("char_1")
+            .with_stance(crate::models::ActorStance::ThirdPerson)
+            .with_entity("source", &player);
+        let out_third = PerspectiveEngine::render(&template, &ctx_third).unwrap();
+        assert_eq!(out_third, "Aldran walks forward.");
+    }
+
+    #[test]
+    fn test_first_person_conjugation_and_pronouns() {
+        let player = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+
+        let cache = TemplateCache::new(100);
+
+        let template_be = cache
+            .get_or_compile("{source} [source:be] looking for {source:poss} sword.")
+            .unwrap();
+        let ctx_first = RenderContext::new("char_1")
+            .with_stance(crate::models::ActorStance::FirstPerson)
+            .with_entity("source", &player);
+        assert_eq!(
+            PerspectiveEngine::render(&template_be, &ctx_first).unwrap(),
+            "I am looking for my sword."
+        );
+
+        let template_was = cache
+            .get_or_compile("Before, {source} [source:was] looking.")
+            .unwrap();
+        assert_eq!(
+            PerspectiveEngine::render(&template_was, &ctx_first).unwrap(),
+            "Before, I was looking."
+        );
+    }
+
+    #[test]
+    fn test_group_entities_with_stances() {
+        let player = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+        let ally = MockEntity {
+            id: "char_2".to_string(),
+            name: "Bob".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+        let party = GroupEntity {
+            members: vec![&player, &ally],
+        };
+
+        let cache = TemplateCache::new(100);
+        let template = cache
+            .get_or_compile("{source} [source:open] the door.")
+            .unwrap();
+
+        // First Person
+        let ctx_first = RenderContext::new("char_1")
+            .with_stance(crate::models::ActorStance::FirstPerson)
+            .with_entity("source", &party);
+        assert_eq!(
+            PerspectiveEngine::render(&template, &ctx_first).unwrap(),
+            "Bob and I open the door."
+        );
+
+        // Third Person
+        let ctx_third = RenderContext::new("char_1")
+            .with_stance(crate::models::ActorStance::ThirdPerson)
+            .with_entity("source", &party);
+        assert_eq!(
+            PerspectiveEngine::render(&template, &ctx_third).unwrap(),
+            "Aldran and Bob open the door."
+        );
+    }
+
+    #[test]
+    fn test_anaphora_with_stances() {
+        let player = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+        let goblin = MockEntity {
+            id: "mob_1".to_string(),
+            name: "goblin".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+        let template = cache
+            .get_or_compile(
+                "{source} [source:hit] {the:target}. {target:Subj} [target:hit] {source:obj} back.",
+            )
+            .unwrap();
+
+        // First Person
+        let ctx_first = RenderContext::new("char_1")
+            .with_stance(crate::models::ActorStance::FirstPerson)
+            .with_entity("source", &player)
+            .with_entity("target", &goblin);
+        assert_eq!(
+            PerspectiveEngine::render(&template, &ctx_first).unwrap(),
+            "I hit the goblin. It hits me back."
+        );
+
+        // Third Person
+        let ctx_third = RenderContext::new("char_1")
+            .with_stance(crate::models::ActorStance::ThirdPerson)
+            .with_entity("source", &player)
+            .with_entity("target", &goblin);
+        assert_eq!(
+            PerspectiveEngine::render(&template, &ctx_third).unwrap(),
+            "Aldran hits the goblin. It hits him back."
+        );
+    }
+
+    #[test]
+    fn test_forced_stance_overrides_first_person() {
+        let player = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+
+        let cache = TemplateCache::new(100);
+        let template = cache
+            .get_or_compile("{+source} [+source:draw] {+source:poss} sword.")
+            .unwrap();
+
+        let ctx_first = RenderContext::new("char_1")
+            .with_stance(crate::models::ActorStance::FirstPerson)
+            .with_entity("source", &player);
+
+        // The '+' prefix should safely override the First Person 'I/my' back to 'Aldran/his'
+        assert_eq!(
+            PerspectiveEngine::render(&template, &ctx_first).unwrap(),
+            "Aldran draws his sword."
+        );
+    }
+
+    #[test]
+    fn test_all_pronoun_cases_with_stances() {
+        let player = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+        let ally = MockEntity {
+            id: "char_2".to_string(),
+            name: "Bob".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+        let goblin = MockEntity {
+            id: "mob_1".to_string(),
+            name: "goblin".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+
+        let party = GroupEntity {
+            members: vec![&player, &ally],
+        };
+
+        let cache = TemplateCache::new(100);
+        let template = cache
+            .get_or_compile("{source:Subj} [source:defend] {source:reflex}. {The:target} [target:strike] {source:obj}. It is {source:poss} fight, the victory is {source:abs_poss}!")
+            .unwrap();
+
+        // 1. First Person Singular
+        let ctx_first = RenderContext::new("char_1")
+            .with_stance(crate::models::ActorStance::FirstPerson)
+            .with_entity("source", &player)
+            .with_entity("target", &goblin);
+        assert_eq!(
+            PerspectiveEngine::render(&template, &ctx_first).unwrap(),
+            "I defend myself. The goblin strikes me. It is my fight, the victory is mine!"
+        );
+
+        // 2. First Person Plural
+        let ctx_first_plural = RenderContext::new("char_1")
+            .with_stance(crate::models::ActorStance::FirstPerson)
+            .with_entity("source", &party)
+            .with_entity("target", &goblin);
+        assert_eq!(
+            PerspectiveEngine::render(&template, &ctx_first_plural).unwrap(),
+            "We defend ourselves. The goblin strikes us. It is our fight, the victory is ours!"
+        );
+
+        // 3. Second Person Singular
+        let ctx_second = RenderContext::new("char_1")
+            .with_stance(crate::models::ActorStance::SecondPerson)
+            .with_entity("source", &player)
+            .with_entity("target", &goblin);
+        assert_eq!(
+            PerspectiveEngine::render(&template, &ctx_second).unwrap(),
+            "You defend yourself. The goblin strikes you. It is your fight, the victory is yours!"
+        );
+
+        // 4. Third Person Singular
+        // By seeding the context with "source", we suppress the anaphora fallback to explicitly test 3rd-person pronouns.
+        let ctx_third = RenderContext::new("char_1")
+            .with_stance(crate::models::ActorStance::ThirdPerson)
+            .with_entity("source", &player)
+            .with_entity("target", &goblin)
+            .with_last_mentioned("source");
+        assert_eq!(
+            PerspectiveEngine::render(&template, &ctx_third).unwrap(),
+            "He defends himself. The goblin strikes him. It is his fight, the victory is his!"
+        );
+    }
+
+    #[test]
+    fn test_possessive_nouns_with_stances() {
+        let player = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+
+        let cache = TemplateCache::new(100);
+        // Tests whether `{source's}` evaluates to "my", "your", or "Aldran's"
+        let template = cache.get_or_compile("They take {source's} gold.").unwrap();
+
+        let ctx_first = RenderContext::new("char_1")
+            .with_stance(crate::models::ActorStance::FirstPerson)
+            .with_entity("source", &player);
+        assert_eq!(
+            PerspectiveEngine::render(&template, &ctx_first).unwrap(),
+            "They take my gold."
+        );
+
+        let ctx_second = RenderContext::new("char_1")
+            .with_stance(crate::models::ActorStance::SecondPerson)
+            .with_entity("source", &player);
+        assert_eq!(
+            PerspectiveEngine::render(&template, &ctx_second).unwrap(),
+            "They take your gold."
+        );
+
+        let ctx_third = RenderContext::new("char_1")
+            .with_stance(crate::models::ActorStance::ThirdPerson)
+            .with_entity("source", &player);
+        assert_eq!(
+            PerspectiveEngine::render(&template, &ctx_third).unwrap(),
+            "They take Aldran's gold."
+        );
+    }
+
+    #[test]
+    fn test_plural_viewer_first_person_stance() {
+        let wolves = MockEntity {
+            id: "mob_1".to_string(),
+            name: "wolves".to_string(),
+            gender: Gender::Plural,
+            is_plural: true,
+            is_proper_noun: false,
+        };
+        let goblin = MockEntity {
+            id: "mob_2".to_string(),
+            name: "goblin".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+        let template = cache
+            .get_or_compile("{source} [source:attack] {the:target} with {source:poss} claws!")
+            .unwrap();
+
+        let ctx = RenderContext::new("mob_1")
+            .with_stance(crate::models::ActorStance::FirstPerson)
+            .with_entity("source", &wolves)
+            .with_entity("target", &goblin);
+
+        assert_eq!(
+            PerspectiveEngine::render(&template, &ctx).unwrap(),
+            "We attack the goblin with our claws!"
+        );
+
+        // Group with plural viewer
+        let party = GroupEntity {
+            members: vec![&wolves, &goblin],
+        };
+
+        let group_template = cache
+            .get_or_compile("{the:source} [source:attack]!")
+            .unwrap();
+        let group_ctx = RenderContext::new("mob_1")
+            .with_stance(crate::models::ActorStance::FirstPerson)
+            .with_entity("source", &party);
+
+        assert_eq!(
+            PerspectiveEngine::render(&group_template, &group_ctx).unwrap(),
+            "You, the goblin, and I attack!"
+        );
+
+        // Objective pronouns
+        let obj_template = cache
+            .get_or_compile("{the:target} [target:ambush] {source:obj}!")
+            .unwrap();
+
+        // 1. Solo plural viewer
+        let obj_ctx_solo = RenderContext::new("mob_1")
+            .with_stance(crate::models::ActorStance::FirstPerson)
+            .with_entity("source", &wolves)
+            .with_entity("target", &goblin);
+
+        assert_eq!(
+            PerspectiveEngine::render(&obj_template, &obj_ctx_solo).unwrap(),
+            "The goblin ambushes us!"
+        );
+
+        // 2. Mixed group containing plural viewer
+        let obj_ctx_group = RenderContext::new("mob_1")
+            .with_stance(crate::models::ActorStance::FirstPerson)
+            .with_entity("source", &party)
+            .with_entity("target", &goblin);
+
+        // A pronoun referring to a group that includes a 1st-person viewer correctly collapses to "us"
+        assert_eq!(
+            PerspectiveEngine::render(&obj_template, &obj_ctx_group).unwrap(),
+            "The goblin ambushes us!"
+        );
+    }
+
+    #[test]
+    fn test_group_entity_possessives() {
+        let player = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+        let goblin = MockEntity {
+            id: "mob_1".to_string(),
+            name: "goblin".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+        let slime = MockEntity {
+            id: "mob_2".to_string(),
+            name: "slime".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+        let wolves = MockEntity {
+            id: "mob_3".to_string(),
+            name: "wolves".to_string(),
+            gender: Gender::Plural,
+            is_plural: true,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+
+        let mixed_party = GroupEntity {
+            members: vec![&player, &goblin],
+        };
+        let solo_party = GroupEntity {
+            members: vec![&player],
+        };
+        let big_mixed_party = GroupEntity {
+            members: vec![&player, &goblin, &slime],
+        };
+        let solo_wolves_party = GroupEntity {
+            members: vec![&wolves],
+        };
+        let mixed_wolves_party = GroupEntity {
+            members: vec![&wolves, &goblin],
+        };
+
+        let template = cache
+            .get_or_compile("You take {the:source's} gold.")
+            .unwrap();
+
+        // 1. Second Person Mixed -> "your and the goblin's"
+        let ctx_second = RenderContext::new("char_1").with_entity("source", &mixed_party);
+        assert_eq!(
+            PerspectiveEngine::render(&template, &ctx_second).unwrap(),
+            "You take your and the goblin's gold."
+        );
+
+        // 2. First Person Mixed -> "the goblin's and my"
+        let ctx_first = RenderContext::new("char_1")
+            .with_stance(crate::models::ActorStance::FirstPerson)
+            .with_entity("source", &mixed_party);
+        assert_eq!(
+            PerspectiveEngine::render(&template, &ctx_first).unwrap(),
+            "You take the goblin's and my gold."
+        );
+
+        // 3. Second Person Solo -> "your"
+        let ctx_solo_second = RenderContext::new("char_1").with_entity("source", &solo_party);
+        assert_eq!(
+            PerspectiveEngine::render(&template, &ctx_solo_second).unwrap(),
+            "You take your gold."
+        );
+
+        // 4. First Person Solo -> "my"
+        let ctx_solo_first = RenderContext::new("char_1")
+            .with_stance(crate::models::ActorStance::FirstPerson)
+            .with_entity("source", &solo_party);
+        assert_eq!(
+            PerspectiveEngine::render(&template, &ctx_solo_first).unwrap(),
+            "You take my gold."
+        );
+
+        // 5. Third Person Mixed -> "Aldran and the goblin's"
+        let ctx_third = RenderContext::new("char_2").with_entity("source", &mixed_party);
+        assert_eq!(
+            PerspectiveEngine::render(&template, &ctx_third).unwrap(),
+            "You take Aldran and the goblin's gold."
+        );
+
+        // 6. First Person Big Mixed -> "the goblin's, the slime's, and my"
+        let ctx_first_big = RenderContext::new("char_1")
+            .with_stance(crate::models::ActorStance::FirstPerson)
+            .with_entity("source", &big_mixed_party);
+        assert_eq!(
+            PerspectiveEngine::render(&template, &ctx_first_big).unwrap(),
+            "You take the goblin's, the slime's, and my gold."
+        );
+
+        // 7. Second Person Big Mixed -> "your, the goblin's, and the slime's"
+        let ctx_second_big = RenderContext::new("char_1").with_entity("source", &big_mixed_party);
+        assert_eq!(
+            PerspectiveEngine::render(&template, &ctx_second_big).unwrap(),
+            "You take your, the goblin's, and the slime's gold."
+        );
+
+        // 8. First Person Plural Solo -> "our"
+        let ctx_first_plural_solo = RenderContext::new("mob_3")
+            .with_stance(crate::models::ActorStance::FirstPerson)
+            .with_entity("source", &solo_wolves_party);
+        assert_eq!(
+            PerspectiveEngine::render(&template, &ctx_first_plural_solo).unwrap(),
+            "You take our gold."
+        );
+
+        // 9. First Person Plural Mixed -> "your, the goblin's, and my"
+        let ctx_first_plural_mixed = RenderContext::new("mob_3")
+            .with_stance(crate::models::ActorStance::FirstPerson)
+            .with_entity("source", &mixed_wolves_party);
+        assert_eq!(
+            PerspectiveEngine::render(&template, &ctx_first_plural_mixed).unwrap(),
+            "You take your, the goblin's, and my gold."
+        );
+    }
+
+    #[test]
+    fn test_group_entity_anaphora_resolution() {
+        let player = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+        let ally = MockEntity {
+            id: "char_2".to_string(),
+            name: "Bob".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+        let goblin = MockEntity {
+            id: "mob_1".to_string(),
+            name: "goblin".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+        let slime = MockEntity {
+            id: "mob_2".to_string(),
+            name: "slime".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+
+        let party = GroupEntity {
+            members: vec![&player, &ally],
+        };
+        let monsters = GroupEntity {
+            members: vec![&goblin, &slime],
+        };
+
+        let cache = TemplateCache::new(100);
+
+        // 1. Unambiguous Group Pronoun
+        let t1 = cache
+            .get_or_compile("{the:goblin} [goblin:ambush] {party}. {party:Subj} [party:retaliate]!")
+            .unwrap();
+        let ctx1 = RenderContext::new("char_3")
+            .with_entity("party", &party)
+            .with_entity("goblin", &goblin);
+
+        assert_eq!(
+            PerspectiveEngine::render(&t1, &ctx1).unwrap(),
+            "The goblin ambushes Aldran and Bob. They retaliate!"
+        );
+
+        // 2. Ambiguous Group Pronoun (Monsters and Party are both Plural)
+        let t2 = cache
+            .get_or_compile(
+                "{the:monsters} [monsters:ambush] {party}. {party:Subj} [party:retaliate]!",
+            )
+            .unwrap();
+        let ctx2 = RenderContext::new("char_3")
+            .with_entity("party", &party)
+            .with_entity("monsters", &monsters);
+
+        // The anaphora ambiguity check should safely catch the collision and fall back to the group's name.
+        assert_eq!(
+            PerspectiveEngine::render(&t2, &ctx2).unwrap(),
+            "The goblin and the slime ambush Aldran and Bob. Aldran and Bob retaliate!"
+        );
+
+        // 3. Ambiguous Group Pronoun with Viewer Included (Actor Stance)
+        // Because "you" (or "we") is unambiguous regardless of other entities, it securely bypasses ambiguity checks!
+        let ctx3 = RenderContext::new("char_1")
+            .with_entity("party", &party)
+            .with_entity("monsters", &monsters);
+
+        assert_eq!(
+            PerspectiveEngine::render(&t2, &ctx3).unwrap(),
+            "The goblin and the slime ambush you and Bob. You retaliate!"
+        );
+
+        // 4. First Person Stance with Viewer
+        let ctx4 = RenderContext::new("char_1")
+            .with_stance(crate::models::ActorStance::FirstPerson)
+            .with_entity("party", &party)
+            .with_entity("monsters", &monsters);
+
+        assert_eq!(
+            PerspectiveEngine::render(&t2, &ctx4).unwrap(),
+            "The goblin and the slime ambush Bob and I. We retaliate!"
+        );
+    }
+
+    #[test]
+    fn test_nested_group_anaphora() {
+        let aldran = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+        let bob = MockEntity {
+            id: "char_2".to_string(),
+            name: "Bob".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+        let wolves = MockEntity {
+            id: "mob_1".to_string(),
+            name: "wolves".to_string(),
+            gender: Gender::Plural,
+            is_plural: true,
+            is_proper_noun: false,
+        };
+
+        let empty_group = GroupEntity { members: vec![] };
+
+        // A nested group containing an empty group and one person.
+        // Because there is only one leaf member, it should evaluate as Singular Male!
+        let nested_solo = GroupEntity {
+            members: vec![&empty_group, &aldran],
+        };
+
+        // A nested group containing the solo group and another person.
+        // Should evaluate as Plural.
+        let nested_plural = GroupEntity {
+            members: vec![&nested_solo, &bob],
+        };
+
+        let cache = TemplateCache::new(100);
+
+        // 1. Nested Solo -> Acts as Singular Male
+        let t1 = cache
+            .get_or_compile("{the:target} [target:nod]. {target:Subj} [target:smile].")
+            .unwrap();
+        let ctx1 = RenderContext::new("viewer").with_entity("target", &nested_solo);
+        assert_eq!(
+            PerspectiveEngine::render(&t1, &ctx1).unwrap(),
+            "Aldran nods. He smiles."
+        );
+
+        // 2. Ambiguity with Nested Solo (Male) and Bob (Male)
+        let t2 = cache
+            .get_or_compile("{bob} [bob:look] at {target}. {target:Subj} [target:smile].")
+            .unwrap();
+        let ctx2 = RenderContext::new("viewer")
+            .with_entity("bob", &bob)
+            .with_entity("target", &nested_solo);
+        assert_eq!(
+            PerspectiveEngine::render(&t2, &ctx2).unwrap(),
+            "Bob looks at Aldran. Aldran smiles."
+        );
+
+        // 3. Nested Plural -> Acts as Plural
+        let t3 = cache
+            .get_or_compile("{the:party} [party:nod]. {party:Subj} [party:smile].")
+            .unwrap();
+        let ctx3 = RenderContext::new("viewer").with_entity("party", &nested_plural);
+        assert_eq!(
+            PerspectiveEngine::render(&t3, &ctx3).unwrap(),
+            "Aldran and Bob nod. They smile."
+        );
+
+        // 4. Ambiguity with Nested Plural (Plural) and Wolves (Plural)
+        let t4 = cache
+            .get_or_compile("{the:wolves} [wolves:look] at {party}. {party:Subj} [party:smile].")
+            .unwrap();
+        let ctx4 = RenderContext::new("viewer")
+            .with_entity("wolves", &wolves)
+            .with_entity("party", &nested_plural);
+        assert_eq!(
+            PerspectiveEngine::render(&t4, &ctx4).unwrap(),
+            "The wolves look at Aldran and Bob. Aldran and Bob smile."
+        );
+    }
+
+    #[test]
+    fn test_empty_anaphora_extraction_and_injection() {
+        let player = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+
+        // 1. Extract from a brand new, empty context
+        let ctx_empty = RenderContext::new("viewer");
+        let empty_state = ctx_empty.extract_anaphora();
+
+        assert!(empty_state.last_mentioned.is_none());
+        assert!(empty_state.active_subject.is_none());
+        assert!(empty_state.recent_entities.is_empty());
+
+        // 2. Inject into a new context and verify behavior
+        let cache = TemplateCache::new(100);
+        let template = cache.get_or_compile("{source:Subj} [source:nod].").unwrap();
+
+        let ctx_injected = RenderContext::new("viewer")
+            .with_entity("source", &player)
+            .with_anaphora(empty_state);
+
+        // Because the state is completely empty, it should safely fall back to the full name instead of using a pronoun.
+        let out = PerspectiveEngine::render(&template, &ctx_injected).unwrap();
+        assert_eq!(out, "Aldran nods.");
+    }
+
+    #[test]
+    fn test_empty_template_string() {
+        let cache = TemplateCache::new(100);
+        let template = cache.get_or_compile("").unwrap();
+
+        let ctx = RenderContext::new("viewer");
+        let output = PerspectiveEngine::render(&template, &ctx).unwrap();
+
+        assert_eq!(output, "");
+    }
+
+    #[test]
+    fn test_with_last_mentioned_preserves_pinned_status() {
+        let bob = MockEntity {
+            id: "m1".to_string(),
+            name: "Bob".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+        let tom = MockEntity {
+            id: "m2".to_string(),
+            name: "Tom".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+
+        let cache = TemplateCache::new(100);
+
+        let ctx = RenderContext::new("viewer")
+            .with_anaphora_limit(1) // Extremely strict limit
+            .with_entity("bob", &bob)
+            .with_entity("tom", &tom)
+            .with_pinned_entity("bob") // Bob is pinned
+            .with_last_mentioned("bob"); // Triggers the LRU refresh path
+
+        // Render Tom to force an eviction check (Memory is now [Bob, Tom])
+        let _ = PerspectiveEngine::render(&cache.get_or_compile("{tom} arrives.").unwrap(), &ctx)
+            .unwrap();
+
+        // If `with_last_mentioned` accidentally cleared Bob's flags, he would have been evicted as the oldest.
+        // Because his IS_PINNED flag was preserved, Tom (the newest but unpinned) is instantly evicted instead!
+        assert_eq!(ctx.recent_entities.borrow()[0].key, "bob");
+    }
+
+    #[test]
+    fn test_with_anaphora_preserves_pinned_status() {
+        let bob = MockEntity {
+            id: "m1".to_string(),
+            name: "Bob".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+        let tom = MockEntity {
+            id: "m2".to_string(),
+            name: "Tom".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+
+        // 1. Pin an entity and extract the state
+        let ctx1 = RenderContext::new("viewer")
+            .with_entity("bob", &bob)
+            .with_pinned_entity("bob");
+        let state = ctx1.extract_anaphora();
+
+        // 2. Inject into a new context with a strict eviction limit
+        let cache = TemplateCache::new(100);
+        let ctx2 = RenderContext::new("viewer")
+            .with_anaphora_limit(1)
+            .with_entity("bob", &bob)
+            .with_entity("tom", &tom)
+            .with_anaphora(state);
+
+        // Render Tom to force an eviction check. Memory becomes [Bob, Tom] and then limits are enforced.
+        let _ = PerspectiveEngine::render(&cache.get_or_compile("{tom} arrives.").unwrap(), &ctx2)
+            .unwrap();
+
+        // Because the state extraction/injection preserved Bob's IS_PINNED flag, Tom is evicted instead.
+        assert_eq!(ctx2.recent_entities.borrow().len(), 1);
+        assert_eq!(ctx2.recent_entities.borrow()[0].key, "bob");
     }
 }
