@@ -1698,6 +1698,76 @@ mod tests {
     }
 
     #[test]
+    fn test_deeply_nested_properties() {
+        // A simple recursive struct to easily test arbitrary nesting depths
+        struct Node {
+            name: String,
+            child: Option<Box<Node>>,
+        }
+
+        impl TemplateEntity for Node {
+            fn contains_viewer(&self, _: &str) -> bool {
+                false
+            }
+            fn gender(&self) -> Gender {
+                Gender::Neutral
+            }
+            fn is_plural(&self) -> bool {
+                false
+            }
+            fn is_proper_noun_for(&self, _: &str) -> bool {
+                false
+            }
+            fn display_name_for<'a>(&'a self, _: &str) -> Cow<'a, str> {
+                Cow::Borrowed(&self.name)
+            }
+            fn get_property(&self, property_name: &str) -> Option<&dyn TemplateEntity> {
+                if property_name == "child" {
+                    self.child.as_deref().map(|c| c as &dyn TemplateEntity)
+                } else {
+                    None
+                }
+            }
+        }
+
+        let deeply_nested = Node {
+            name: "root".to_string(),
+            child: Some(Box::new(Node {
+                name: "branch".to_string(),
+                child: Some(Box::new(Node {
+                    name: "twig".to_string(),
+                    child: Some(Box::new(Node {
+                        name: "leaf".to_string(),
+                        child: None,
+                    })),
+                })),
+            })),
+        };
+
+        let cache = TemplateCache::new(100);
+        let ctx = RenderContext::new("viewer").with_entity("tree", &deeply_nested);
+
+        // 1. Success at 3 levels deep (tree -> child -> child -> child)
+        let t1 = cache
+            .get_or_compile("You look at {the:tree.child.child.child}.")
+            .unwrap();
+        assert_eq!(
+            PerspectiveEngine::render(&t1, &ctx).unwrap(),
+            "You look at the leaf."
+        );
+
+        // 2. Graceful error tracking at 4 levels deep
+        let t_err = cache
+            .get_or_compile("You look at {the:tree.child.child.child.bug}.")
+            .unwrap();
+        let err_output = PerspectiveEngine::render(&t_err, &ctx).unwrap_err();
+        assert_eq!(
+            err_output,
+            "Missing property 'bug' on entity 'tree.child.child.child'"
+        );
+    }
+
+    #[test]
     #[cfg(feature = "ansi")]
     fn test_ansi_colored_possessive_suffixes() {
         let colored_boss = MockEntity {

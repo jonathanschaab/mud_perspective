@@ -253,15 +253,66 @@ impl Template {
     }
 }
 
+/// A bitflags struct to pack multiple boolean formatting flags efficiently.
+#[derive(Clone, Copy)]
+struct EntityFlags(u8);
+
+impl EntityFlags {
+    const IS_CAPITALIZED: u8 = 1 << 0;
+    const FORCE_ARTICLE: u8 = 1 << 1;
+    const FORCE_3RD_PERSON: u8 = 1 << 2;
+    const IS_POSSESSIVE: u8 = 1 << 3;
+
+    #[inline]
+    // We explicitly allow excessive bools here because this is a private, internal
+    // constructor designed specifically to pack these booleans into a single bitmask.
+    // Creating separate enums for each flag would add unnecessary boilerplate.
+    #[allow(clippy::fn_params_excessive_bools)]
+    const fn new(
+        is_capitalized: bool,
+        force_article: bool,
+        force_3rd_person: bool,
+        is_possessive: bool,
+    ) -> Self {
+        let mut bits = 0;
+        if is_capitalized {
+            bits |= Self::IS_CAPITALIZED;
+        }
+        if force_article {
+            bits |= Self::FORCE_ARTICLE;
+        }
+        if force_3rd_person {
+            bits |= Self::FORCE_3RD_PERSON;
+        }
+        if is_possessive {
+            bits |= Self::IS_POSSESSIVE;
+        }
+        Self(bits)
+    }
+
+    #[inline]
+    const fn is_capitalized(self) -> bool {
+        self.0 & Self::IS_CAPITALIZED != 0
+    }
+    #[inline]
+    const fn force_article(self) -> bool {
+        self.0 & Self::FORCE_ARTICLE != 0
+    }
+    #[inline]
+    const fn force_3rd_person(self) -> bool {
+        self.0 & Self::FORCE_3RD_PERSON != 0
+    }
+    #[inline]
+    const fn is_possessive(self) -> bool {
+        self.0 & Self::IS_POSSESSIVE != 0
+    }
+}
+
 /// Parameters extracted from a token or fallback logic to render an entity.
-#[allow(clippy::struct_excessive_bools)]
 struct EntityRefParams<'a> {
     key: &'a str,
     article: Option<&'a str>,
-    is_capitalized: bool,
-    force_article: bool,
-    force_3rd_person: bool,
-    is_possessive: bool,
+    flags: EntityFlags,
 }
 
 /// The core processor responsible for evaluating compiled templates against contexts.
@@ -301,10 +352,12 @@ impl PerspectiveEngine {
                     &EntityRefParams {
                         key,
                         article: article.as_deref(),
-                        is_capitalized: *is_capitalized,
-                        force_article: *force_article,
-                        force_3rd_person: *force_3rd_person,
-                        is_possessive: *is_possessive,
+                        flags: EntityFlags::new(
+                            *is_capitalized,
+                            *force_article,
+                            *force_3rd_person,
+                            *is_possessive,
+                        ),
                     },
                 )?,
                 Token::PronounRef { .. } => Self::render_pronoun_ref(ctx, &mut raw_output, token)?,
@@ -351,7 +404,7 @@ impl PerspectiveEngine {
         update_memory(&ctx.last_mentioned, params.key);
         track_recent_entity(ctx, params.key, entity);
 
-        let effective_viewer = effective_viewer_id(ctx, params.force_3rd_person);
+        let effective_viewer = effective_viewer_id(ctx, params.flags.force_3rd_person());
 
         // --- Handle Groups / Distributed Lists ---
         if let Some(members) = entity.group_members() {
@@ -361,7 +414,10 @@ impl PerspectiveEngine {
 
         // --- Handle Single Entity Viewers ---
         if entity.contains_viewer(effective_viewer) {
-            raw_output.push_str(viewer_name(params.is_possessive, params.is_capitalized));
+            raw_output.push_str(viewer_name(
+                params.flags.is_possessive(),
+                params.flags.is_capitalized(),
+            ));
             return Ok(());
         }
 
@@ -369,17 +425,17 @@ impl PerspectiveEngine {
         let name = entity.display_name_for(effective_viewer);
 
         // Capitalize the name if explicitly requested and it isn't already
-        let name_cow = capitalize_cow(name, params.is_capitalized);
+        let name_cow = capitalize_cow(name, params.flags.is_capitalized());
         let name_str = name_cow.as_ref();
 
         // Handle dynamic "a" or "an" injection
-        if let Some(resolved_art) = params.article.and_then(|art| {
+        if let Some(resolved_art) = params.article.as_ref().and_then(|art| {
             resolve_article(
                 art,
                 name_str,
                 entity.is_proper_noun_for(effective_viewer),
                 entity.is_plural(),
-                params.force_article,
+                params.flags.force_article(),
             )
         }) {
             raw_output.push_str(resolved_art);
@@ -387,7 +443,7 @@ impl PerspectiveEngine {
 
         raw_output.push_str(name_str);
 
-        if params.is_possessive {
+        if params.flags.is_possessive() {
             raw_output.push_str(Self::get_possessive_suffix(name_str, entity.is_plural()));
         }
         Ok(())
@@ -414,13 +470,13 @@ impl PerspectiveEngine {
         }
 
         for (m, name) in visible {
-            if let Some(resolved_art) = params.article.and_then(|art| {
+            if let Some(resolved_art) = params.article.as_ref().and_then(|art| {
                 resolve_article(
                     art,
                     &name,
                     m.is_proper_noun_for(effective_viewer),
                     m.is_plural(),
-                    params.force_article,
+                    params.flags.force_article(),
                 )
             }) {
                 formatted_names.push(std::borrow::Cow::Owned(format!("{resolved_art}{name}")));
@@ -432,11 +488,11 @@ impl PerspectiveEngine {
         let list_str = crate::grammar::format_oxford_list(formatted_names);
 
         let mut final_str = list_str.into_owned();
-        if params.is_possessive {
+        if params.flags.is_possessive() {
             final_str.push_str(Self::get_possessive_suffix(&final_str, entity.is_plural()));
         }
 
-        push_capitalized_if(raw_output, &final_str, params.is_capitalized);
+        push_capitalized_if(raw_output, &final_str, params.flags.is_capitalized());
     }
 
     #[inline]
@@ -508,8 +564,15 @@ impl PerspectiveEngine {
 
         let is_reflexive = p_type == "reflex";
 
+        // 1. Unambiguous Contexts:
+        // - Active Subject: English speakers naturally bind pronouns to the subject.
+        // - Viewer: "you" is never ambiguous with 3rd-person pronouns.
+        // - Reflexive: "himself" unequivocally binds to the current actor/subject.
         let mut can_use_pronoun = is_active_subject || is_viewer || is_reflexive;
 
+        // 2. Disambiguation Check:
+        // If the entity is a general object/target, we must ensure no other recently
+        // mentioned entities share the same pronoun, which would confuse the reader.
         if !can_use_pronoun && already_seen {
             let mut ambiguous = false;
             for other in ctx.recent_entities.borrow().iter() {
@@ -519,6 +582,9 @@ impl PerspectiveEngine {
                     } else {
                         other.is_viewer_normal
                     };
+
+                    // If another character isn't the viewer ("you") but shares the exact
+                    // same gender and plurality, a pronoun like "he" or "they" is ambiguous.
                     if !other_is_viewer
                         && entity.gender() == other.gender
                         && entity.is_plural() == other.is_plural
@@ -529,6 +595,7 @@ impl PerspectiveEngine {
                 }
             }
 
+            // If no collisions were found in the recent memory, it's safe to use the pronoun.
             if !ambiguous {
                 can_use_pronoun = true;
             }
@@ -553,10 +620,7 @@ impl PerspectiveEngine {
                 // (e.g. `{target:Subj}`) applies to the *first word* of the substitution (the article "The").
                 // We do not want to force-capitalize common nouns (yielding "The Goblin" instead of "The goblin").
                 // Proper nouns (like "Aldran") naturally return capitalized strings and are unaffected.
-                is_capitalized: false,
-                force_article: false,
-                force_3rd_person: *force_3rd_person,
-                is_possessive,
+                flags: EntityFlags::new(false, false, *force_3rd_person, is_possessive),
             };
             Self::render_entity_ref(ctx, raw_output, &fallback_params)?;
         }
@@ -730,6 +794,12 @@ fn consume_until_closed(
     Ok(end_idx)
 }
 
+/// Attempts to identify and skip over a protocol tag starting at the current position.
+///
+/// **Optimization Rationale:** This function evaluates state machines for ANSI, MXP, and MSP tags.
+/// To avoid creating string slices (`&str[i..]`) and executing this matching logic on every
+/// single character of the hot loop, this function should only be called if a prior
+/// `has_protocol_tags` SIMD pre-scan confirmed that the string actually contains tags.
 #[cfg(any(feature = "mxp", feature = "msp", feature = "ansi"))]
 #[inline]
 fn skip_protocol_tags(
@@ -945,6 +1015,11 @@ fn reject_if(
     }
 }
 
+/// Performs a highly optimized SIMD pre-scan to detect the presence of protocol triggers.
+///
+/// **Optimization Rationale:** By running this once before iterating over a string's characters,
+/// the engine can completely bypass the overhead of slicing and tag validation inside the hot loop
+/// for the vast majority of strings that contain pure text.
 #[cfg(any(feature = "mxp", feature = "msp", feature = "ansi"))]
 #[inline]
 fn has_protocol_tags(input: &str) -> bool {

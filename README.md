@@ -117,12 +117,45 @@ let template = cache.get_or_compile("{source} [source:open] the door.").unwrap()
 * **Nested Properties:** Use dot-notation (e.g., `{source.weapon}`) to dynamically traverse nested entities. The parent entity must implement `get_property`. Nested properties seamlessly inherit all formatting rules for articles, pronouns, and possessive suffixes.
 * **Possessive Nouns:** Append `'s` to any entity tag (e.g., `{source's}` or `{the:source's}`) to dynamically generate the correct possessive noun suffix. If the entity is the viewer, it automatically renders as "your". Plural entities ending in "s" (like "wolves") will correctly render with just an apostrophe ("wolves'").
 * **Articles / Demonstratives:** {a:key}, {the:key}, {this:key}, or {that:key} prepends the appropriate word. Indefinite articles ("a") automatically adapt to "some" for plural entities, and demonstratives automatically adapt to plural ("these", "those"). Use {A:key}, {The:key}, etc. to force capitalization mid-sentence. These are automatically suppressed if the entity evaluates to the viewer ("you") or is flagged as a proper noun. You can force an article to render for a proper noun by prepending a plus sign (e.g., `{+this:key}`).
-* **Pronouns:** {key:type}. Supported types include subj (he/she/it/they), obj (him/her/it/them), poss (his/her/their), abs_poss (his/hers/theirs), and reflex (himself/themselves). Capitalize the type (e.g., {key:Subj}) to force capitalization mid-sentence. Prepend a plus (`{+key:subj}`) to force a 3rd-person pronoun (e.g., he/she/it/they) even if the viewer is the entity.
-* **Anaphora Resolution (Smart Pronouns):** The engine tracks the active subject and the most recently mentioned entity in the current `RenderContext`. If you use a pronoun tag (like `{target:subj}`) for an entity that isn't the active subject, the engine automatically expands it to their full name with a definite article (e.g., `The goblin`) if using a pronoun would be ambiguous (e.g., two male characters in the same sentence). On subsequent unambiguous uses, it correctly outputs the pronoun (e.g., `He` or `It`). Possessive pronouns (like `{target:poss}`) intelligently fall back to possessive nouns (e.g., `The goblin's`). You can clear this memory manually across paragraphs via `ctx.clear_anaphora()`.
+* **Pronouns:** {key:type}. Supported types include subj (he/she/it/they), obj (him/her/it/them), poss (his/her/their), abs_poss (his/hers/theirs), and reflex (himself/themselves). Capitalize the type (e.g., {key:Subj}) to force capitalization mid-sentence. Prepend a plus (`{+key:subj}`) to force a 3rd-person pronoun (e.g., he/she/it/they) even if the viewer is the entity. The engine features automatic Anaphora Resolution to prevent pronoun ambiguity (see Section 5).
 
 * **Verbs:** [key:verb] explicitly binds a base verb to a subject to ensure correct conjugation (including "be" -> "is"/"are" and "was" -> "were"). Capitalize the verb (e.g., [key:Verb]) to force capitalization mid-sentence. Prepend a plus (`[+key:verb]`) to force 3rd-person conjugation. This prevents grammatical errors during compound subjects or passive voice structures.
 
 * **Escaping:** Use a backslash (`\`) to escape special characters if you need to output literal braces or brackets (e.g., `\{`, `\}`, `\[`, `\]`). You can also escape a backslash itself (`\\`).
+
+### **5. Smart Pronouns & Anaphora Resolution**
+
+The engine features a highly intelligent Anaphora Resolution system. It allows you to write templates almost entirely with pronouns (e.g., `{target:Subj} [target:look] at {target:reflex}.`), and dynamically decides when to introduce the full name ("The goblin looks at itself.") and when to safely use pronouns ("It looks at itself.").
+
+* **How it Triggers:** Whenever the engine encounters a pronoun tag, it checks the context's memory. If the entity hasn't been introduced yet, it will seamlessly expand the pronoun into a fully formatted noun (including definite articles or possessive suffixes, like `the goblin's`).
+* **Ambiguity Detection:** In plain terms, the engine behaves like a reader. If a pronoun is requested for an entity that isn't the active subject, the engine evaluates the "cast" of recently mentioned characters. If any other recently mentioned character shares the exact same grammatical gender and plurality (e.g., two male characters in the same sentence), the engine recognizes that outputting "He" would confuse the reader. It safely falls back to the full name to guarantee absolute clarity.
+* **Cross-Context Memory:** The anaphora memory lives inside the `RenderContext`. 
+  * **Chaining:** You can safely render multiple templates in a row using the same context, and the engine will maintain perfect narrative continuity across the templates.
+  * **Game Ticks:** If your game loop spans across multiple server ticks or async events, you can extract the narrative focus using `ctx.last_mentioned()` and inject it into a brand new context later using `RenderContext::new(...).with_last_mentioned(&subject_key)`.
+* **Resetting Memory:** To manually clear the engine's memory, call `ctx.clear_anaphora()`. You should do this whenever narrative continuity is broken to prevent awkward, lingering pronoun references. Good times to call this include:
+  * When a player moves to a new room or area.
+  * When a significant amount of time passes between events.
+  * At the start of a new, unrelated combat round or distinct paragraph.
+  * *Why?* If you don't clear the memory between independent events, a template might output "He arrives." instead of "Aldran arrives." just because Aldran was the active subject of a completely unrelated event 5 minutes ago!
+
+#### **Example: Multi-Sentence Combat Log**
+
+Using pronouns and active subject tracking allows builders to write fluid, multi-sentence descriptions that organically adapt to any combination of actors.
+
+```rust
+let template = cache.get_or_compile(
+    "{source} [source:kick] {the:target} in the chest. {target:Subj} [target:stumble] backward, and {source:subj} [source:press] the advantage!"
+).unwrap();
+
+// If Aldran kicks a goblin (Unambiguous pronouns):
+// "Aldran kicks the goblin in the chest. It stumbles backward, and he presses the advantage!"
+
+// If the viewer is Aldran (Actor stance takes over):
+// "You kick the goblin in the chest. It stumbles backward, and you press the advantage!"
+
+// If Bob (Male) kicks Aldran (Male) -> Ambiguity Resolution prevents "He... he...":
+// "Bob kicks Aldran in the chest. Aldran stumbles backward, and Bob presses the advantage!"
+```
 
 ## **Cargo Features**
 
