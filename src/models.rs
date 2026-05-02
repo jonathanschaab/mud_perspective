@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::cell::RefCell;
 use std::collections::HashMap;
 
 /// The highly unique sentinel string used by the engine to temporarily force the Director Stance.
@@ -81,6 +82,16 @@ pub trait TemplateEntity {
     fn group_members(&self) -> Option<&[&dyn TemplateEntity]> {
         None
     }
+
+    /// Retrieves a nested sub-entity or property by name.
+    ///
+    /// This enables dot-notation in templates (e.g., `{source.left_arm}`) so that
+    /// body parts, equipped items, or targets can be resolved dynamically and
+    /// provide their own names, pronouns, and pluralities.
+    #[must_use]
+    fn get_property(&self, _property_name: &str) -> Option<&dyn TemplateEntity> {
+        None
+    }
 }
 
 /// The context environment passed to the rendering engine for a specific view generation.
@@ -90,6 +101,30 @@ pub struct RenderContext<'a> {
     /// A mapping of template syntax keys (e.g., "source") to their actual game entities.
     /// Keys are normalized to lowercase by the engine, so ensure your builder mapping uses lowercase keys.
     pub entities: HashMap<&'a str, &'a dyn TemplateEntity>,
+    /// Tracks the key of the most recently rendered entity.
+    /// Used by the engine for automatic anaphora (smart pronoun) resolution
+    /// to prevent ambiguous pronouns when multiple characters are involved.
+    pub last_mentioned: RefCell<Option<String>>,
+    /// Tracks the active subject of the current clause (set by verb tags).
+    /// Ensures possessive pronouns naturally bind to the subject of the sentence.
+    pub active_subject: RefCell<Option<String>>,
+    /// Tracks all entities mentioned since the last anaphora clear.
+    /// Used to detect ambiguous pronoun collisions between any non-subject entities.
+    pub recent_entities: RefCell<Vec<RecentEntity>>,
+}
+
+/// Cached properties of a recently mentioned entity to avoid redundant trait method calls.
+pub struct RecentEntity {
+    /// The template key of the entity.
+    pub key: String,
+    /// The cached grammatical gender.
+    pub gender: Gender,
+    /// The cached grammatical plurality.
+    pub is_plural: bool,
+    /// Cached result of `contains_viewer` for the standard viewer ID.
+    pub is_viewer_normal: bool,
+    /// Cached result of `contains_viewer` for the forced Director Stance (`NULL_VIEWER`).
+    pub is_viewer_forced: bool,
 }
 
 impl<'a> RenderContext<'a> {
@@ -102,6 +137,9 @@ impl<'a> RenderContext<'a> {
         Self {
             viewer_id,
             entities: HashMap::new(),
+            last_mentioned: RefCell::new(None),
+            active_subject: RefCell::new(None),
+            recent_entities: RefCell::new(Vec::new()),
         }
     }
 
@@ -114,6 +152,45 @@ impl<'a> RenderContext<'a> {
     pub fn with_entity(mut self, key: &'a str, entity: &'a dyn TemplateEntity) -> Self {
         self.entities.insert(key, entity);
         self
+    }
+
+    /// Manually sets the most recently mentioned entity for anaphora resolution.
+    ///
+    /// This allows builders to chain templates together while preserving pronoun
+    /// continuity, or to force the engine to treat a specific entity as the current
+    /// subject from the very beginning of the template.
+    #[must_use]
+    pub fn with_last_mentioned(self, key: &str) -> Self {
+        *self.last_mentioned.borrow_mut() = Some(key.to_string());
+        if let Some(entity) = self.entities.get(key) {
+            let mut recents = self.recent_entities.borrow_mut();
+            if !recents.iter().any(|r| r.key == key) {
+                recents.push(RecentEntity {
+                    key: key.to_string(),
+                    gender: entity.gender(),
+                    is_plural: entity.is_plural(),
+                    is_viewer_normal: entity.contains_viewer(self.viewer_id),
+                    is_viewer_forced: entity.contains_viewer(NULL_VIEWER),
+                });
+            }
+        }
+        self
+    }
+
+    /// Retrieves the key of the most recently mentioned entity, if any.
+    ///
+    /// This can be used to extract the anaphora state after rendering a template
+    /// so that it can be passed into a future context.
+    #[must_use]
+    pub fn last_mentioned(&self) -> Option<String> {
+        self.last_mentioned.borrow().clone()
+    }
+
+    /// Clears the anaphora resolution memory, treating all subsequent entities as newly introduced.
+    pub fn clear_anaphora(&self) {
+        *self.last_mentioned.borrow_mut() = None;
+        *self.active_subject.borrow_mut() = None;
+        self.recent_entities.borrow_mut().clear();
     }
 }
 

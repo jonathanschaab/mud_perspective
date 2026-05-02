@@ -27,4 +27,3 @@ clippy:
     cargo clippy --no-default-features --features "ansi msp"
     cargo clippy --no-default-features --features "mxp msp"
     cargo clippy --all-features
-    

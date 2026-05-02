@@ -19,6 +19,8 @@ pub enum Token {
         force_article: bool,
         /// A flag indicating if the builder explicitly forced the 3rd-person stance (e.g. {+source}).
         force_3rd_person: bool,
+        /// A flag indicating if the builder explicitly forced the possessive form (e.g. {source's}).
+        is_possessive: bool,
     },
     /// e.g., {source:poss}
     PronounRef {
@@ -75,14 +77,16 @@ impl Template {
         let mut chars = raw.char_indices().peekable();
         let mut last_literal_start = 0;
 
-        while let Some(&(i, c)) = chars.peek() {
-            #[allow(unused_variables)]
-            let remainder = &raw[i..];
+        #[cfg(any(feature = "mxp", feature = "msp", feature = "ansi"))]
+        let has_tags = has_protocol_tags(raw);
 
+        while let Some(&(i, c)) = chars.peek() {
             #[cfg(any(feature = "mxp", feature = "msp", feature = "ansi"))]
-            if let Some(end_offset) = find_skipped_tag_end(remainder) {
-                advance_chars_until(&mut chars, i + end_offset);
-                continue;
+            if has_tags {
+                let remainder = &raw[i..];
+                if skip_protocol_tags(&mut chars, remainder, i).is_some() {
+                    continue;
+                }
             }
 
             if c == '\\' {
@@ -94,9 +98,7 @@ impl Template {
                         || next_c == ']'
                         || next_c == '\\')
                 {
-                    if i > last_literal_start {
-                        tokens.push(Token::Literal(raw[last_literal_start..i].to_string()));
-                    }
+                    push_literal(&mut tokens, raw, last_literal_start, i);
                     last_literal_start = next_i;
                     chars.next();
                 }
@@ -105,9 +107,7 @@ impl Template {
 
             if c == '{' || c == '[' {
                 // Push any preceding literal text
-                if i > last_literal_start {
-                    tokens.push(Token::Literal(raw[last_literal_start..i].to_string()));
-                }
+                push_literal(&mut tokens, raw, last_literal_start, i);
                 chars.next(); // Consume the opening brace or bracket
 
                 let is_entity = c == '{';
@@ -132,9 +132,7 @@ impl Template {
         }
 
         // Push any remaining literal text at the end of the string
-        if last_literal_start < raw.len() {
-            tokens.push(Token::Literal(raw[last_literal_start..].to_string()));
-        }
+        push_literal(&mut tokens, raw, last_literal_start, raw.len());
 
         Ok(Template {
             tokens,
@@ -143,24 +141,14 @@ impl Template {
     }
 
     fn parse_entity_or_pronoun(content: &str) -> Result<Token, String> {
-        let mut parts = content.split(':');
-        let p1 = parts.next().unwrap_or_default();
+        let (p1, p2_opt) = split_tag(content, '{', "Malformed entity tag")?;
 
-        if let Some(p2) = parts.next() {
-            if parts.next().is_some() {
-                return Err(validation_error("Malformed entity tag", content, '{'));
-            }
-
+        if let Some(p2) = p2_opt {
             let (p1_str, force_article) = parse_stance_prefixes(p1);
-            let is_article = p1_str.eq_ignore_ascii_case("a")
-                || p1_str.eq_ignore_ascii_case("an")
-                || p1_str.eq_ignore_ascii_case("the")
-                || p1_str.eq_ignore_ascii_case("this")
-                || p1_str.eq_ignore_ascii_case("that");
 
             // 2-part case: {article:key}
-            if is_article {
-                let (p2_str, force_3rd_person) = parse_stance_prefixes(p2);
+            if is_article(p1_str) {
+                let (p2_str, force_3rd_person, is_possessive) = parse_entity_modifiers(p2);
 
                 if p2_str.is_empty() {
                     return Err(validation_error(
@@ -169,16 +157,18 @@ impl Template {
                         '{',
                     ));
                 }
-                Ok(Token::EntityRef {
-                    key: p2_str.to_lowercase(),
-                    article: Some(p1_str.to_string()),
-                    is_capitalized: p2_str.chars().next().is_some_and(char::is_uppercase),
+                create_entity_ref(
+                    p2_str,
+                    Some(p1_str),
                     force_article,
                     force_3rd_person,
-                })
+                    is_possessive,
+                    content,
+                )
             } else {
                 // 2-part case: {key:pronoun}
-                let (p1_str, force_3rd_person) = parse_stance_prefixes(p1);
+                // Strip trailing 's in case someone made a typo like {source's:subj}
+                let (p1_str, force_3rd_person, _) = parse_entity_modifiers(p1);
 
                 if p1_str.is_empty() || p2.is_empty() {
                     return Err(validation_error(
@@ -187,60 +177,64 @@ impl Template {
                         '{',
                     ));
                 }
+                validate_property_segments(
+                    p1_str,
+                    "Pronoun tag has an empty property segment",
+                    content,
+                    '{',
+                )?;
                 Ok(Token::PronounRef {
                     key: p1_str.to_lowercase(),
                     p_type: p2.to_lowercase(),
-                    is_capitalized: p2.chars().next().is_some_and(char::is_uppercase),
+                    is_capitalized: is_capitalized(p2),
                     force_3rd_person,
                 })
             }
         } else {
             // 1-part case: {key}
-            let (p1_str, force_3rd_person) = parse_stance_prefixes(p1);
+            let (p1_str, force_3rd_person, is_possessive) = parse_entity_modifiers(p1);
 
-            if p1_str.is_empty() {
-                return Err(validation_error(
-                    "Entity tag has an empty key",
-                    content,
-                    '{',
-                ));
-            }
-            Ok(Token::EntityRef {
-                key: p1_str.to_lowercase(),
-                article: None,
-                is_capitalized: p1_str.chars().next().is_some_and(char::is_uppercase),
-                force_article: false,
+            reject_if(
+                p1_str.is_empty(),
+                "Entity tag has an empty key",
+                content,
+                '{',
+            )?;
+            create_entity_ref(
+                p1_str,
+                None,
+                false,
                 force_3rd_person,
-            })
+                is_possessive,
+                content,
+            )
         }
     }
 
     fn parse_verb(content: &str) -> Result<Token, String> {
-        let mut parts = content.split(':');
-        let p1 = parts.next().unwrap_or_default();
+        let (p1, p2_opt) = split_tag(content, '[', "Malformed verb tag")?;
+        let (p1_str, force_3rd_person) = parse_stance_prefixes(p1);
 
-        let (subject_key, base_verb, force_3rd_person) = if let Some(p2) = parts.next() {
-            if parts.next().is_some() {
-                return Err(validation_error("Malformed verb tag", content, '['));
-            }
-
-            let (p1_str, force_3rd_person) = parse_stance_prefixes(p1);
-
-            if p1_str.is_empty() {
-                return Err(validation_error(
-                    "Verb tag has an empty subject key",
-                    content,
-                    '[',
-                ));
-            }
-            (Some(p1_str.to_lowercase()), p2, force_3rd_person)
+        let (subject_key, base_verb) = if let Some(p2) = p2_opt {
+            reject_if(
+                p1_str.is_empty(),
+                "Verb tag has an empty subject key",
+                content,
+                '[',
+            )?;
+            validate_property_segments(
+                p1_str,
+                "Verb tag has an empty property segment",
+                content,
+                '[',
+            )?;
+            (Some(p1_str.to_lowercase()), p2)
         } else {
-            let (p1_str, force_3rd_person) = parse_stance_prefixes(p1);
-            (None, p1_str, force_3rd_person)
+            (None, p1_str)
         };
 
         let original_verb = base_verb.to_string();
-        let is_capitalized = original_verb.chars().next().is_some_and(char::is_uppercase);
+        let is_capitalized = is_capitalized(&original_verb);
         let lower_verb = original_verb.to_lowercase();
 
         if original_verb.is_empty() {
@@ -257,6 +251,68 @@ impl Template {
             force_3rd_person,
         })
     }
+}
+
+/// A bitflags struct to pack multiple boolean formatting flags efficiently.
+#[derive(Clone, Copy)]
+struct EntityFlags(u8);
+
+impl EntityFlags {
+    const IS_CAPITALIZED: u8 = 1 << 0;
+    const FORCE_ARTICLE: u8 = 1 << 1;
+    const FORCE_3RD_PERSON: u8 = 1 << 2;
+    const IS_POSSESSIVE: u8 = 1 << 3;
+
+    #[inline]
+    // We explicitly allow excessive bools here because this is a private, internal
+    // constructor designed specifically to pack these booleans into a single bitmask.
+    // Creating separate enums for each flag would add unnecessary boilerplate.
+    #[allow(clippy::fn_params_excessive_bools)]
+    const fn new(
+        is_capitalized: bool,
+        force_article: bool,
+        force_3rd_person: bool,
+        is_possessive: bool,
+    ) -> Self {
+        let mut bits = 0;
+        if is_capitalized {
+            bits |= Self::IS_CAPITALIZED;
+        }
+        if force_article {
+            bits |= Self::FORCE_ARTICLE;
+        }
+        if force_3rd_person {
+            bits |= Self::FORCE_3RD_PERSON;
+        }
+        if is_possessive {
+            bits |= Self::IS_POSSESSIVE;
+        }
+        Self(bits)
+    }
+
+    #[inline]
+    const fn is_capitalized(self) -> bool {
+        self.0 & Self::IS_CAPITALIZED != 0
+    }
+    #[inline]
+    const fn force_article(self) -> bool {
+        self.0 & Self::FORCE_ARTICLE != 0
+    }
+    #[inline]
+    const fn force_3rd_person(self) -> bool {
+        self.0 & Self::FORCE_3RD_PERSON != 0
+    }
+    #[inline]
+    const fn is_possessive(self) -> bool {
+        self.0 & Self::IS_POSSESSIVE != 0
+    }
+}
+
+/// Parameters extracted from a token or fallback logic to render an entity.
+struct EntityRefParams<'a> {
+    key: &'a str,
+    article: Option<&'a str>,
+    flags: EntityFlags,
 }
 
 /// The core processor responsible for evaluating compiled templates against contexts.
@@ -283,7 +339,27 @@ impl PerspectiveEngine {
         for token in &template.tokens {
             match token {
                 Token::Literal(text) => raw_output.push_str(text),
-                Token::EntityRef { .. } => Self::render_entity_ref(ctx, &mut raw_output, token)?,
+                Token::EntityRef {
+                    key,
+                    article,
+                    is_capitalized,
+                    force_article,
+                    force_3rd_person,
+                    is_possessive,
+                } => Self::render_entity_ref(
+                    ctx,
+                    &mut raw_output,
+                    &EntityRefParams {
+                        key,
+                        article: article.as_deref(),
+                        flags: EntityFlags::new(
+                            *is_capitalized,
+                            *force_article,
+                            *force_3rd_person,
+                            *is_possessive,
+                        ),
+                    },
+                )?,
                 Token::PronounRef { .. } => Self::render_pronoun_ref(ctx, &mut raw_output, token)?,
                 Token::VerbRef { .. } => Self::render_verb_ref(ctx, &mut raw_output, token)?,
             }
@@ -295,81 +371,53 @@ impl PerspectiveEngine {
 
     #[inline]
     fn get_entity<'a>(ctx: &'a RenderContext, key: &str) -> Result<&'a dyn TemplateEntity, String> {
-        ctx.entities.get(key).copied().ok_or_else(|| {
-            tracing::error!("Failed to render template: Missing entity for key '{key}'");
-            format!("Missing entity for key: {key}")
-        })
+        // 1. Try exact match first (e.g., "source")
+        if let Some(entity) = ctx.entities.get(key).copied() {
+            return Ok(entity);
+        }
+
+        // 2. Try dot notation traversal (e.g., "source.left_arm.weapon")
+        if let Some((root_key, remainder)) = key.split_once('.')
+            && let Some(mut current) = ctx.entities.get(root_key).copied()
+        {
+            let mut current_path = root_key;
+            for prop in remainder.split('.') {
+                current = current.get_property(prop).ok_or_else(|| {
+                    format!("Missing property '{prop}' on entity '{current_path}'")
+                })?;
+                // Accumulate the traversed path slice by extending it over the dot and property
+                current_path = &key[..current_path.len() + 1 + prop.len()];
+            }
+            return Ok(current);
+        }
+
+        tracing::error!("Failed to render template: Missing entity for key '{key}'");
+        Err(format!("Missing entity for key: {key}"))
     }
 
     fn render_entity_ref(
         ctx: &RenderContext,
         raw_output: &mut String,
-        token: &Token,
+        params: &EntityRefParams<'_>,
     ) -> Result<(), String> {
-        let Token::EntityRef {
-            key,
-            article,
-            is_capitalized,
-            force_article,
-            force_3rd_person,
-        } = token
-        else {
-            return Ok(());
-        };
+        let entity = Self::get_entity(ctx, params.key)?;
+        update_memory(&ctx.last_mentioned, params.key);
+        track_recent_entity(ctx, params.key, entity);
 
-        let entity = Self::get_entity(ctx, key)?;
-        let effective_viewer = if *force_3rd_person {
-            NULL_VIEWER
-        } else {
-            ctx.viewer_id
-        };
+        let effective_viewer = effective_viewer_id(ctx, params.flags.force_3rd_person());
 
         // --- Handle Groups / Distributed Lists ---
         if let Some(members) = entity.group_members() {
-            let (viewer_entity, visible) =
-                crate::models::partition_group(members, effective_viewer);
-
-            let has_viewer = viewer_entity.is_some();
-            let total_visible = visible.len() + usize::from(has_viewer);
-            if total_visible == 0 {
-                return Ok(());
-            }
-
-            let mut formatted_names = Vec::with_capacity(total_visible);
-            if has_viewer {
-                formatted_names.push(std::borrow::Cow::Borrowed("you"));
-            }
-
-            for (m, name) in visible {
-                if let Some(art) = article
-                    && let Some(resolved_art) = resolve_article(
-                        art,
-                        &name,
-                        m.is_proper_noun_for(effective_viewer),
-                        m.is_plural(),
-                        *force_article,
-                    )
-                {
-                    formatted_names.push(std::borrow::Cow::Owned(format!("{resolved_art}{name}")));
-                    continue;
-                }
-                formatted_names.push(name);
-            }
-
-            let list_str = crate::grammar::format_oxford_list(formatted_names);
-
-            if *is_capitalized && list_str.chars().next().is_some_and(char::is_lowercase) {
-                raw_output.push_str(&crate::grammar::capitalize_first(&list_str));
-            } else {
-                raw_output.push_str(&list_str);
-            }
+            Self::render_group_entity(raw_output, entity, members, effective_viewer, params);
             return Ok(());
         }
 
         // --- Handle Single Entity Viewers ---
         if entity.contains_viewer(effective_viewer) {
-            let name_str = if *is_capitalized { "You" } else { "you" };
-            raw_output.push_str(name_str);
+            raw_output.push_str(viewer_name(
+                params.flags.is_possessive(),
+                params.flags.is_capitalized(),
+            ));
             return Ok(());
         }
 
@@ -377,29 +425,116 @@ impl PerspectiveEngine {
         let name = entity.display_name_for(effective_viewer);
 
         // Capitalize the name if explicitly requested and it isn't already
-        let name_buf;
-        let name_str = if *is_capitalized && name.chars().next().is_some_and(char::is_lowercase) {
-            name_buf = crate::grammar::capitalize_first(&name);
-            name_buf.as_str()
-        } else {
-            name.as_ref()
-        };
+        let name_cow = capitalize_cow(name, params.flags.is_capitalized());
+        let name_str = name_cow.as_ref();
 
         // Handle dynamic "a" or "an" injection
-        if let Some(art) = article
-            && let Some(resolved_art) = resolve_article(
+        if let Some(resolved_art) = params.article.as_ref().and_then(|art| {
+            resolve_article(
                 art,
                 name_str,
                 entity.is_proper_noun_for(effective_viewer),
                 entity.is_plural(),
-                *force_article,
+                params.flags.force_article(),
             )
-        {
+        }) {
             raw_output.push_str(resolved_art);
         }
 
         raw_output.push_str(name_str);
+
+        if params.flags.is_possessive() {
+            raw_output.push_str(Self::get_possessive_suffix(name_str, entity.is_plural()));
+        }
         Ok(())
+    }
+
+    fn render_group_entity(
+        raw_output: &mut String,
+        entity: &dyn TemplateEntity,
+        members: &[&dyn TemplateEntity],
+        effective_viewer: &str,
+        params: &EntityRefParams<'_>,
+    ) {
+        let (viewer_entity, visible) = crate::models::partition_group(members, effective_viewer);
+
+        let has_viewer = viewer_entity.is_some();
+        let total_visible = visible.len() + usize::from(has_viewer);
+        if total_visible == 0 {
+            return;
+        }
+
+        let mut formatted_names = Vec::with_capacity(total_visible);
+        if has_viewer {
+            formatted_names.push(std::borrow::Cow::Borrowed("you"));
+        }
+
+        for (m, name) in visible {
+            if let Some(resolved_art) = params.article.as_ref().and_then(|art| {
+                resolve_article(
+                    art,
+                    &name,
+                    m.is_proper_noun_for(effective_viewer),
+                    m.is_plural(),
+                    params.flags.force_article(),
+                )
+            }) {
+                formatted_names.push(std::borrow::Cow::Owned(format!("{resolved_art}{name}")));
+                continue;
+            }
+            formatted_names.push(name);
+        }
+
+        let list_str = crate::grammar::format_oxford_list(formatted_names);
+
+        let mut final_str = list_str.into_owned();
+        if params.flags.is_possessive() {
+            final_str.push_str(Self::get_possessive_suffix(&final_str, entity.is_plural()));
+        }
+
+        push_capitalized_if(raw_output, &final_str, params.flags.is_capitalized());
+    }
+
+    #[inline]
+    fn get_last_visible_char(input: &str) -> Option<char> {
+        #[cfg(not(any(feature = "mxp", feature = "msp", feature = "ansi")))]
+        {
+            input.trim_end().chars().next_back()
+        }
+
+        #[cfg(any(feature = "mxp", feature = "msp", feature = "ansi"))]
+        {
+            // Fast-path: If no protocol triggers exist, use Rust's native reverse iterator.
+            // (SIMD pre-scan is highly optimized, and next_back() evaluates from the end).
+            if !has_protocol_tags(input) {
+                return input.trim_end().chars().next_back();
+            }
+
+            let mut chars = input.char_indices().peekable();
+            let mut last_visible = None;
+
+            while let Some(&(i, c)) = chars.peek() {
+                let remainder = &input[i..];
+                if skip_protocol_tags(&mut chars, remainder, i).is_some() {
+                    continue;
+                }
+
+                chars.next();
+                if !c.is_whitespace() {
+                    last_visible = Some(c);
+                }
+            }
+
+            last_visible
+        }
+    }
+
+    #[inline]
+    fn get_possessive_suffix(name: &str, is_plural: bool) -> &'static str {
+        if matches!(Self::get_last_visible_char(name), Some('s' | 'S')) && is_plural {
+            return "'";
+        }
+        "'s"
     }
 
     fn render_pronoun_ref(
@@ -418,19 +553,76 @@ impl PerspectiveEngine {
         };
 
         let entity = Self::get_entity(ctx, key)?;
-        let effective_viewer = if *force_3rd_person {
-            NULL_VIEWER
-        } else {
-            ctx.viewer_id
-        };
+        let effective_viewer = effective_viewer_id(ctx, *force_3rd_person);
 
         let is_viewer = entity.contains_viewer(effective_viewer);
-        let pronoun = resolve_pronoun(entity.gender(), p_type, is_viewer, entity.is_plural())?;
 
-        if *is_capitalized {
-            raw_output.push_str(&crate::grammar::capitalize_first(pronoun));
+        let is_active_subject = ctx.active_subject.borrow().as_deref() == Some(key.as_str());
+
+        // Check if this entity is the current subject of the narrative.
+        let already_seen = ctx.last_mentioned.borrow().as_deref() == Some(key.as_str());
+
+        let is_reflexive = p_type == "reflex";
+
+        // 1. Unambiguous Contexts:
+        // - Active Subject: English speakers naturally bind pronouns to the subject.
+        // - Viewer: "you" is never ambiguous with 3rd-person pronouns.
+        // - Reflexive: "himself" unequivocally binds to the current actor/subject.
+        let mut can_use_pronoun = is_active_subject || is_viewer || is_reflexive;
+
+        // 2. Disambiguation Check:
+        // If the entity is a general object/target, we must ensure no other recently
+        // mentioned entities share the same pronoun, which would confuse the reader.
+        if !can_use_pronoun && already_seen {
+            let mut ambiguous = false;
+            for other in ctx.recent_entities.borrow().iter() {
+                if other.key != *key {
+                    let other_is_viewer = if *force_3rd_person {
+                        other.is_viewer_forced
+                    } else {
+                        other.is_viewer_normal
+                    };
+
+                    // If another character isn't the viewer ("you") but shares the exact
+                    // same gender and plurality, a pronoun like "he" or "they" is ambiguous.
+                    if !other_is_viewer
+                        && entity.gender() == other.gender
+                        && entity.is_plural() == other.is_plural
+                    {
+                        ambiguous = true;
+                        break;
+                    }
+                }
+            }
+
+            // If no collisions were found in the recent memory, it's safe to use the pronoun.
+            if !ambiguous {
+                can_use_pronoun = true;
+            }
+        }
+
+        if can_use_pronoun {
+            if !already_seen {
+                update_memory(&ctx.last_mentioned, key);
+                track_recent_entity(ctx, key, entity);
+            }
+
+            let pronoun = resolve_pronoun(entity.gender(), p_type, is_viewer, entity.is_plural())?;
+            push_capitalized_if(raw_output, pronoun, *is_capitalized);
         } else {
-            raw_output.push_str(pronoun);
+            // Smart Anaphora Resolution: The entity hasn't been introduced yet, or a pronoun would be ambiguous!
+            // Evaluate it as if the builder had written `{the:key}` instead.
+            let is_possessive = p_type == "poss" || p_type == "abs_poss";
+            let fallback_params = EntityRefParams {
+                key,
+                article: Some(if *is_capitalized { "The" } else { "the" }),
+                // We set `is_capitalized: false` here because the capitalization requested by the pronoun
+                // (e.g. `{target:Subj}`) applies to the *first word* of the substitution (the article "The").
+                // We do not want to force-capitalize common nouns (yielding "The Goblin" instead of "The goblin").
+                // Proper nouns (like "Aldran") naturally return capitalized strings and are unaffected.
+                flags: EntityFlags::new(false, false, *force_3rd_person, is_possessive),
+            };
+            Self::render_entity_ref(ctx, raw_output, &fallback_params)?;
         }
         Ok(())
     }
@@ -454,11 +646,10 @@ impl PerspectiveEngine {
         // Explicitly bind the verb to its subject to solve passive voice / compound subjects
         let (is_viewer, is_plural) = if let Some(key) = subject_key {
             let entity = Self::get_entity(ctx, key)?;
-            let effective_viewer = if *force_3rd_person {
-                NULL_VIEWER
-            } else {
-                ctx.viewer_id
-            };
+            let effective_viewer = effective_viewer_id(ctx, *force_3rd_person);
+            update_memory(&ctx.active_subject, key);
+            update_memory(&ctx.last_mentioned, key);
+            track_recent_entity(ctx, key, entity);
             (entity.contains_viewer(effective_viewer), entity.is_plural())
         } else {
             // Safe default to 3rd-person singular if no subject is bound
@@ -501,23 +692,26 @@ impl PerspectiveEngine {
 
         let mut chars = input.char_indices().peekable();
 
+        #[cfg(any(feature = "mxp", feature = "msp", feature = "ansi"))]
+        let has_tags = has_protocol_tags(input);
+
         while let Some(&(i, c)) = chars.peek() {
             // If we cross into a new sentence boundary, reset the capitalization flag
             if catch_up_bounds(i, &mut next_sentence_start) {
                 capitalized = false;
             }
 
-            #[allow(unused_variables)]
-            let remainder = &input[i..];
             #[allow(unused_mut)]
             let mut skipped_tag = false;
 
             // 1, 2, & 3. Skip MXP Tags, MSP Triggers, and ANSI Escape Sequences
             #[cfg(any(feature = "mxp", feature = "msp", feature = "ansi"))]
-            if let Some(end_offset) = find_skipped_tag_end(remainder) {
-                output.push_str(&remainder[..=end_offset]);
-                advance_chars_until(&mut chars, i + end_offset);
-                skipped_tag = true;
+            if has_tags {
+                let remainder = &input[i..];
+                if let Some(end_offset) = skip_protocol_tags(&mut chars, remainder, i) {
+                    output.push_str(&remainder[..=end_offset]);
+                    skipped_tag = true;
+                }
             }
 
             if skipped_tag {
@@ -530,9 +724,7 @@ impl PerspectiveEngine {
 
                 // If the last real character was a sentence terminator, the tag might have
                 // hidden the sentence boundary from the unicode segmenter. Force a reset.
-                if let Some(lrc) = last_real_char
-                    && (lrc == '.' || lrc == '!' || lrc == '?')
-                {
+                if matches!(last_real_char, Some('.' | '!' | '?')) {
                     capitalized = false;
                 }
                 continue;
@@ -602,21 +794,38 @@ fn consume_until_closed(
     Ok(end_idx)
 }
 
+/// Attempts to identify and skip over a protocol tag starting at the current position.
+///
+/// **Optimization Rationale:** This function evaluates state machines for ANSI, MXP, and MSP tags.
+/// To avoid creating string slices (`&str[i..]`) and executing this matching logic on every
+/// single character of the hot loop, this function should only be called if a prior
+/// `has_protocol_tags` SIMD pre-scan confirmed that the string actually contains tags.
+#[cfg(any(feature = "mxp", feature = "msp", feature = "ansi"))]
+#[inline]
+fn skip_protocol_tags(
+    chars: &mut std::iter::Peekable<std::str::CharIndices<'_>>,
+    remainder: &str,
+    i: usize,
+) -> Option<usize> {
+    if let Some(end_offset) = find_skipped_tag_end(remainder) {
+        advance_chars_until(chars, i + end_offset);
+        Some(end_offset)
+    } else {
+        None
+    }
+}
+
 #[cfg(any(feature = "mxp", feature = "msp", feature = "ansi"))]
 #[inline]
 fn find_skipped_tag_end(remainder: &str) -> Option<usize> {
     #[cfg(feature = "mxp")]
-    if remainder.starts_with('<')
-        && let Some(end_offset) = remainder.find('>')
-    {
-        return Some(end_offset);
+    if remainder.starts_with('<') {
+        return remainder.find('>');
     }
 
     #[cfg(feature = "msp")]
-    if (remainder.starts_with("!!SOUND(") || remainder.starts_with("!!MUSIC("))
-        && let Some(end_offset) = remainder.find(')')
-    {
-        return Some(end_offset);
+    if remainder.starts_with("!!SOUND(") || remainder.starts_with("!!MUSIC(") {
+        return remainder.find(')');
     }
 
     #[cfg(feature = "ansi")]
@@ -668,6 +877,196 @@ fn validation_error(message: &str, content: &str, open_char: char) -> String {
 #[inline]
 fn parse_stance_prefixes(s: &str) -> (&str, bool) {
     if let Some(stripped) = s.strip_prefix('+') {
+        (stripped, true)
+    } else {
+        (s, false)
+    }
+}
+
+#[inline]
+fn parse_entity_modifiers(s: &str) -> (&str, bool, bool) {
+    let (s, force_3rd_person) = parse_stance_prefixes(s);
+    let (s, is_possessive) = parse_possessive_suffix(s);
+    (s, force_3rd_person, is_possessive)
+}
+
+#[inline]
+fn split_tag<'a>(
+    content: &'a str,
+    open_char: char,
+    malformed_msg: &str,
+) -> Result<(&'a str, Option<&'a str>), String> {
+    let mut parts = content.split(':');
+    let p1 = parts.next().unwrap_or_default();
+    let p2 = parts.next();
+    reject_if(parts.next().is_some(), malformed_msg, content, open_char)?;
+    Ok((p1, p2))
+}
+
+#[inline]
+fn update_memory(memory: &std::cell::RefCell<Option<String>>, key: &str) {
+    if memory.borrow().as_deref() != Some(key) {
+        *memory.borrow_mut() = Some(key.to_string());
+    }
+}
+
+#[inline]
+fn push_capitalized_if(output: &mut String, text: &str, should_capitalize: bool) {
+    if should_capitalize && text.chars().next().is_some_and(char::is_lowercase) {
+        output.push_str(&crate::grammar::capitalize_first(text));
+    } else {
+        output.push_str(text);
+    }
+}
+
+#[inline]
+fn track_recent_entity(ctx: &RenderContext<'_>, key: &str, entity: &dyn TemplateEntity) {
+    let mut recents = ctx.recent_entities.borrow_mut();
+    if !recents.iter().any(|r| r.key == key) {
+        recents.push(crate::models::RecentEntity {
+            key: key.to_string(),
+            gender: entity.gender(),
+            is_plural: entity.is_plural(),
+            is_viewer_normal: entity.contains_viewer(ctx.viewer_id),
+            is_viewer_forced: entity.contains_viewer(crate::models::NULL_VIEWER),
+        });
+    }
+}
+
+#[inline]
+fn capitalize_cow(
+    text: std::borrow::Cow<'_, str>,
+    should_capitalize: bool,
+) -> std::borrow::Cow<'_, str> {
+    if should_capitalize && text.chars().next().is_some_and(char::is_lowercase) {
+        std::borrow::Cow::Owned(crate::grammar::capitalize_first(&text))
+    } else {
+        text
+    }
+}
+
+#[inline]
+fn push_literal(tokens: &mut Vec<Token>, raw: &str, start: usize, end: usize) {
+    if end > start {
+        tokens.push(Token::Literal(raw[start..end].to_string()));
+    }
+}
+
+#[inline]
+fn is_article(s: &str) -> bool {
+    s.eq_ignore_ascii_case("a")
+        || s.eq_ignore_ascii_case("an")
+        || s.eq_ignore_ascii_case("the")
+        || s.eq_ignore_ascii_case("this")
+        || s.eq_ignore_ascii_case("that")
+}
+
+#[inline]
+fn create_entity_ref(
+    key: &str,
+    article: Option<&str>,
+    force_article: bool,
+    force_3rd_person: bool,
+    is_possessive: bool,
+    content: &str,
+) -> Result<Token, String> {
+    validate_property_segments(
+        key,
+        "Entity tag has an empty property segment",
+        content,
+        '{',
+    )?;
+    Ok(Token::EntityRef {
+        key: key.to_lowercase(),
+        article: article.map(ToString::to_string),
+        is_capitalized: is_capitalized(key),
+        force_article,
+        force_3rd_person,
+        is_possessive,
+    })
+}
+
+#[inline]
+const fn viewer_name(is_possessive: bool, is_capitalized: bool) -> &'static str {
+    match (is_possessive, is_capitalized) {
+        (true, true) => "Your",
+        (true, false) => "your",
+        (false, true) => "You",
+        (false, false) => "you",
+    }
+}
+
+#[inline]
+fn is_capitalized(s: &str) -> bool {
+    s.chars().next().is_some_and(char::is_uppercase)
+}
+
+#[inline]
+fn reject_if(
+    condition: bool,
+    error_msg: &str,
+    content: &str,
+    open_char: char,
+) -> Result<(), String> {
+    if condition {
+        Err(validation_error(error_msg, content, open_char))
+    } else {
+        Ok(())
+    }
+}
+
+/// Performs a highly optimized SIMD pre-scan to detect the presence of protocol triggers.
+///
+/// **Optimization Rationale:** By running this once before iterating over a string's characters,
+/// the engine can completely bypass the overhead of slicing and tag validation inside the hot loop
+/// for the vast majority of strings that contain pure text.
+#[cfg(any(feature = "mxp", feature = "msp", feature = "ansi"))]
+#[inline]
+fn has_protocol_tags(input: &str) -> bool {
+    let mut has_tags = false;
+    #[cfg(feature = "ansi")]
+    {
+        has_tags |= input.contains('\x1b');
+    }
+    #[cfg(feature = "mxp")]
+    {
+        has_tags |= input.contains('<');
+    }
+    #[cfg(feature = "msp")]
+    {
+        has_tags |= input.contains("!!");
+    }
+    has_tags
+}
+
+#[inline]
+fn validate_property_segments(
+    path: &str,
+    error_msg: &str,
+    content: &str,
+    open_char: char,
+) -> Result<(), String> {
+    reject_if(
+        path.split('.').any(str::is_empty),
+        error_msg,
+        content,
+        open_char,
+    )
+}
+
+#[inline]
+fn effective_viewer_id<'a>(ctx: &RenderContext<'a>, force_3rd_person: bool) -> &'a str {
+    if force_3rd_person {
+        NULL_VIEWER
+    } else {
+        ctx.viewer_id
+    }
+}
+
+/// Parses possessive suffix `'s`, returning the stripped string and a boolean flag.
+#[inline]
+fn parse_possessive_suffix(s: &str) -> (&str, bool) {
+    if let Some(stripped) = s.strip_suffix("'s") {
         (stripped, true)
     } else {
         (s, false)

@@ -408,7 +408,7 @@ mod tests {
         let observer_pronoun =
             render_msg!("char_3", &template_pronoun, "source" => &enemy, "target" => &party)
                 .unwrap();
-        assert_eq!(observer_pronoun, "The Goblin attacks them!");
+        assert_eq!(observer_pronoun, "The Goblin attacks Aldran and Bob!");
 
         // --- SCENARIO 3: Article Suppression ---
         let template_article = cache
@@ -971,7 +971,10 @@ mod tests {
         let template2 = cache
             .get_or_compile("you watch as {source:Subj} falls.")
             .unwrap();
-        let out2 = render_msg!("stranger_1", &template2, "source" => &disguised).unwrap();
+        let ctx2 = RenderContext::new("stranger_1")
+            .with_entity("source", &disguised)
+            .with_last_mentioned("source"); // Seed the context so it prints the pronoun!
+        let out2 = PerspectiveEngine::render(&template2, &ctx2).unwrap();
         assert_eq!(out2, "You watch as He falls.");
 
         // 3. Verbs already support this organically
@@ -1193,5 +1196,648 @@ mod tests {
             PerspectiveEngine::render(&cache.get_or_compile("he [+smile].").unwrap(), &ctx)
                 .unwrap();
         assert_eq!(out_director, "He smiles.");
+    }
+
+    #[test]
+    fn test_anaphora_resolution() {
+        let goblin = MockEntity {
+            id: "mob_1".to_string(),
+            name: "goblin".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+
+        let gnome = MockEntity {
+            id: "mob_2".to_string(),
+            name: "gnome".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+        let ctx = RenderContext::new("char_2")
+            .with_entity("target", &goblin)
+            .with_entity("other", &gnome);
+
+        // 1. First time using a pronoun tag: Automatically expands to the full name!
+        let t1 = cache
+            .get_or_compile("{target:Subj} [target:look] around.")
+            .unwrap();
+        let out1 = PerspectiveEngine::render(&t1, &ctx).unwrap();
+        assert_eq!(out1, "The goblin looks around.");
+
+        // 2. Second time using a pronoun tag: The context REMEMBERS the goblin and uses "It"!
+        let t2 = cache
+            .get_or_compile("{target:Subj} [target:attack]!")
+            .unwrap();
+        let out2 = PerspectiveEngine::render(&t2, &ctx).unwrap();
+        assert_eq!(out2, "It attacks!");
+
+        // 3. Clearing the context resets the memory, expanding it to the full name again.
+        ctx.clear_anaphora();
+        let out3 = PerspectiveEngine::render(&t2, &ctx).unwrap();
+        assert_eq!(out3, "The goblin attacks!");
+
+        // 4. Interruption by another entity prevents confusing pronouns
+        ctx.clear_anaphora();
+        let t4 = cache
+            .get_or_compile(
+                "{The:target} enters. {The:other} blinks. {target:Subj} [target:scream].",
+            )
+            .unwrap();
+        let out4 = PerspectiveEngine::render(&t4, &ctx).unwrap();
+        // Because the gnome was the last entity mentioned, the pronoun for the target (goblin)
+        // would be ambiguous. The engine must safely expand it back to "The goblin".
+        assert_eq!(
+            out4,
+            "The goblin enters. The gnome blinks. The goblin screams."
+        );
+
+        // 5. Reflexive pronouns explicitly bypass Anaphora resolution.
+        // Possessive pronouns fallback intelligently to possessive nouns!
+        ctx.clear_anaphora();
+        let t5 = cache
+            .get_or_compile("{Other:poss} sword falls, and {other:subj} cuts {other:reflex}.")
+            .unwrap();
+
+        let out5 = PerspectiveEngine::render(&t5, &ctx).unwrap();
+        assert_eq!(out5, "The gnome's sword falls, and he cuts himself.");
+    }
+
+    #[test]
+    fn test_anaphora_ambiguity_resolution() {
+        let bob = MockEntity {
+            id: "char_2".to_string(),
+            name: "Bob".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+        let aldran = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+        let goblin = MockEntity {
+            id: "mob_1".to_string(),
+            name: "goblin".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+        let jill = MockEntity {
+            id: "char_4".to_string(),
+            name: "Jill".to_string(),
+            gender: Gender::Female,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+
+        let cache = TemplateCache::new(100);
+        let ctx = RenderContext::new("viewer")
+            .with_entity("bob", &bob)
+            .with_entity("aldran", &aldran)
+            .with_entity("goblin", &goblin)
+            .with_entity("jill", &jill);
+
+        // 1. Unambiguous object reference (Goblin -> Neutral, Aldran -> Male)
+        let t1 = cache
+            .get_or_compile("{the:goblin} [goblin:hit] {aldran}. {aldran:Subj} [aldran:smile].")
+            .unwrap();
+        let out1 = PerspectiveEngine::render(&t1, &ctx).unwrap();
+        assert_eq!(out1, "The goblin hits Aldran. He smiles.");
+
+        // 2. Ambiguous object reference (Bob -> Male, Aldran -> Male)
+        // Using "He" for Aldran is ambiguous, so the engine must fall back to "Aldran"
+        ctx.clear_anaphora();
+        let t2 = cache
+            .get_or_compile("{bob} [bob:hit] {aldran}. {aldran:Subj} [aldran:smile].")
+            .unwrap();
+        let out2 = PerspectiveEngine::render(&t2, &ctx).unwrap();
+        assert_eq!(out2, "Bob hits Aldran. Aldran smiles.");
+
+        // 3. Ambiguous object reference with 3+ entities (Jill -> Female, Bob -> Male, Aldran -> Male)
+        // Active subject is Jill. Target is Aldran. Jill is Female, Aldran is Male (unambiguous vs subject).
+        // BUT Bob is Male. So "He" is ambiguous between Bob and Aldran.
+        ctx.clear_anaphora();
+        let t3 = cache
+            .get_or_compile(
+                "{jill} [jill:tell] {bob} about {aldran}. {aldran:Subj} [aldran:smile].",
+            )
+            .unwrap();
+        let out3 = PerspectiveEngine::render(&t3, &ctx).unwrap();
+        // Because Bob is in the `recent_entities` memory, "He" is correctly bypassed!
+        assert_eq!(out3, "Jill tells Bob about Aldran. Aldran smiles.");
+    }
+
+    #[test]
+    fn test_standalone_verb_anaphora_tracking() {
+        let bob = MockEntity {
+            id: "char_2".to_string(),
+            name: "Bob".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+        let aldran = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+        let jill = MockEntity {
+            id: "char_4".to_string(),
+            name: "Jill".to_string(),
+            gender: Gender::Female,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+
+        let cache = TemplateCache::new(100);
+
+        // 1. Ambiguous tracking via verb tag
+        // Bob is ONLY introduced via a verb tag. If the engine fails to track him,
+        // it will erroneously use "He" for Aldran because it forgets a second male is present.
+        let ctx1 = RenderContext::new("viewer")
+            .with_entity("bob", &bob)
+            .with_entity("aldran", &aldran);
+        let t1 = cache
+            .get_or_compile("Bob [bob:attack] {aldran}. {aldran:Subj} [aldran:fall].")
+            .unwrap();
+        assert_eq!(
+            PerspectiveEngine::render(&t1, &ctx1).unwrap(),
+            "Bob attacks Aldran. Aldran falls."
+        );
+
+        // 2. Unambiguous tracking via verb tag
+        // Jill is introduced via a verb tag. Because she is Female, Aldran (Male) can safely use "He".
+        let ctx2 = RenderContext::new("viewer")
+            .with_entity("jill", &jill)
+            .with_entity("aldran", &aldran);
+        let t2 = cache
+            .get_or_compile("Jill [jill:attack] {aldran}. {aldran:Subj} [aldran:fall].")
+            .unwrap();
+        assert_eq!(
+            PerspectiveEngine::render(&t2, &ctx2).unwrap(),
+            "Jill attacks Aldran. He falls."
+        );
+    }
+
+    #[test]
+    fn test_anaphora_fallback_capitalization() {
+        let monster = MockEntity {
+            id: "mob_1".to_string(),
+            name: "giant spider".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+        let ctx = RenderContext::new("viewer").with_entity("target", &monster);
+
+        // {target:Subj} requests a capitalized pronoun ("It").
+        // Since it's the first mention, it falls back to the full noun with an article.
+        // We expect "The giant spider", NOT "The Giant Spider" or "The Giant spider".
+        let template = cache
+            .get_or_compile("{target:Subj} [target:hiss].")
+            .unwrap();
+        let output = PerspectiveEngine::render(&template, &ctx).unwrap();
+        assert_eq!(output, "The giant spider hisses.");
+    }
+
+    #[test]
+    fn test_anaphora_across_contexts() {
+        let goblin = MockEntity {
+            id: "mob_1".to_string(),
+            name: "goblin".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+        let t1 = cache.get_or_compile("{the:target} enters.").unwrap();
+        let t2 = cache
+            .get_or_compile("{target:Subj} [target:look] around.")
+            .unwrap();
+
+        // Render the first template in context 1
+        let ctx1 = RenderContext::new("char_2").with_entity("target", &goblin);
+        let _ = PerspectiveEngine::render(&t1, &ctx1).unwrap();
+
+        // Extract the subject from context 1 and inject it into a brand new context 2
+        let subject = ctx1.last_mentioned().unwrap();
+        let ctx2 = RenderContext::new("char_2")
+            .with_entity("target", &goblin)
+            .with_last_mentioned(&subject);
+
+        let out2 = PerspectiveEngine::render(&t2, &ctx2).unwrap();
+        // The engine natively uses "It" instead of "The goblin" because the context was seeded!
+        assert_eq!(out2, "It looks around.");
+    }
+
+    #[test]
+    fn test_anaphora_viewer_exemption() {
+        let player = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+        let goblin = MockEntity {
+            id: "mob_1".to_string(),
+            name: "goblin".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+        // The goblin takes the anaphora focus in the middle of the sentence.
+        let template = cache
+            .get_or_compile(
+                "{Source} [source:hit] {the:target}, then {source:subj} [source:step] back.",
+            )
+            .unwrap();
+
+        // 1. Bystander (Director Stance)
+        // Because "goblin" took focus, "Aldran" cannot safely use "he". It falls back to "Aldran".
+        let out_director =
+            render_msg!("char_3", &template, "source" => &player, "target" => &goblin).unwrap();
+        assert_eq!(out_director, "Aldran hits the goblin, then he steps back.");
+
+        // 2. Player (Actor Stance)
+        // Even though "goblin" took focus, "you" is immune to anaphora ambiguity. It stays "you".
+        let out_actor =
+            render_msg!("char_1", &template, "source" => &player, "target" => &goblin).unwrap();
+        assert_eq!(out_actor, "You hit the goblin, then you step back.");
+    }
+
+    #[test]
+    fn test_absolute_possessive_pronouns() {
+        let player = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+        let wolves = MockEntity {
+            id: "mob_1".to_string(),
+            name: "wolves".to_string(),
+            gender: Gender::Plural,
+            is_plural: true,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+        let template = cache
+            .get_or_compile("The victory is {source:abs_poss}!")
+            .unwrap();
+
+        let out_actor = render_msg!("char_1", &template, "source" => &player).unwrap();
+        assert_eq!(out_actor, "The victory is yours!");
+
+        // Seed the anaphora memory so it evaluates the pronoun instead of falling back to "Aldran's"
+        let ctx_director = RenderContext::new("char_2")
+            .with_entity("source", &player)
+            .with_last_mentioned("source");
+        let out_director = PerspectiveEngine::render(&template, &ctx_director).unwrap();
+        assert_eq!(out_director, "The victory is his!");
+
+        let ctx_plural = RenderContext::new("char_2")
+            .with_entity("source", &wolves)
+            .with_last_mentioned("source");
+        let out_plural = PerspectiveEngine::render(&template, &ctx_plural).unwrap();
+        assert_eq!(out_plural, "The victory is theirs!");
+    }
+
+    #[test]
+    fn test_unbound_verbs() {
+        let cache = TemplateCache::new(100);
+        let ctx = RenderContext::new("viewer");
+
+        // Without a subject, verbs safely default to 3rd-person singular conjugation
+        let template = cache
+            .get_or_compile("a shadow [loom] in the distance, and [approach].")
+            .unwrap();
+        let out = PerspectiveEngine::render(&template, &ctx).unwrap();
+        assert_eq!(out, "A shadow looms in the distance, and approaches.");
+    }
+
+    #[test]
+    fn test_dynamic_possessive_nouns() {
+        let player = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+        let wolves = MockEntity {
+            id: "mob_1".to_string(),
+            name: "wolves".to_string(),
+            gender: Gender::Plural,
+            is_plural: true,
+            is_proper_noun: false,
+        };
+        let boss = MockEntity {
+            id: "mob_2".to_string(),
+            name: "boss".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+        let template = cache
+            .get_or_compile("You take {the:target's} gold.")
+            .unwrap();
+
+        // 1. Viewer
+        let out_viewer = render_msg!("char_1", &template, "target" => &player).unwrap();
+        assert_eq!(out_viewer, "You take your gold.");
+
+        // 2. Singular Proper Noun
+        let out_proper = render_msg!("char_2", &template, "target" => &player).unwrap();
+        assert_eq!(out_proper, "You take Aldran's gold.");
+
+        // 3. Plural common noun ending in 's'
+        let out_plural = render_msg!("char_2", &template, "target" => &wolves).unwrap();
+        assert_eq!(out_plural, "You take the wolves' gold.");
+
+        // 4. Singular common noun ending in 's'
+        let out_boss = render_msg!("char_2", &template, "target" => &boss).unwrap();
+        assert_eq!(out_boss, "You take the boss's gold.");
+
+        // 5. Group Entities with possessive suffixes
+        // English attaches joint possessives to the final noun. The engine natively looks
+        // at the end of the formatted list to determine if it should use 's or just '.
+        let wolf_party = GroupEntity::new(vec![&player, &wolves]);
+        let out_wolf_party = render_msg!("char_2", &template, "target" => &wolf_party).unwrap();
+        assert_eq!(out_wolf_party, "You take Aldran and the wolves' gold.");
+
+        // 6. Forced Director Stance with Possessive Suffixes
+        let template_forced = cache.get_or_compile("You take {+target's} gold.").unwrap();
+        // Even though the viewer is char_1 (the player), the + prefix overrides "your" to "Aldran's"
+        let out_forced = render_msg!("char_1", &template_forced, "target" => &player).unwrap();
+        assert_eq!(out_forced, "You take Aldran's gold.");
+    }
+
+    #[test]
+    fn test_dot_notation_resolution() {
+        struct Weapon {
+            name: String,
+        }
+        impl TemplateEntity for Weapon {
+            fn contains_viewer(&self, _: &str) -> bool {
+                false
+            }
+            fn gender(&self) -> Gender {
+                Gender::Neutral
+            }
+            fn is_plural(&self) -> bool {
+                false
+            }
+            fn is_proper_noun_for(&self, _: &str) -> bool {
+                false
+            }
+            fn display_name_for<'a>(&'a self, _: &str) -> Cow<'a, str> {
+                Cow::Borrowed(&self.name)
+            }
+        }
+
+        struct Actor {
+            name: String,
+            weapon: Weapon,
+        }
+        impl TemplateEntity for Actor {
+            fn contains_viewer(&self, viewer_id: &str) -> bool {
+                viewer_id == "char_1"
+            }
+            fn gender(&self) -> Gender {
+                Gender::Male
+            }
+            fn is_plural(&self) -> bool {
+                false
+            }
+            fn is_proper_noun_for(&self, _: &str) -> bool {
+                true
+            }
+            fn display_name_for<'a>(&'a self, _: &str) -> Cow<'a, str> {
+                Cow::Borrowed(&self.name)
+            }
+            fn get_property(&self, property_name: &str) -> Option<&dyn TemplateEntity> {
+                match property_name {
+                    "weapon" => Some(&self.weapon),
+                    _ => None,
+                }
+            }
+        }
+
+        let player = Actor {
+            name: "Aldran".to_string(),
+            weapon: Weapon {
+                name: "rusty sword".to_string(),
+            },
+        };
+
+        let cache = TemplateCache::new(100);
+        let template = cache.get_or_compile("{Source} [source:draw] {a:source.weapon} and [source:swing] {source:poss} {source.weapon}!").unwrap();
+
+        let out_director = render_msg!("char_2", &template, "source" => &player).unwrap();
+        assert_eq!(
+            out_director,
+            "Aldran draws a rusty sword and swings his rusty sword!"
+        );
+
+        let out_actor = render_msg!("char_1", &template, "source" => &player).unwrap();
+        assert_eq!(
+            out_actor,
+            "You draw a rusty sword and swing your rusty sword!"
+        );
+
+        // Verify graceful error handling if a builder requests a property that doesn't exist
+        let err_template = cache.get_or_compile("{source.shield} breaks.").unwrap();
+        let err_output = PerspectiveEngine::render(
+            &err_template,
+            &RenderContext::new("char_1").with_entity("source", &player),
+        )
+        .unwrap_err();
+        assert_eq!(err_output, "Missing property 'shield' on entity 'source'");
+
+        // Verify multi-level error handling tracks the traversed path accurately
+        let err_template_multi = cache
+            .get_or_compile("{source.weapon.edge} is sharp.")
+            .unwrap();
+        let err_output_multi = PerspectiveEngine::render(
+            &err_template_multi,
+            &RenderContext::new("char_1").with_entity("source", &player),
+        )
+        .unwrap_err();
+        assert_eq!(
+            err_output_multi,
+            "Missing property 'edge' on entity 'source.weapon'"
+        );
+
+        // Verify malformed double-dot paths return a clear error at compile time
+        let double_dot_err = cache
+            .get_or_compile("{a:source..weapon} is drawn.")
+            .unwrap_err();
+        assert_eq!(
+            double_dot_err,
+            "Entity tag has an empty property segment: {a:source..weapon}"
+        );
+    }
+
+    #[test]
+    fn test_deeply_nested_properties() {
+        // A simple recursive struct to easily test arbitrary nesting depths
+        struct Node {
+            name: String,
+            child: Option<Box<Node>>,
+        }
+
+        impl TemplateEntity for Node {
+            fn contains_viewer(&self, _: &str) -> bool {
+                false
+            }
+            fn gender(&self) -> Gender {
+                Gender::Neutral
+            }
+            fn is_plural(&self) -> bool {
+                false
+            }
+            fn is_proper_noun_for(&self, _: &str) -> bool {
+                false
+            }
+            fn display_name_for<'a>(&'a self, _: &str) -> Cow<'a, str> {
+                Cow::Borrowed(&self.name)
+            }
+            fn get_property(&self, property_name: &str) -> Option<&dyn TemplateEntity> {
+                if property_name == "child" {
+                    self.child.as_deref().map(|c| c as &dyn TemplateEntity)
+                } else {
+                    None
+                }
+            }
+        }
+
+        let deeply_nested = Node {
+            name: "root".to_string(),
+            child: Some(Box::new(Node {
+                name: "branch".to_string(),
+                child: Some(Box::new(Node {
+                    name: "twig".to_string(),
+                    child: Some(Box::new(Node {
+                        name: "leaf".to_string(),
+                        child: None,
+                    })),
+                })),
+            })),
+        };
+
+        let cache = TemplateCache::new(100);
+        let ctx = RenderContext::new("viewer").with_entity("tree", &deeply_nested);
+
+        // 1. Success at 3 levels deep (tree -> child -> child -> child)
+        let t1 = cache
+            .get_or_compile("You look at {the:tree.child.child.child}.")
+            .unwrap();
+        assert_eq!(
+            PerspectiveEngine::render(&t1, &ctx).unwrap(),
+            "You look at the leaf."
+        );
+
+        // 2. Graceful error tracking at 4 levels deep
+        let t_err = cache
+            .get_or_compile("You look at {the:tree.child.child.child.bug}.")
+            .unwrap();
+        let err_output = PerspectiveEngine::render(&t_err, &ctx).unwrap_err();
+        assert_eq!(
+            err_output,
+            "Missing property 'bug' on entity 'tree.child.child.child'"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "ansi")]
+    fn test_ansi_colored_possessive_suffixes() {
+        let colored_boss = MockEntity {
+            id: "mob_1".to_string(),
+            name: "\x1b[31mboss\x1b[0m".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+        let colored_wolves = MockEntity {
+            id: "mob_2".to_string(),
+            name: "\x1b[32mwolves\x1b[0m".to_string(),
+            gender: Gender::Plural,
+            is_plural: true,
+            is_proper_noun: false,
+        };
+        let colored_goblin = MockEntity {
+            id: "mob_3".to_string(),
+            name: "\x1b[33mgoblin\x1b[0m".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+        let template = cache
+            .get_or_compile("You take {the:target's} gold.")
+            .unwrap();
+
+        // Singular common noun ending in 's' with ANSI code at the end -> expects 's
+        let out_boss = render_msg!("char_2", &template, "target" => &colored_boss).unwrap();
+        assert_eq!(out_boss, "You take the \x1b[31mboss\x1b[0m's gold.");
+
+        // Plural common noun ending in 's' with ANSI code at the end -> expects '
+        let out_wolves = render_msg!("char_2", &template, "target" => &colored_wolves).unwrap();
+        assert_eq!(out_wolves, "You take the \x1b[32mwolves\x1b[0m' gold.");
+
+        // Regular singular common noun with ANSI code at the end -> expects 's
+        let out_goblin = render_msg!("char_2", &template, "target" => &colored_goblin).unwrap();
+        assert_eq!(out_goblin, "You take the \x1b[33mgoblin\x1b[0m's gold.");
+    }
+
+    #[test]
+    fn test_trailing_whitespace_possessive_suffixes() {
+        let wolves_spaced = MockEntity {
+            id: "mob_1".to_string(),
+            name: "wolves ".to_string(),
+            gender: Gender::Plural,
+            is_plural: true,
+            is_proper_noun: false,
+        };
+        let boss_spaced = MockEntity {
+            id: "mob_2".to_string(),
+            name: "boss   ".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+        let template = cache
+            .get_or_compile("You take {the:target's} gold.")
+            .unwrap();
+
+        // Plural ending in 's' followed by space -> expects '
+        let out_wolves = render_msg!("char_2", &template, "target" => &wolves_spaced).unwrap();
+        assert_eq!(out_wolves, "You take the wolves ' gold.");
+
+        // Singular ending in 's' followed by multiple spaces -> expects 's
+        let out_boss = render_msg!("char_2", &template, "target" => &boss_spaced).unwrap();
+        assert_eq!(out_boss, "You take the boss   's gold.");
     }
 }
