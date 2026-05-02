@@ -267,25 +267,17 @@ bitflags::bitflags! {
 impl EntityFlags {
     #[inline]
     #[allow(clippy::fn_params_excessive_bools)]
-    const fn new(
+    fn new(
         is_capitalized: bool,
         force_article: bool,
         force_3rd_person: bool,
         is_possessive: bool,
     ) -> Self {
         let mut flags = Self::empty();
-        if is_capitalized {
-            flags = flags.union(Self::IS_CAPITALIZED);
-        }
-        if force_article {
-            flags = flags.union(Self::FORCE_ARTICLE);
-        }
-        if force_3rd_person {
-            flags = flags.union(Self::FORCE_3RD_PERSON);
-        }
-        if is_possessive {
-            flags = flags.union(Self::IS_POSSESSIVE);
-        }
+        flags.set(Self::IS_CAPITALIZED, is_capitalized);
+        flags.set(Self::FORCE_ARTICLE, force_article);
+        flags.set(Self::FORCE_3RD_PERSON, force_3rd_person);
+        flags.set(Self::IS_POSSESSIVE, is_possessive);
         flags
     }
 
@@ -504,14 +496,9 @@ impl PerspectiveEngine {
             }
         }
 
-        let will_append_my = if let Some(v) = viewer_entity
-            && stance == crate::models::ActorStance::FirstPerson
-            && (!v.is_plural() || decomposed_we)
-        {
-            true
-        } else {
-            false
-        };
+        let will_append_my = viewer_entity.is_some_and(|v| {
+            stance == crate::models::ActorStance::FirstPerson && (!v.is_plural() || decomposed_we)
+        });
 
         let distribute_possessives = viewer_entity.is_some() && params.flags.is_possessive();
 
@@ -1011,15 +998,18 @@ fn track_recent_entity(ctx: &RenderContext<'_>, key: &str, entity: &dyn Template
         recents.push(item);
     } else {
         let mut flags = crate::models::RecentEntityFlags::empty();
-        if entity.is_plural() {
-            flags |= crate::models::RecentEntityFlags::IS_PLURAL;
-        }
-        if entity.contains_viewer(ctx.viewer_id) {
-            flags |= crate::models::RecentEntityFlags::IS_VIEWER_NORMAL;
-        }
-        if entity.contains_viewer(crate::models::NULL_VIEWER) {
-            flags |= crate::models::RecentEntityFlags::IS_VIEWER_FORCED;
-        }
+        flags.set(
+            crate::models::RecentEntityFlags::IS_PLURAL,
+            entity.is_plural(),
+        );
+        flags.set(
+            crate::models::RecentEntityFlags::IS_VIEWER_NORMAL,
+            entity.contains_viewer(ctx.viewer_id),
+        );
+        flags.set(
+            crate::models::RecentEntityFlags::IS_VIEWER_FORCED,
+            entity.contains_viewer(crate::models::NULL_VIEWER),
+        );
 
         recents.push(crate::models::RecentEntity {
             key: key.to_string(),

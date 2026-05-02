@@ -245,15 +245,15 @@ impl<'a> RenderContext<'a> {
                 recents.push(item);
             } else {
                 let mut flags = RecentEntityFlags::empty();
-                if entity.is_plural() {
-                    flags |= RecentEntityFlags::IS_PLURAL;
-                }
-                if entity.contains_viewer(self.viewer_id) {
-                    flags |= RecentEntityFlags::IS_VIEWER_NORMAL;
-                }
-                if entity.contains_viewer(NULL_VIEWER) {
-                    flags |= RecentEntityFlags::IS_VIEWER_FORCED;
-                }
+                flags.set(RecentEntityFlags::IS_PLURAL, entity.is_plural());
+                flags.set(
+                    RecentEntityFlags::IS_VIEWER_NORMAL,
+                    entity.contains_viewer(self.viewer_id),
+                );
+                flags.set(
+                    RecentEntityFlags::IS_VIEWER_FORCED,
+                    entity.contains_viewer(NULL_VIEWER),
+                );
 
                 recents.push(RecentEntity {
                     key: key.to_string(),
@@ -321,15 +321,15 @@ impl<'a> RenderContext<'a> {
                 recents.push(item);
             } else {
                 let mut flags = RecentEntityFlags::IS_PINNED;
-                if entity.is_plural() {
-                    flags |= RecentEntityFlags::IS_PLURAL;
-                }
-                if entity.contains_viewer(self.viewer_id) {
-                    flags |= RecentEntityFlags::IS_VIEWER_NORMAL;
-                }
-                if entity.contains_viewer(NULL_VIEWER) {
-                    flags |= RecentEntityFlags::IS_VIEWER_FORCED;
-                }
+                flags.set(RecentEntityFlags::IS_PLURAL, entity.is_plural());
+                flags.set(
+                    RecentEntityFlags::IS_VIEWER_NORMAL,
+                    entity.contains_viewer(self.viewer_id),
+                );
+                flags.set(
+                    RecentEntityFlags::IS_VIEWER_FORCED,
+                    entity.contains_viewer(NULL_VIEWER),
+                );
 
                 recents.push(RecentEntity {
                     key: key.to_string(),
