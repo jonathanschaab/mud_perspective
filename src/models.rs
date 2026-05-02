@@ -163,13 +163,16 @@ impl<'a> RenderContext<'a> {
     pub fn with_last_mentioned(self, key: &str) -> Self {
         *self.last_mentioned.borrow_mut() = Some(key.to_string());
         if let Some(entity) = self.entities.get(key) {
-            self.recent_entities.borrow_mut().push(RecentEntity {
-                key: key.to_string(),
-                gender: entity.gender(),
-                is_plural: entity.is_plural(),
-                is_viewer_normal: entity.contains_viewer(self.viewer_id),
-                is_viewer_forced: entity.contains_viewer(NULL_VIEWER),
-            });
+            let mut recents = self.recent_entities.borrow_mut();
+            if !recents.iter().any(|r| r.key == key) {
+                recents.push(RecentEntity {
+                    key: key.to_string(),
+                    gender: entity.gender(),
+                    is_plural: entity.is_plural(),
+                    is_viewer_normal: entity.contains_viewer(self.viewer_id),
+                    is_viewer_forced: entity.contains_viewer(NULL_VIEWER),
+                });
+            }
         }
         self
     }
