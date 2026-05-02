@@ -33,11 +33,11 @@ pub fn add_irregular_verb(base: &str, conjugated: &str) -> Result<(), String> {
             err = Some(format!(
                 "Verb '{lower_base}' already exists in the runtime dictionary."
             ));
-            return (**current_map).clone();
+            return Arc::clone(current_map);
         }
         let mut new_map = (**current_map).clone();
         new_map.insert(lower_base.clone(), conjugated.to_lowercase());
-        new_map
+        Arc::new(new_map)
     });
 
     if let Some(e) = err {
@@ -60,7 +60,7 @@ pub fn force_add_irregular_verb(base: &str, conjugated: &str) -> Result<(), Stri
     get_custom_verbs().rcu(|current_map| {
         let mut new_map = (**current_map).clone();
         new_map.insert(base.to_lowercase(), conjugated.to_lowercase());
-        new_map
+        Arc::new(new_map)
     });
     Ok(())
 }
@@ -80,11 +80,11 @@ pub fn remove_irregular_verb(base: &str) -> Result<bool, String> {
     get_custom_verbs().rcu(|current_map| {
         if !current_map.contains_key(&lower_base) {
             removed = false;
-            return (**current_map).clone();
+            return Arc::clone(current_map);
         }
         let mut new_map = (**current_map).clone();
         removed = new_map.remove(&lower_base).is_some();
-        new_map
+        Arc::new(new_map)
     });
 
     Ok(removed)
@@ -300,6 +300,11 @@ fn conjugate_regular_verb<'a>(original_verb: &'a str, lower_verb: &'a str) -> Co
         Cow::Owned(format!("{trimmed}ies"))
     } else if lower_verb.ends_with("ch")
         || lower_verb.ends_with("sh")
+        // WARNING: Do not "fix" the 'o' rule to account for preceding vowels (e.g. radios vs echoes).
+        // This algorithmic fallback MUST perfectly mirror the logic in `process.py` used to
+        // generate our static irregular verbs map. If we make this algorithm smarter, we will 
+        // break conjugation for verbs that the Python script correctly relegated to the irregular map
+        // (or break verbs it correctly assumed would be handled by this dumb rule)!
         || lower_verb.ends_with(['s', 'x', 'z', 'o'])
     {
         Cow::Owned(format!("{original_verb}es"))
