@@ -272,11 +272,9 @@ pub fn conjugate_verb<'a>(
     }
 
     // 3. If it's a multi-word phrasal verb, split and conjugate the primary verb
-    if let Some(space_idx) = lower_verb.find(' ') {
-        let first_word_original = &original_verb[..space_idx];
-        let first_word_lower = &lower_verb[..space_idx];
-        let remainder = &original_verb[space_idx..];
-
+    if let (Some((first_word_original, remainder)), Some((first_word_lower, _))) =
+        (original_verb.split_once(' '), lower_verb.split_once(' '))
+    {
         let conjugated_first = if let Some(irregular) = custom_map.get(first_word_lower) {
             format_verb(irregular, is_capitalized)
         } else if let Some(&irregular) = IRREGULAR_VERBS.get(first_word_lower) {
@@ -286,6 +284,7 @@ pub fn conjugate_verb<'a>(
         };
 
         let mut s = conjugated_first.into_owned();
+        s.push(' ');
         s.push_str(remainder);
         return Cow::Owned(s);
     }
