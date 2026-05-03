@@ -1,6 +1,6 @@
 use crate::grammar::{conjugate_verb, resolve_article, resolve_pronoun};
 use crate::models::{NULL_VIEWER, RenderContext, TemplateEntity};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use unicode_segmentation::UnicodeSegmentation;
 
 /// Represents a parsed unit of a template string.
@@ -401,6 +401,7 @@ impl PerspectiveEngine {
     #[tracing::instrument(level = "trace", skip_all, fields(viewer_id = %ctx.viewer_id))]
     pub fn render(template: &Template, ctx: &RenderContext) -> Result<String, String> {
         let mut template_keys = Vec::new();
+        let mut seen_keys = HashSet::new();
         for token in &template.tokens {
             let k = match token {
                 Token::EntityRef { key, .. }
@@ -412,7 +413,7 @@ impl PerspectiveEngine {
                 _ => None,
             };
             if let Some(key) = k
-                && !template_keys.contains(&key)
+                && seen_keys.insert(key)
             {
                 template_keys.push(key);
             }
@@ -1622,16 +1623,10 @@ fn push_literal(tokens: &mut Vec<Token>, raw: &str, start: usize, end: usize) {
 
 #[inline]
 fn is_article(s: &str) -> bool {
-    s.eq_ignore_ascii_case("a")
-        || s.eq_ignore_ascii_case("an")
-        || s.eq_ignore_ascii_case("the")
-        || s.eq_ignore_ascii_case("this")
-        || s.eq_ignore_ascii_case("that")
-        || s.eq_ignore_ascii_case("another")
-        || s.eq_ignore_ascii_case("one")
-        || s.eq_ignore_ascii_case("one of")
-        || s.eq_ignore_ascii_case("one of the")
-        || s.eq_ignore_ascii_case("some")
+    matches!(
+        s.to_lowercase().as_str(),
+        "a" | "an" | "the" | "this" | "that" | "another" | "one" | "one of" | "one of the" | "some"
+    )
 }
 
 #[inline]

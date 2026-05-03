@@ -578,25 +578,19 @@ fn try_resolve_ordinal_article(
     let mut base = "";
     let mut applies = true;
 
-    if article.eq_ignore_ascii_case("a") || article.eq_ignore_ascii_case("an") {
-        base = if is_plural { "some" } else { "" };
-        applies = ord > 2;
-    } else if article.eq_ignore_ascii_case("another") {
-        applies = is_plural || ord > 2;
-    } else if article.eq_ignore_ascii_case("the") {
-        base = "the";
-    } else if article.eq_ignore_ascii_case("this") {
-        base = "this";
-    } else if article.eq_ignore_ascii_case("that") {
-        base = "that";
-    } else if article.eq_ignore_ascii_case("one") {
-        base = "one";
-    } else if article.eq_ignore_ascii_case("one of") || article.eq_ignore_ascii_case("one of the") {
-        base = "one of the";
-    } else if article.eq_ignore_ascii_case("some") {
-        base = "some";
-    } else {
-        applies = false;
+    match article.to_lowercase().as_str() {
+        "a" | "an" => {
+            base = if is_plural { "some" } else { "" };
+            applies = ord > 2;
+        }
+        "another" => applies = is_plural || ord > 2,
+        "the" => base = "the",
+        "this" => base = "this",
+        "that" => base = "that",
+        "one" => base = "one",
+        "one of" | "one of the" => base = "one of the",
+        "some" => base = "some",
+        _ => applies = false,
     }
 
     if applies {
@@ -642,76 +636,81 @@ pub fn resolve_article(
         return Some(resolved);
     }
 
-    if article.eq_ignore_ascii_case("a")
-        || article.eq_ignore_ascii_case("an")
-        || article.eq_ignore_ascii_case("another")
-    {
-        if is_plural {
-            Some(Cow::Borrowed(if article.eq_ignore_ascii_case("another") {
-                if is_capitalized { "Other " } else { "other " }
+    match article.to_lowercase().as_str() {
+        "a" | "an" => {
+            if is_plural {
+                Some(Cow::Borrowed(if is_capitalized {
+                    "Some "
+                } else {
+                    "some "
+                }))
             } else {
-                if is_capitalized { "Some " } else { "some " }
-            }))
-        } else if article.eq_ignore_ascii_case("another") {
-            Some(Cow::Borrowed(if is_capitalized {
-                "Another "
-            } else {
-                "another "
-            }))
-        } else {
-            match (is_capitalized, get_indefinite_article(entity_name)) {
-                (true, "an") => Some(Cow::Borrowed("An ")),
-                (false, "an") => Some(Cow::Borrowed("an ")),
-                (true, _) => Some(Cow::Borrowed("A ")),
-                (false, _) => Some(Cow::Borrowed("a ")),
+                match (is_capitalized, get_indefinite_article(entity_name)) {
+                    (true, "an") => Some(Cow::Borrowed("An ")),
+                    (false, "an") => Some(Cow::Borrowed("an ")),
+                    (true, _) => Some(Cow::Borrowed("A ")),
+                    (false, _) => Some(Cow::Borrowed("a ")),
+                }
             }
         }
-    } else if article.eq_ignore_ascii_case("the") {
-        Some(Cow::Borrowed(if is_capitalized { "The " } else { "the " }))
-    } else if article.eq_ignore_ascii_case("this") {
-        if is_plural {
-            Some(Cow::Borrowed(if is_capitalized {
-                "These "
+        "another" => {
+            if is_plural {
+                Some(Cow::Borrowed(if is_capitalized {
+                    "Other "
+                } else {
+                    "other "
+                }))
             } else {
-                "these "
-            }))
-        } else {
-            Some(Cow::Borrowed(if is_capitalized {
-                "This "
-            } else {
-                "this "
-            }))
+                Some(Cow::Borrowed(if is_capitalized {
+                    "Another "
+                } else {
+                    "another "
+                }))
+            }
         }
-    } else if article.eq_ignore_ascii_case("that") {
-        if is_plural {
-            Some(Cow::Borrowed(if is_capitalized {
-                "Those "
+        "the" => Some(Cow::Borrowed(if is_capitalized { "The " } else { "the " })),
+        "this" => {
+            if is_plural {
+                Some(Cow::Borrowed(if is_capitalized {
+                    "These "
+                } else {
+                    "these "
+                }))
             } else {
-                "those "
-            }))
-        } else {
-            Some(Cow::Borrowed(if is_capitalized {
-                "That "
-            } else {
-                "that "
-            }))
+                Some(Cow::Borrowed(if is_capitalized {
+                    "This "
+                } else {
+                    "this "
+                }))
+            }
         }
-    } else if article.eq_ignore_ascii_case("one") {
-        Some(Cow::Borrowed(if is_capitalized { "One " } else { "one " }))
-    } else if article.eq_ignore_ascii_case("one of") || article.eq_ignore_ascii_case("one of the") {
-        Some(Cow::Borrowed(if is_capitalized {
+        "that" => {
+            if is_plural {
+                Some(Cow::Borrowed(if is_capitalized {
+                    "Those "
+                } else {
+                    "those "
+                }))
+            } else {
+                Some(Cow::Borrowed(if is_capitalized {
+                    "That "
+                } else {
+                    "that "
+                }))
+            }
+        }
+        "one" => Some(Cow::Borrowed(if is_capitalized { "One " } else { "one " })),
+        "one of" | "one of the" => Some(Cow::Borrowed(if is_capitalized {
             "One of the "
         } else {
             "one of the "
-        }))
-    } else if article.eq_ignore_ascii_case("some") {
-        Some(Cow::Borrowed(if is_capitalized {
+        })),
+        "some" => Some(Cow::Borrowed(if is_capitalized {
             "Some "
         } else {
             "some "
-        }))
-    } else {
-        None
+        })),
+        _ => None,
     }
 }
 
