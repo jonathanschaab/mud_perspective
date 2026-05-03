@@ -486,6 +486,13 @@ impl PerspectiveEngine {
 
         // Pre-resolve all entities that could possibly be checked during this render call
         // to avoid redundant string splitting and hash map lookups in the subsequent hot loops.
+        //
+        // WARNING: Do NOT attempt to pre-calculate an exact `collision_candidates` array here.
+        // The anaphora memory (`recent_entities`) is dynamic and accumulates state left-to-right
+        // as the template is rendered. Freezing the collision candidates at the start of the
+        // render call causes the engine to fail to detect collisions with entities introduced
+        // sequentially within the same template, breaking indefinite article upgrades ("Another",
+        // "Other") and long description disambiguation.
         let mut pre_resolved = HashMap::new();
         for k in &template.template_keys {
             if let Ok(ent) = Self::get_entity(ctx, k) {
@@ -573,9 +580,12 @@ impl PerspectiveEngine {
     }
 
     #[inline]
+    #[allow(clippy::too_many_arguments)]
     fn check_will_vacate(
         effective_viewer: &str,
-        resolved_others: &[(&str, &dyn TemplateEntity)],
+        recent_borrow: &[crate::models::RecentEntity],
+        future_keys: &[&str],
+        pre_resolved: &HashMap<String, &dyn TemplateEntity>,
         other_key: &str,
         other_entity: &dyn TemplateEntity,
         name: &str,
@@ -586,7 +596,8 @@ impl PerspectiveEngine {
         {
             let mut other_short_collisions = 0;
             let mut other_long_collisions = 0;
-            for &(eval_key, eval_entity) in resolved_others {
+
+            let mut check_entity = |eval_key: &str, eval_entity: &dyn TemplateEntity| {
                 if eval_key != other_key {
                     let eval_short_name = eval_entity.display_name_for(effective_viewer);
                     if eval_short_name == other_name {
@@ -607,7 +618,21 @@ impl PerspectiveEngine {
                         other_long_collisions += 1;
                     }
                 }
+            };
+
+            for r in recent_borrow {
+                if let Some(&eval_entity) = pre_resolved.get(&r.key) {
+                    check_entity(&r.key, eval_entity);
+                }
             }
+            for &fk in future_keys {
+                if !recent_borrow.iter().any(|r| r.key == fk)
+                    && let Some(&eval_entity) = pre_resolved.get(fk)
+                {
+                    check_entity(fk, eval_entity);
+                }
+            }
+
             if other_long_collisions < other_short_collisions {
                 return true;
             }
@@ -631,41 +656,44 @@ impl PerspectiveEngine {
         if !no_smart {
             let mut short_collisions = 0;
             let mut unresolved_short_collisions = 0;
-
             let recent_borrow = ctx.recent_entities.borrow();
-            let mut resolved_others = Vec::with_capacity(recent_borrow.len() + future_keys.len());
+
+            // We use a closure here to iterate over the live `recent_borrow` and `future_keys`.
+            // Evaluating collisions dynamically avoids allocations while ensuring we accurately
+            // catch entities that were just introduced in this template, maintaining strict
+            // left-to-right chronological accuracy.
+            let mut check_collision = |other_key: &str, other_entity: &'a dyn TemplateEntity| {
+                if other_key != key && other_entity.display_name_for(effective_viewer) == name {
+                    short_collisions += 1;
+
+                    // Determine if this other entity will vacate the short name by using its own long name
+                    if !Self::check_will_vacate(
+                        effective_viewer,
+                        &recent_borrow,
+                        future_keys,
+                        pre_resolved,
+                        other_key,
+                        other_entity,
+                        name.as_ref(),
+                        // We pass `name` again for `other_name` because the `if` condition above
+                        // proved they are identical, saving us from binding a temporary variable.
+                        name.as_ref(),
+                    ) {
+                        unresolved_short_collisions += 1;
+                    }
+                }
+            };
 
             for r in recent_borrow.iter() {
-                if let Some(&ent) = pre_resolved.get(&r.key) {
-                    resolved_others.push((r.key.as_str(), ent));
+                if let Some(&other_entity) = pre_resolved.get(&r.key) {
+                    check_collision(&r.key, other_entity);
                 }
             }
             for &fk in future_keys {
                 if !recent_borrow.iter().any(|r| r.key == fk)
-                    && let Some(&ent) = pre_resolved.get(fk)
+                    && let Some(&other_entity) = pre_resolved.get(fk)
                 {
-                    resolved_others.push((fk, ent));
-                }
-            }
-
-            for &(other_key, other_entity) in &resolved_others {
-                if other_key != key {
-                    let other_name = other_entity.display_name_for(effective_viewer);
-                    if other_name == name {
-                        short_collisions += 1;
-
-                        // Determine if this other entity will vacate the short name by using its own long name
-                        if !Self::check_will_vacate(
-                            effective_viewer,
-                            &resolved_others,
-                            other_key,
-                            other_entity,
-                            name.as_ref(),
-                            other_name.as_ref(),
-                        ) {
-                            unresolved_short_collisions += 1;
-                        }
-                    }
+                    check_collision(fk, other_entity);
                 }
             }
 
@@ -678,23 +706,33 @@ impl PerspectiveEngine {
                 let mut long_collisions = 0;
 
                 // Verify how many times the long name collides
-                for &(other_key, other_entity) in &resolved_others {
+                let mut check_long = |other_key: &str, other_entity: &'a dyn TemplateEntity| {
                     if other_key != key {
                         let other_short = other_entity.display_name_for(effective_viewer);
-                        let mut is_long_collision = other_short == long_name;
-
-                        // Only consider the other entity's long name if its short name is in the exact
-                        // same collision group as our entity's short name to prevent phantom collisions.
-                        if !is_long_collision && other_short == name {
-                            let other_long = other_entity.long_display_name_for(effective_viewer);
-                            if other_long.as_deref() == Some(long_name.as_ref()) {
-                                is_long_collision = true;
-                            }
-                        }
-
-                        if is_long_collision {
+                        // Only consider the other entity's long name if its short name is in the
+                        // exact same collision group as our entity's short name (preventing phantoms).
+                        if other_short == long_name
+                            || (other_short == name
+                                && other_entity
+                                    .long_display_name_for(effective_viewer)
+                                    .as_deref()
+                                    == Some(long_name.as_ref()))
+                        {
                             long_collisions += 1;
                         }
+                    }
+                };
+
+                for r in recent_borrow.iter() {
+                    if let Some(&other_entity) = pre_resolved.get(&r.key) {
+                        check_long(&r.key, other_entity);
+                    }
+                }
+                for &fk in future_keys {
+                    if !recent_borrow.iter().any(|r| r.key == fk)
+                        && let Some(&other_entity) = pre_resolved.get(fk)
+                    {
+                        check_long(fk, other_entity);
                     }
                 }
 
@@ -799,12 +837,12 @@ impl PerspectiveEngine {
         // --- Handle Groups / Distributed Lists ---
         if let Some(members) = entity.group_members() {
             Self::render_group_entity(
+                ctx,
                 raw_output,
                 entity,
                 members,
                 effective_viewer,
                 &active_params,
-                ctx.stance,
                 cap_whole,
             );
             return Ok(());
@@ -835,6 +873,7 @@ impl PerspectiveEngine {
                 active_params.flags.force_article(),
                 active_params.ordinal,
                 entity.collective_noun(),
+                ctx.ordinal_word_threshold,
             )
         }) {
             raw_output.push_str(resolved_art.as_ref());
@@ -859,12 +898,12 @@ impl PerspectiveEngine {
     }
 
     fn render_group_entity(
+        ctx: &RenderContext,
         raw_output: &mut String,
         entity: &dyn TemplateEntity,
         members: &[&dyn TemplateEntity],
         effective_viewer: &str,
         params: &EntityRefParams<'_>,
-        stance: crate::models::ActorStance,
         cap_whole: bool,
     ) {
         let (viewer_entity, visible) = crate::models::partition_group(members, effective_viewer);
@@ -878,7 +917,7 @@ impl PerspectiveEngine {
         let mut decomposed_we = false;
         let mut formatted_names = Vec::with_capacity(total_visible + 1);
         if let Some(viewer) = viewer_entity {
-            if stance == crate::models::ActorStance::SecondPerson {
+            if ctx.stance == crate::models::ActorStance::SecondPerson {
                 if params.flags.is_possessive() {
                     formatted_names.push(std::borrow::Cow::Borrowed("your"));
                     if visible.is_empty() {
@@ -887,7 +926,7 @@ impl PerspectiveEngine {
                 } else {
                     formatted_names.push(std::borrow::Cow::Borrowed("you"));
                 }
-            } else if stance == crate::models::ActorStance::FirstPerson && viewer.is_plural() {
+            } else if ctx.stance == crate::models::ActorStance::FirstPerson && viewer.is_plural() {
                 if visible.is_empty() {
                     if params.flags.is_possessive() {
                         formatted_names.push(std::borrow::Cow::Borrowed("our"));
@@ -907,7 +946,7 @@ impl PerspectiveEngine {
         }
 
         let will_append_my = viewer_entity.is_some_and(|viewer| {
-            stance == crate::models::ActorStance::FirstPerson
+            ctx.stance == crate::models::ActorStance::FirstPerson
                 && (!viewer.is_plural() || decomposed_we)
         });
 
@@ -935,6 +974,7 @@ impl PerspectiveEngine {
                         params.flags.force_article(),
                         params.ordinal,
                         entity.collective_noun(),
+                        ctx.ordinal_word_threshold,
                     )
                 }) {
                 std::borrow::Cow::Owned(format!("{}{name}", resolved_art.as_ref()))

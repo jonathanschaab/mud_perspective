@@ -5058,27 +5058,48 @@ mod tests {
 
     #[test]
     fn test_number_to_ordinal_word() {
-        assert_eq!(crate::grammar::number_to_ordinal_word(3), "third");
-        assert_eq!(crate::grammar::number_to_ordinal_word(21), "twenty-first");
-        assert_eq!(crate::grammar::number_to_ordinal_word(50), "fiftieth");
+        assert_eq!(crate::grammar::number_to_ordinal_word(3, 9999), "third");
         assert_eq!(
-            crate::grammar::number_to_ordinal_word(108),
+            crate::grammar::number_to_ordinal_word(21, 9999),
+            "twenty-first"
+        );
+        assert_eq!(crate::grammar::number_to_ordinal_word(50, 9999), "fiftieth");
+        assert_eq!(
+            crate::grammar::number_to_ordinal_word(108, 9999),
             "one hundred and eighth"
         );
         assert_eq!(
-            crate::grammar::number_to_ordinal_word(111),
+            crate::grammar::number_to_ordinal_word(111, 9999),
             "one hundred and eleventh"
         );
         assert_eq!(
-            crate::grammar::number_to_ordinal_word(999),
+            crate::grammar::number_to_ordinal_word(999, 9999),
             "nine hundred and ninety-ninth"
         );
-        assert_eq!(crate::grammar::number_to_ordinal_word(1000), "1000th");
-        assert_eq!(crate::grammar::number_to_ordinal_word(1001), "1001st");
-        assert_eq!(crate::grammar::number_to_ordinal_word(1002), "1002nd");
-        assert_eq!(crate::grammar::number_to_ordinal_word(1003), "1003rd");
-        assert_eq!(crate::grammar::number_to_ordinal_word(1011), "1011th");
-        assert_eq!(crate::grammar::number_to_ordinal_word(1021), "1021st");
+        assert_eq!(
+            crate::grammar::number_to_ordinal_word(1000, 9999),
+            "one thousandth"
+        );
+        assert_eq!(
+            crate::grammar::number_to_ordinal_word(1001, 9999),
+            "one thousand and first"
+        );
+        assert_eq!(
+            crate::grammar::number_to_ordinal_word(2022, 9999),
+            "two thousand and twenty-second"
+        );
+        assert_eq!(
+            crate::grammar::number_to_ordinal_word(1_234_567, usize::MAX),
+            "one million two hundred and thirty-four thousand five hundred and sixty-seventh"
+        );
+        assert_eq!(
+            crate::grammar::number_to_ordinal_word(18_000_000_000_000_000_001, usize::MAX),
+            "eighteen quintillion and first"
+        );
+
+        // Test threshold behavior
+        assert_eq!(crate::grammar::number_to_ordinal_word(3, 0), "3rd");
+        assert_eq!(crate::grammar::number_to_ordinal_word(21, 20), "21st");
     }
 
     #[test]

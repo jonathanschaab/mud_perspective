@@ -155,8 +155,11 @@ pub struct RenderContext<'a> {
     pub stance: ActorStance,
     /// The grammatical tense used to render the template.
     pub tense: Tense,
-    /// Enables the AST Pre-Pass for omniscient short/long description disambiguation.
+    /// Enables the AST Pre-Pass for omniscient short/long description and ordinal disambiguation.
     pub lookahead: bool,
+    /// The number at which ordinal words ("third") switch to integer form ("3rd"). Defaults to 999.
+    /// Set to 0 to always use integer form.
+    pub ordinal_word_threshold: usize,
     /// The maximum number of entities to track for anaphora resolution before evicting the oldest.
     /// Defaults to 15. Set to 0 for unbounded growth.
     /// If all entities in memory are pinned, this limit will be temporarily exceeded to preserve narrative continuity.
@@ -232,6 +235,7 @@ impl<'a> RenderContext<'a> {
             stance: ActorStance::SecondPerson,
             tense: Tense::Present,
             lookahead: false,
+            ordinal_word_threshold: 999,
             anaphora_limit: 15,
             entities: HashMap::new(),
             last_mentioned: RefCell::new(None),
@@ -268,6 +272,14 @@ impl<'a> RenderContext<'a> {
     #[must_use]
     pub fn with_lookahead(mut self, lookahead: bool) -> Self {
         self.lookahead = lookahead;
+        self
+    }
+
+    /// Configures the number at which ordinal words switch to integer form.
+    /// Defaults to 999. Set to 0 to always use integer form.
+    #[must_use]
+    pub fn with_ordinal_word_threshold(mut self, threshold: usize) -> Self {
+        self.ordinal_word_threshold = threshold;
         self
     }
 

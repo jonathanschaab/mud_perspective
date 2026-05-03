@@ -396,13 +396,13 @@ pub fn format_verb(verb: &str, is_capitalized: bool) -> Cow<'_, str> {
 /// Capitalizes the first letter of a string slice.
 #[must_use]
 pub fn capitalize_first(s: &str) -> String {
-    let mut chars = s.chars();
-    match chars.next() {
+    let mut c = s.chars();
+    match c.next() {
         None => String::new(),
-        Some(first_char) => {
+        Some(f) => {
             let mut result = String::with_capacity(s.len());
-            result.extend(first_char.to_uppercase());
-            result.push_str(chars.as_str());
+            result.extend(f.to_uppercase());
+            result.push_str(c.as_str());
             result
         }
     }
@@ -418,104 +418,157 @@ fn unknown_pronoun_error(p_type: &str, context: &str) -> String {
     format!("Unknown pronoun type: {p_type}")
 }
 
-/// Converts a number into its ordinal word representation (e.g., 3 -> "third").
-#[must_use]
-pub fn number_to_ordinal_word(mut n: usize) -> String {
+/// Converts a number from 0-999 to its cardinal word representation.
+fn to_cardinal_words_lt_1000(n: usize) -> String {
+    if n == 0 {
+        return "zero".to_string();
+    }
+    to_words_lt_1000(n, false)
+}
+
+/// Converts a number from 0-999 to its ordinal word representation.
+fn to_ordinal_words_lt_1000(n: usize) -> String {
     if n == 0 {
         return "zeroth".to_string();
     }
-    if n >= 1000 {
-        let suffix = match n % 100 {
-            11..=13 => "th",
-            _ => match n % 10 {
-                1 => "st",
-                2 => "nd",
-                3 => "rd",
-                _ => "th",
-            },
-        };
-        return format!("{n}{suffix}");
+    to_words_lt_1000(n, true)
+}
+
+const CARDINAL_ONES: &[&str] = &[
+    "", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
+];
+
+const CARDINAL_TEENS: &[&str] = &[
+    "ten",
+    "eleven",
+    "twelve",
+    "thirteen",
+    "fourteen",
+    "fifteen",
+    "sixteen",
+    "seventeen",
+    "eighteen",
+    "nineteen",
+];
+
+const DECADES: &[&str] = &[
+    "", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety",
+];
+
+#[inline]
+fn make_word_ordinal(last_word: &mut String) {
+    if last_word.ends_with('y') {
+        *last_word = last_word
+            .strip_suffix('y')
+            .expect("Should have 'y'")
+            .to_string()
+            + "ieth";
+    } else if last_word.ends_with("one") {
+        *last_word = last_word
+            .strip_suffix("one")
+            .expect("Should have 'one'")
+            .to_string()
+            + "first";
+    } else if last_word.ends_with("two") {
+        *last_word = last_word
+            .strip_suffix("two")
+            .expect("Should have 'two'")
+            .to_string()
+            + "second";
+    } else if last_word.ends_with("three") {
+        *last_word = last_word
+            .strip_suffix("three")
+            .expect("Should have 'three'")
+            .to_string()
+            + "third";
+    } else if last_word.ends_with("five") {
+        *last_word = last_word
+            .strip_suffix("five")
+            .expect("Should have 'five'")
+            .to_string()
+            + "fifth";
+    } else if last_word.ends_with("eight") {
+        *last_word = last_word
+            .strip_suffix("eight")
+            .expect("Should have 'eight'")
+            .to_string()
+            + "eighth";
+    } else if last_word.ends_with("nine") {
+        *last_word = last_word
+            .strip_suffix("nine")
+            .expect("Should have 'nine'")
+            .to_string()
+            + "ninth";
+    } else if last_word.ends_with("twelve") {
+        *last_word = last_word
+            .strip_suffix("twelve")
+            .expect("Should have 'twelve'")
+            .to_string()
+            + "twelfth";
+    } else {
+        last_word.push_str("th");
     }
+}
 
-    let ones = [
-        "", "first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth",
-    ];
-    let teens = [
-        "tenth",
-        "eleventh",
-        "twelfth",
-        "thirteenth",
-        "fourteenth",
-        "fifteenth",
-        "sixteenth",
-        "seventeenth",
-        "eighteenth",
-        "nineteenth",
-    ];
-    let decades = [
-        "", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety",
-    ];
-    let tens_ord = [
-        "",
-        "",
-        "twentieth",
-        "thirtieth",
-        "fortieth",
-        "fiftieth",
-        "sixtieth",
-        "seventieth",
-        "eightieth",
-        "ninetieth",
-    ];
-    let card_ones = [
-        "", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
-    ];
-
+/// Internal helper to convert a number from 0-999 to words, with an ordinal flag.
+fn to_words_lt_1000(mut n: usize, is_ordinal: bool) -> String {
     let mut parts = Vec::new();
     if n >= 100 {
         parts.push(format!(
             "{} hundred",
-            card_ones.get(n / 100).copied().unwrap_or_default()
+            CARDINAL_ONES.get(n / 100).copied().unwrap_or_default()
         ));
         n %= 100;
-        if n > 0 {
-            parts.push("and".to_string());
-        } else {
-            let last = parts.pop().unwrap_or_default();
-            parts.push(format!("{last}th"));
-            return parts.join(" ");
-        }
     }
 
-    if (10..20).contains(&n) {
-        parts.push(teens.get(n - 10).copied().unwrap_or_default().to_string());
-    } else {
-        let tens_digit = n / 10;
-        let ones_digit = n % 10;
-
-        if tens_digit >= 2 {
-            if ones_digit == 0 {
-                parts.push(
-                    tens_ord
-                        .get(tens_digit)
-                        .copied()
-                        .unwrap_or_default()
-                        .to_string(),
-                );
-            } else {
-                parts.push(format!(
-                    "{}-{}",
-                    decades.get(tens_digit).copied().unwrap_or_default(),
-                    ones.get(ones_digit).copied().unwrap_or_default()
-                ));
-            }
-        } else if ones_digit > 0 {
+    if n > 0 {
+        if !parts.is_empty() {
+            parts.push("and".to_string());
+        }
+        if (10..20).contains(&n) {
             parts.push(
-                ones.get(ones_digit)
+                CARDINAL_TEENS
+                    .get(n - 10)
                     .copied()
                     .unwrap_or_default()
                     .to_string(),
             );
+        } else {
+            let tens_digit = n / 10;
+            let ones_digit = n % 10;
+
+            if tens_digit >= 2 {
+                let mut current_part = DECADES
+                    .get(tens_digit)
+                    .copied()
+                    .unwrap_or_default()
+                    .to_string();
+                if ones_digit > 0 {
+                    current_part = format!(
+                        "{}-{}",
+                        current_part,
+                        CARDINAL_ONES.get(ones_digit).copied().unwrap_or_default()
+                    );
+                }
+                parts.push(current_part);
+            } else if ones_digit > 0 {
+                parts.push(
+                    CARDINAL_ONES
+                        .get(ones_digit)
+                        .copied()
+                        .unwrap_or_default()
+                        .to_string(),
+                );
+            }
+        }
+    } else if parts.is_empty() {
+        return "zeroth".to_string(); // Handles n=0 at the start of to_ordinal_words_lt_1000
+    }
+
+    if is_ordinal {
+        // Apply the ordinal suffix to the last word.
+        if let Some(last_word) = parts.last_mut() {
+            make_word_ordinal(last_word);
         }
     }
 
@@ -528,6 +581,80 @@ pub fn get_indefinite_article(word: &str) -> &str {
     in_definite::get_a_or_an(word)
 }
 
+/// Converts a number into its ordinal word representation (e.g., 3 -> "third").
+/// This function handles numbers up to `usize::MAX`.
+///
+/// If the number `n` exceeds the provided `threshold`, it will be formatted as an integer
+/// with the appropriate suffix (e.g., "1001st").
+#[must_use]
+pub fn number_to_ordinal_word(n: usize, threshold: usize) -> String {
+    if n > threshold {
+        let suffix = match n % 100 {
+            11..=13 => "th",
+            _ => match n % 10 {
+                1 => "st",
+                2 => "nd",
+                3 => "rd",
+                _ => "th",
+            },
+        };
+        return format!("{n}{suffix}");
+    }
+
+    if n == 0 {
+        return "zeroth".to_string();
+    }
+
+    let scales = [
+        (1_000_000_000_000_000_000, "quintillion"),
+        (1_000_000_000_000_000, "quadrillion"),
+        (1_000_000_000_000, "trillion"),
+        (1_000_000_000, "billion"),
+        (1_000_000, "million"),
+        (1_000, "thousand"),
+    ];
+
+    let mut parts = Vec::new();
+    let mut remainder = n;
+
+    for (scale_val, scale_name) in &scales {
+        if remainder >= *scale_val {
+            let count = remainder / scale_val;
+            parts.push(format!(
+                "{} {}",
+                to_cardinal_words_lt_1000(count),
+                scale_name
+            ));
+            remainder %= scale_val;
+        }
+    }
+
+    if remainder > 0 {
+        let is_last_part = parts.is_empty();
+        if !is_last_part && remainder < 100 && remainder != 0 {
+            parts.push("and".to_string());
+        }
+        parts.push(to_ordinal_words_lt_1000(remainder));
+    } else {
+        // The number was an exact multiple of a scale, e.g., 1,000,000
+        if let Some(last_part) = parts.last_mut() {
+            // For exact multiples, ensure the scale word itself becomes ordinal (e.g., "millionth")
+            if last_part.ends_with("ion") {
+                // Common ending for large scale words
+                last_part.push_str("th");
+            } else if last_part.ends_with("dred") {
+                // For "hundred"
+                *last_part = last_part.replace("dred", "dredth");
+            } else {
+                // Fallback for "thousand"
+                last_part.push_str("th");
+            }
+        }
+    }
+
+    parts.join(" ")
+}
+
 #[inline]
 fn apply_ordinal_article(
     base: &str,
@@ -535,8 +662,9 @@ fn apply_ordinal_article(
     is_capitalized: bool,
     is_plural: bool,
     collective_noun: Option<&str>,
+    current_threshold: usize,
 ) -> Cow<'static, str> {
-    let ord_word = number_to_ordinal_word(ord);
+    let ord_word = number_to_ordinal_word(ord, current_threshold);
     let group_word = collective_noun.unwrap_or("set");
     let prefix = if is_plural {
         if base.eq_ignore_ascii_case("some") || base.is_empty() {
@@ -574,23 +702,30 @@ fn try_resolve_ordinal_article(
     is_capitalized: bool,
     is_plural: bool,
     collective_noun: Option<&str>,
+    current_threshold: usize, // Renamed to avoid shadowing
 ) -> Option<Cow<'static, str>> {
     let mut base = "";
     let mut applies = true;
 
-    match article.to_lowercase().as_str() {
-        "a" | "an" => {
-            base = if is_plural { "some" } else { "" };
-            applies = ord > 2;
-        }
-        "another" => applies = is_plural || ord > 2,
-        "the" => base = "the",
-        "this" => base = "this",
-        "that" => base = "that",
-        "one" => base = "one",
-        "one of" | "one of the" => base = "one of the",
-        "some" => base = "some",
-        _ => applies = false,
+    if article.eq_ignore_ascii_case("a") || article.eq_ignore_ascii_case("an") {
+        base = if is_plural { "some" } else { "" };
+        applies = ord > 2;
+    } else if article.eq_ignore_ascii_case("another") {
+        applies = is_plural || ord > 2;
+    } else if article.eq_ignore_ascii_case("the") {
+        base = "the";
+    } else if article.eq_ignore_ascii_case("this") {
+        base = "this";
+    } else if article.eq_ignore_ascii_case("that") {
+        base = "that";
+    } else if article.eq_ignore_ascii_case("one") {
+        base = "one";
+    } else if article.eq_ignore_ascii_case("one of") || article.eq_ignore_ascii_case("one of the") {
+        base = "one of the";
+    } else if article.eq_ignore_ascii_case("some") {
+        base = "some";
+    } else {
+        applies = false;
     }
 
     if applies {
@@ -600,6 +735,7 @@ fn try_resolve_ordinal_article(
             is_capitalized,
             is_plural,
             collective_noun,
+            current_threshold,
         ))
     } else {
         None
@@ -611,6 +747,7 @@ fn try_resolve_ordinal_article(
 ///
 /// **Note:** The returned string includes a trailing space (e.g., `"The "`, `"a "`) to ensure
 /// correct formatting when appended directly before the entity name.
+#[allow(clippy::too_many_arguments)]
 #[must_use]
 pub fn resolve_article(
     article: &str,
@@ -620,6 +757,7 @@ pub fn resolve_article(
     force_article: bool,
     ordinal: Option<usize>,
     collective_noun: Option<&str>,
+    current_threshold: usize, // Renamed to avoid shadowing
 ) -> Option<Cow<'static, str>> {
     // Suppress articles for proper nouns unless the builder explicitly forced it
     if is_proper_noun && !force_article {
@@ -630,87 +768,93 @@ pub fn resolve_article(
 
     // Fast-path for ordinals to avoid duplicating logic across all article types
     if let Some(ord) = ordinal
-        && let Some(resolved) =
-            try_resolve_ordinal_article(article, ord, is_capitalized, is_plural, collective_noun)
+        && let Some(resolved) = try_resolve_ordinal_article(
+            article,
+            ord,
+            is_capitalized,
+            is_plural,
+            collective_noun,
+            current_threshold,
+        )
     {
         return Some(resolved);
     }
 
-    match article.to_lowercase().as_str() {
-        "a" | "an" => {
-            if is_plural {
-                Some(Cow::Borrowed(if is_capitalized {
-                    "Some "
-                } else {
-                    "some "
-                }))
+    if article.eq_ignore_ascii_case("a") || article.eq_ignore_ascii_case("an") {
+        if is_plural {
+            Some(Cow::Borrowed(if is_capitalized {
+                "Some "
             } else {
-                match (is_capitalized, get_indefinite_article(entity_name)) {
-                    (true, "an") => Some(Cow::Borrowed("An ")),
-                    (false, "an") => Some(Cow::Borrowed("an ")),
-                    (true, _) => Some(Cow::Borrowed("A ")),
-                    (false, _) => Some(Cow::Borrowed("a ")),
-                }
+                "some "
+            }))
+        } else {
+            match (is_capitalized, get_indefinite_article(entity_name)) {
+                (true, "an") => Some(Cow::Borrowed("An ")),
+                (false, "an") => Some(Cow::Borrowed("an ")),
+                (true, _) => Some(Cow::Borrowed("A ")), // Covers "a" and any unexpected strings
+                (false, _) => Some(Cow::Borrowed("a ")),
             }
         }
-        "another" => {
-            if is_plural {
-                Some(Cow::Borrowed(if is_capitalized {
-                    "Other "
-                } else {
-                    "other "
-                }))
+    } else if article.eq_ignore_ascii_case("the") {
+        Some(Cow::Borrowed(if is_capitalized { "The " } else { "the " }))
+    } else if article.eq_ignore_ascii_case("this") {
+        if is_plural {
+            Some(Cow::Borrowed(if is_capitalized {
+                "These "
             } else {
-                Some(Cow::Borrowed(if is_capitalized {
-                    "Another "
-                } else {
-                    "another "
-                }))
-            }
-        }
-        "the" => Some(Cow::Borrowed(if is_capitalized { "The " } else { "the " })),
-        "this" => {
-            if is_plural {
-                Some(Cow::Borrowed(if is_capitalized {
-                    "These "
-                } else {
-                    "these "
-                }))
+                "these "
+            }))
+        } else {
+            Some(Cow::Borrowed(if is_capitalized {
+                "This "
             } else {
-                Some(Cow::Borrowed(if is_capitalized {
-                    "This "
-                } else {
-                    "this "
-                }))
-            }
+                "this "
+            }))
         }
-        "that" => {
-            if is_plural {
-                Some(Cow::Borrowed(if is_capitalized {
-                    "Those "
-                } else {
-                    "those "
-                }))
+    } else if article.eq_ignore_ascii_case("that") {
+        if is_plural {
+            Some(Cow::Borrowed(if is_capitalized {
+                "Those "
             } else {
-                Some(Cow::Borrowed(if is_capitalized {
-                    "That "
-                } else {
-                    "that "
-                }))
-            }
+                "those "
+            }))
+        } else {
+            Some(Cow::Borrowed(if is_capitalized {
+                "That "
+            } else {
+                "that "
+            }))
         }
-        "one" => Some(Cow::Borrowed(if is_capitalized { "One " } else { "one " })),
-        "one of" | "one of the" => Some(Cow::Borrowed(if is_capitalized {
+    } else if article.eq_ignore_ascii_case("another") {
+        if is_plural {
+            Some(Cow::Borrowed(if is_capitalized {
+                "Other "
+            } else {
+                "other "
+            }))
+        } else {
+            Some(Cow::Borrowed(if is_capitalized {
+                "Another "
+            } else {
+                "another "
+            }))
+        }
+    } else if article.eq_ignore_ascii_case("one") {
+        Some(Cow::Borrowed(if is_capitalized { "One " } else { "one " }))
+    } else if article.eq_ignore_ascii_case("one of") || article.eq_ignore_ascii_case("one of the") {
+        Some(Cow::Borrowed(if is_capitalized {
             "One of the "
         } else {
             "one of the "
-        })),
-        "some" => Some(Cow::Borrowed(if is_capitalized {
+        }))
+    } else if article.eq_ignore_ascii_case("some") {
+        Some(Cow::Borrowed(if is_capitalized {
             "Some "
         } else {
             "some "
-        })),
-        _ => None,
+        }))
+    } else {
+        None
     }
 }
 
