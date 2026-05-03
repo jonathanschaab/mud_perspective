@@ -62,6 +62,19 @@ fn display_name_for<'a>(&'a self, viewer_id: &str) -> Cow<'a, str> {
     Cow::Borrowed(&self.name)  
 }
 
+// Optional: Provide a more specific name to prevent "another" spam during collisions.
+// fn long_display_name_for<'a>(&'a self, _viewer_id: &str) -> Option<Cow<'a, str>> {
+//     // e.g., Some(Cow::Borrowed("large goblin"))
+//     None
+// }
+
+// Optional: Provide a collective noun for plural entities to improve ordinal phrasing.
+// fn collective_noun(&self) -> Option<&str> {
+//     if self.name == "wolves" { Some("pack") }
+//     else if self.name == "whales" { Some("pod") }
+//     else { None }
+// }
+
 // Optional: Expose nested entities like body parts, targets, or equipment
 fn get_property(&self, property_name: &str) -> Option<&dyn TemplateEntity> {
     match property_name {
@@ -73,7 +86,7 @@ fn get_property(&self, property_name: &str) -> Option<&dyn TemplateEntity> {
 }
 ```
 
-### 2\. Rendering Templates  
+### **2. Rendering Templates**  
 The engine provides a `render_msg!` macro to make evaluating templates against a context ergonomic for game logic.
 
 ```rust  
@@ -135,7 +148,80 @@ remove_irregular_verb("teleport");
 clear_irregular_verbs();
 ```
 
-### 3. Handling Groups and Swarms
+### **2.3 Broadcasting Events (Cloning Contexts)**
+
+To broadcast the same event to multiple viewers, clone a base `RenderContext` and adjust the viewer for each recipient. This avoids recompiling the template while preserving shared runtime state.
+
+```rust
+use mud_perspective::{engine::PerspectiveEngine, models::RenderContext};
+
+let base_ctx = RenderContext::new("shared_event")
+    .with_entity("source", &player)
+    .with_entity("target", &goblin);
+
+for viewer_id in room_player_ids {
+    let viewer_ctx = base_ctx.clone().with_viewer(viewer_id);
+    let output = PerspectiveEngine::render(&template, &viewer_ctx)?;
+    // Send `output` to the viewer.
+}
+```
+
+### **2.4 Dynamic Tense Shifting**
+
+A live context can be reused for logs or memory playback by shifting tense before rendering. This is useful for a memory log, journal entry, or end-of-turn recap.
+
+```rust
+use mud_perspective::{engine::PerspectiveEngine, models::{RenderContext, Tense}};
+
+let ctx = RenderContext::new("char_1")
+    .with_entity("source", &player)
+    .with_entity("target", &goblin);
+
+let past_ctx = ctx.with_tense(Tense::Past);
+let output = PerspectiveEngine::render(&template, &past_ctx)?;
+// Render the same template in past tense for a memory log.
+```
+
+### **2.5 Preserving Narrative Memory Across Game Ticks**
+
+Developers can extract the anaphora memory state to preserve pronoun continuity across asynchronous server ticks or distinct game events. This lets ambiguity detection carry over seamlessly between separate evaluation loops, even when a fresh `RenderContext` is created later.
+
+```rust
+use mud_perspective::{engine::PerspectiveEngine, models::RenderContext};
+
+let ctx = RenderContext::new("char_1").with_entity("source", &player).with_entity("target", &goblin);
+let template = cache.get_or_compile("{source} [source:attack] {target}. {target:Subj} [target:retreat].")?;
+
+let output = PerspectiveEngine::render(&template, &ctx)?;
+// Output preserves pronoun continuity for the current evaluation.
+
+let state = ctx.extract_anaphora();
+
+// Later, in a new tick or event, restore the same narrative memory.
+let new_ctx = RenderContext::new("char_1")
+    .with_entity("source", &player)
+    .with_entity("target", &goblin)
+    .with_anaphora(state);
+```
+### **2.6 Omniscient Lookahead & Disambiguation**
+
+By default, the engine evaluates templates left-to-right sequentially, which can cause narrative "pop-in" where entities are introduced as "a goblin" and later upgraded to "another goblin" as more are discovered. For static room descriptions or pre-computed narratives, developers can opt into an AST Pre-Pass by calling `.with_lookahead(true)` on the `RenderContext`. This performs a full scan ahead of time to perfectly resolve all collisions and ordinals.
+
+```rust
+use mud_perspective::{engine::PerspectiveEngine, models::RenderContext};
+
+let ctx = RenderContext::new("char_1")
+    .with_entity("g1", &goblin1)
+    .with_entity("g2", &goblin2)
+    .with_entity("g3", &goblin3)
+    .with_lookahead(true);
+
+let template = cache.get_or_compile("{g1}, {g2}, and {g3} [g1:stand] here.")?;
+let output = PerspectiveEngine::render(&template, &ctx)?;
+// Output: "A goblin, a second goblin, and a third goblin stand here."
+```
+
+### **3. Handling Groups and Swarms**
 
 The library provides a built-in `GroupEntity` to easily represent dynamic groups of characters or objects. It automatically handles Oxford comma formatting, injects "you" if the viewer is in the group, and evaluates as plural so verbs and pronouns automatically conjugate correctly ("attack" instead of "attacks", "themselves", etc.).
 
@@ -157,13 +243,16 @@ let template = cache.get_or_compile("{source} [source:open] the door.")?;
 * **Entities:** {key} inserts the entity's display name. Use {Key} to force capitalization mid-sentence. Prepend a plus (`{+key}`) to force the engine to render the character's 3rd-person name (Director Stance) even if the viewer is that character.
 * **Nested Properties:** Use dot-notation (e.g., `{source.weapon}`) to dynamically traverse nested entities. The parent entity must implement `get_property`. Nested properties inherit all formatting rules for articles, pronouns, and possessive suffixes.
 * **Possessive Nouns:** Append `'s` to any entity tag (e.g., `{source's}` or `{the:source's}`) to dynamically generate the correct possessive noun suffix. If the entity is the viewer, it automatically renders as "your" or "my". Plural entities ending in "s" (like "wolves") will correctly render with just an apostrophe ("wolves'"). Group Entities distribute possessives across all members if mixed with a pronoun (e.g., "your and the goblin's"), or append to the final item (e.g., "Aldran and the goblin's").
-* **Articles / Demonstratives:** {a:key}, {the:key}, {this:key}, or {that:key} prepends the appropriate word. Indefinite articles ("a") automatically adapt to "some" for plural entities, and demonstratives automatically adapt to plural ("these", "those"). Use {A:key}, {The:key}, etc. to force capitalization mid-sentence. These are automatically suppressed if the entity evaluates to the viewer ("you") or is flagged as a proper noun. You can force an article to render for a proper noun by prepending a plus sign (e.g., `{+this:key}`).
-* **Pronouns:** {key:type}. Supported types include subj (he/she/it/they), obj (him/her/it/them), poss (his/her/their), abs_poss (his/hers/theirs), and reflex (himself/themselves). Capitalize the type (e.g., {key:Subj}) to force capitalization mid-sentence. Prepend a plus (`{+key:subj}`) to force a 3rd-person pronoun (e.g., he/she/it/they) even if the viewer is the entity. The engine features automatic Anaphora Resolution to prevent pronoun ambiguity (see Section 5).
+* **Articles / Demonstratives:** You can use `a`, `the`, `this`, `that`, `another`, `one`, `one of the`, and `some` in front of any key to automatically append the article. Indefinite articles ("a") automatically adapt to "some" for plural entities, and demonstratives automatically adapt to plural ("these", "those"). Use `{A:key}`, `{The:key}`, etc. to force capitalization mid-sentence. These are automatically suppressed if the entity evaluates to the viewer ("you") or is flagged as a proper noun. You can force an article to render for a proper noun by prepending a plus sign (e.g., `{+this:key}`). You can disable the automatic upgrade of "a" to "the" for previously seen entities by prepending an exclamation mark (e.g., `{!a:key}`).
+  * *Ordinals:* If multiple indistinguishable entities are introduced in the same context, the engine automatically upgrades "another" into ordinals ("a third", "a fourth"). You can reference them explicitly with definite articles (e.g. `{the:w1}` -> "the first wolf", `{the:w2}` -> "the second wolf"). Ordinals are stable, meaning they persist even if other entities leave the room, and reset automatically when the group drops to a single member. By default, ordinals are rendered as words up to 999, after which they switch to integer form ("1000th"). You can configure this threshold using `ctx.with_ordinal_word_threshold(20)`.
+* **Singular Overrides:** Prepend a minus sign (`{-source}`) to force a plural entity to be treated as singular for verbs and pronouns. This is extremely useful when combined with the `one of the` article to target a specific individual in a swarm (e.g., `{One of the:wolves} [-wolves:howl]` -> "One of the wolves howls.").
+* **Pronouns:** {key:type}. Supported types include subj (he/she/it/they), obj (him/her/it/them), poss (his/her/their), abs_poss (his/hers/theirs), and reflex (himself/themselves). Capitalize the type (e.g., {key:Subj}) to force capitalization mid-sentence. Prepend a plus (`{+key:subj}`) to force a 3rd-person pronoun (e.g., he/she/it/they) even if the viewer is the entity. You can force a pronoun to render even if the engine detects it would be ambiguous by prepending an exclamation mark to the type (e.g., `{key:!subj}`). The engine features automatic Anaphora Resolution to prevent pronoun ambiguity (see Section 5).
 
 * **Verbs:** [key:verb] explicitly binds a base verb to a subject to ensure correct conjugation (including "be" -> "is"/"are" in the present tense, "was"/"were" in the past tense, and "will be" in the future tense). All verbs must be written in their base form (e.g. `[source:attack]`, not `[source:attacked]`) so the engine can accurately shift between tenses. Capitalize the verb (e.g., [key:Verb]) to force capitalization mid-sentence. Prepend a plus (`[+key:verb]`) to force 3rd-person conjugation. You can also bypass conjugation across all perspectives by appending a pipe and the desired form (e.g., `[key:be|be]`). You can provide multiple pipe segments to explicitly define the forms for different perspectives: `[key:freak out|freak out|freaks out]` (base/plural and 3rd-person singular) or `[key:be|am|are|is]` (1st-person singular, 2nd-person/plural, and 3rd-person singular). To provide overrides for the past tense, append a semicolon `;` followed by the past tense forms (e.g., `[key:be|am|are|is;was|were|was]`). You can provide *only* past tense overrides by omitting the present tense segment entirely (e.g., `[key:run|;ran]`). If a tense is omitted, the engine will safely fall back to native automatic conjugation for that tense. Future tense is strictly generated by naturally prepending "will" to the base verb, and safely ignores all inline overrides. Phrasal verbs (e.g. `[key:pick up]`) are naturally supported; the engine dynamically isolates the first word to ensure `"pick up"` correctly conjugates to `"picks up"`.
 * **Colliding Verbs:** Some verbs share the same base form but have different past tense conjugations depending on their meaning (e.g., "to lie" -> *lay* vs *lied*). To guarantee the intended meaning when shifting to the past tense, annotate the base verb using parentheses: `[source:lie(lay)]` or `[source:lie(lied)]`. If you use an ambiguous base verb without annotation, the template compiler will emit a warning logging the available options, and default to the first dictionary entry.
 
 * **Escaping:** Use a backslash (`\`) to escape special characters if you need to output literal braces or brackets (e.g., `\{`, `\}`, `\[`, `\]`). You can also escape a backslash itself (`\\`).
+* **Sentence Boundaries:** To handle edge cases where the Unicode sentence segmenter might fail (e.g., with abbreviations), you can manually control capitalization. Use `[SB]` to force a sentence break (capitalizing the next word, e.g., `wait, [SB]what?` -> "Wait, What?"). Use `[NO_SB]` to prevent a sentence boundary from triggering capitalization (e.g., `vs.[NO_SB] the goblin`).
 
 ### **4.1 Continuous and Perfect Tenses**
 
@@ -198,6 +287,7 @@ The engine features an Anaphora Resolution system. It allows you to write templa
   * **Game Ticks:** If your game loop spans across multiple server ticks or async events, you can extract the full narrative state using `let state = ctx.extract_anaphora()` and inject it into a brand new context later using `RenderContext::new(...).with_anaphora(state)`. This ensures ambiguity detection carries over.
 * **Memory Limits (LRU):** To prevent memory from growing unbounded during extremely long, continuous encounters, the anaphora memory acts as a Least-Recently-Used (LRU) cache defaulting to 15 entities. You can configure this limit using `ctx.with_anaphora_limit(size)`.
 * **Pinning & Manual Control:** In crowded scenarios, important characters might get pushed out of the LRU cache by a flurry of secondary actors. Protect them by pinning them into memory using `ctx.with_pinned_entity("key")` or `ctx.pin_anaphora("key")`. You can unpin them using `ctx.unpin_anaphora("key")`. You can also explicitly remove entities using `ctx.without_anaphora("key")` or `ctx.forget_anaphora("key")`.
+* **Forcing Behaviors:** If you explicitly want to suppress the engine's anaphoric article upgrades or pronoun ambiguity fallbacks, you can use the `!` prefix modifier. Writing `{!a:source}` prevents "a" from upgrading to "the". Writing `{source:!subj}` forces the engine to output the pronoun even if it detects an ambiguous collision in the current memory.
 * **Resetting Memory:** To manually clear the engine's memory, call `ctx.clear_anaphora()`. You should do this whenever narrative continuity is broken to prevent awkward, lingering pronoun references. Good times to call this include:
   * When a player moves to a new room or area.
   * When a significant amount of time passes between events.
@@ -243,7 +333,7 @@ mud_perspective = { version = "0.1", default-features = false, features = ["ansi
 While functional for standard MUD environments, the current architecture has several limitations that developers should be aware of:
 
 1. **English-Only Morphology:** The verb conjugation and pronoun resolution algorithms are strictly hardcoded for English grammar. Supporting languages with complex declensions or grammatical gender agreement (e.g., Romance or Slavic languages) would require a fundamental rewrite of the grammar.rs module.  
-2. **Abbreviation Boundary Detection:** The typography post-processor relies on standard Unicode sentence segmentation to capitalize the first letter of each sentence. Because it lacks a comprehensive natural language abbreviation dictionary, it may incorrectly capitalize words immediately following common abbreviations (e.g., treating the period in "Mr. Smith" as a hard sentence boundary).
+2. **Abbreviation Boundary Detection:** The typography post-processor relies on standard Unicode sentence segmentation to capitalize the first letter of each sentence. Because it lacks a comprehensive natural language abbreviation dictionary, it may incorrectly capitalize words immediately following common abbreviations (e.g., treating the period in "vs. the goblin" as a hard sentence boundary, outputting "vs. The goblin"). Builders must manually annotate these exceptions using the `[NO_SB]` tag.
 3. **Past Tense Inflection by Person:** In modern English, "to be" is the only verb that changes form in the past tense based on the subject (*I was, you were*). The engine hardcodes this specific exception, but cannot dynamically handle hypothetical or custom verbs that inflect by person in the past tense.
 4. **Multiple Verbs per Tag:** The engine leverages space-splitting to isolate and conjugate the root word of phrasal verbs (e.g., `catch up` -> `catches up`). Consequently, placing entirely separate verbs into a single tag (e.g., `[source:run and jump]`) will fail to conjugate the subsequent verbs. Each verb must be wrapped in its own tag.
 5. **Semantic Syntax Limitations:** Because the engine is a rapid morphological formatter rather than an AI-driven NLP parser, it cannot detect contextual sentence structures. This results in the edge cases surrounding the subjunctive mood detailed in Section 4.2.

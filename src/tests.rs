@@ -46,6 +46,18 @@ mod tests {
             }
         }
 
+        fn long_display_name_for<'a>(&'a self, _: &str) -> Option<Cow<'a, str>> {
+            if self.id == "mob_2_long" || self.id == "mob_3_long_collide" {
+                Some(Cow::Borrowed("large wolf"))
+            } else if self.id == "mob_1_scrawny" {
+                Some(Cow::Borrowed("scrawny wolf"))
+            } else if self.id == "char_jim" {
+                Some(Cow::Borrowed("large wolf"))
+            } else {
+                None
+            }
+        }
+
         fn is_proper_noun_for(&self, viewer_id: &str) -> bool {
             // If the stranger sees the masked "tall man", it is no longer a proper noun
             if viewer_id == "stranger_1" && (self.name == "Aldran" || self.name == "the Avengers") {
@@ -1345,7 +1357,7 @@ mod tests {
             .get_or_compile("{target:Subj} [target:look] around.")
             .unwrap();
         let out1 = PerspectiveEngine::render(&t1, &ctx).unwrap();
-        assert_eq!(out1, "The goblin looks around.");
+        assert_eq!(out1, "A goblin looks around.");
 
         // 2. Second time using a pronoun tag: The context REMEMBERS the goblin and uses "It"!
         let t2 = cache
@@ -1357,7 +1369,7 @@ mod tests {
         // 3. Clearing the context resets the memory, expanding it to the full name again.
         ctx.clear_anaphora();
         let out3 = PerspectiveEngine::render(&t2, &ctx).unwrap();
-        assert_eq!(out3, "The goblin attacks!");
+        assert_eq!(out3, "A goblin attacks!");
 
         // 4. Interruption by another entity prevents confusing pronouns
         ctx.clear_anaphora();
@@ -1382,7 +1394,7 @@ mod tests {
             .unwrap();
 
         let out5 = PerspectiveEngine::render(&t5, &ctx).unwrap();
-        assert_eq!(out5, "The slime's sword falls, and it cuts itself.");
+        assert_eq!(out5, "A slime's sword falls, and it cuts itself.");
     }
 
     #[test]
@@ -1522,12 +1534,12 @@ mod tests {
 
         // {target:Subj} requests a capitalized pronoun ("It").
         // Since it's the first mention, it falls back to the full noun with an article.
-        // We expect "The giant spider", NOT "The Giant Spider" or "The Giant spider".
+        // We expect "A giant spider", NOT "A Giant Spider" or "A Giant spider".
         let template = cache
             .get_or_compile("{target:Subj} [target:hiss].")
             .unwrap();
         let output = PerspectiveEngine::render(&template, &ctx).unwrap();
-        assert_eq!(output, "The giant spider hisses.");
+        assert_eq!(output, "A giant spider hisses.");
     }
 
     #[test]
@@ -4278,6 +4290,1565 @@ mod tests {
         assert_eq!(
             PerspectiveEngine::render(&t_main, &ctx_future).unwrap(),
             "Aldran will do the laundry."
+        );
+    }
+
+    #[test]
+    fn test_definite_description_upgrade() {
+        let wolf1 = MockEntity {
+            id: "mob_1".to_string(),
+            name: "wolf".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+        let template = cache
+            .get_or_compile("{A:source} [source:walk] in. {A:source} [source:howl].")
+            .unwrap();
+
+        let ctx = RenderContext::new("char_1").with_entity("source", &wolf1);
+
+        // First mention uses "A", second uses "The"
+        assert_eq!(
+            PerspectiveEngine::render(&template, &ctx).unwrap(),
+            "A wolf walks in. The wolf howls."
+        );
+    }
+
+    #[test]
+    fn test_definite_description_upgrade_collision() {
+        let wolf1 = MockEntity {
+            id: "mob_1".to_string(),
+            name: "wolf".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+        let wolf2 = MockEntity {
+            id: "mob_2".to_string(),
+            name: "wolf".to_string(), // Same display name!
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+        let template = cache
+            .get_or_compile(
+                "{A:source} [source:walk] in. {A:other} [other:walk] in. {A:source} [source:howl].",
+            )
+            .unwrap();
+
+        let ctx = RenderContext::new("char_1")
+            .with_entity("source", &wolf1)
+            .with_entity("other", &wolf2);
+
+        // First is "A", second is "Another", third is "The first"
+        assert_eq!(
+            PerspectiveEngine::render(&template, &ctx).unwrap(),
+            "A wolf walks in. Another wolf walks in. The first wolf howls."
+        );
+    }
+
+    #[test]
+    fn test_definite_description_upgrade_plural() {
+        let wolves = MockEntity {
+            id: "mob_1".to_string(),
+            name: "wolves".to_string(),
+            gender: Gender::Plural,
+            is_plural: true,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+        let template = cache
+            .get_or_compile("{A:source} [source:approach]. {A:source} [source:howl].")
+            .unwrap();
+
+        let ctx = RenderContext::new("char_1").with_entity("source", &wolves);
+
+        // First is "Some wolves", second is "The wolves"
+        assert_eq!(
+            PerspectiveEngine::render(&template, &ctx).unwrap(),
+            "Some wolves approach. The wolves howl."
+        );
+    }
+
+    #[test]
+    fn test_suppress_anaphora_upgrades() {
+        let wolf1 = MockEntity {
+            id: "mob_1".to_string(),
+            name: "wolf".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+        let wolf2 = MockEntity {
+            id: "mob_2".to_string(),
+            name: "wolf".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+
+        // 1. Suppress article upgrade
+        let t_article = cache
+            .get_or_compile("{A:source} [source:walk] in. {!A:source} [source:howl].")
+            .unwrap();
+        let ctx1 = RenderContext::new("char_1").with_entity("source", &wolf1);
+        assert_eq!(
+            PerspectiveEngine::render(&t_article, &ctx1).unwrap(),
+            "A wolf walks in. A wolf howls." // The ! prefix successfully suppressed "The"
+        );
+
+        // 2. Suppress pronoun fallback (Ambiguity between wolf1 and wolf2)
+        let t_pronoun = cache
+            .get_or_compile("{A:source} [source:walk] in. {A:other} [other:walk] in. {source:!Subj} [source:howl].")
+            .unwrap();
+        let ctx2 = RenderContext::new("char_1")
+            .with_entity("source", &wolf1)
+            .with_entity("other", &wolf2);
+
+        // Because of `!`, the engine forces "It howls." instead of falling back to "The wolf howls."
+        assert_eq!(
+            PerspectiveEngine::render(&t_pronoun, &ctx2).unwrap(),
+            "A wolf walks in. Another wolf walks in. It howls."
+        );
+    }
+
+    #[test]
+    fn test_definite_description_synergy_with_pronouns() {
+        let goblin = MockEntity {
+            id: "mob_1".to_string(),
+            name: "goblin".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+        // Introduces with 'A', uses pronoun, then attempts 'A' again to see if it upgraded to 'The'
+        let template = cache
+            .get_or_compile("{A:source} [source:arrive]. {source:Subj} [source:wait]. {A:source} [source:attack]!")
+            .unwrap();
+
+        let ctx = RenderContext::new("char_1").with_entity("source", &goblin);
+
+        assert_eq!(
+            PerspectiveEngine::render(&template, &ctx).unwrap(),
+            "A goblin arrives. It waits. The goblin attacks!"
+        );
+    }
+
+    #[test]
+    fn test_definite_description_upgrade_with_possessives() {
+        let goblin = MockEntity {
+            id: "mob_1".to_string(),
+            name: "goblin".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+        let template = cache
+            .get_or_compile("{A:source's} sword [source:fall]. {A:source's} shield [source:break].")
+            .unwrap();
+
+        let ctx = RenderContext::new("char_1").with_entity("source", &goblin);
+
+        assert_eq!(
+            PerspectiveEngine::render(&template, &ctx).unwrap(),
+            "A goblin's sword falls. The goblin's shield breaks."
+        );
+    }
+
+    #[test]
+    fn test_definite_description_viewer_suppression() {
+        let player = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+
+        let cache = TemplateCache::new(100);
+        let template = cache
+            .get_or_compile("{A:source} [source:walk]. {A:source} [source:run].")
+            .unwrap();
+
+        let ctx = RenderContext::new("char_1").with_entity("source", &player);
+
+        // The 'A' and 'The' upgrades are both cleanly suppressed because the entity is the viewer
+        assert_eq!(
+            PerspectiveEngine::render(&template, &ctx).unwrap(),
+            "You walk. You run."
+        );
+    }
+
+    #[test]
+    fn test_definite_description_upgrade_with_nested_properties() {
+        struct Weapon {
+            name: String,
+        }
+        impl TemplateEntity for Weapon {
+            fn contains_viewer(&self, _: &str) -> bool {
+                false
+            }
+            fn gender(&self) -> Gender {
+                Gender::Neutral
+            }
+            fn is_plural(&self) -> bool {
+                false
+            }
+            fn is_proper_noun_for(&self, _: &str) -> bool {
+                false
+            }
+            fn display_name_for<'a>(&'a self, _: &str) -> Cow<'a, str> {
+                Cow::Borrowed(&self.name)
+            }
+        }
+
+        let rusty_sword = Weapon {
+            name: "rusty sword".into(),
+        };
+
+        let goblin = MockEntity {
+            id: "mob_1".into(),
+            name: "goblin".into(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+        let template = cache
+            .get_or_compile("{A:source} [source:draw] {a:weapon}. {A:weapon} [weapon:be] sharp.")
+            .unwrap();
+
+        let ctx = RenderContext::new("char_1")
+            .with_entity("source", &goblin)
+            .with_entity("weapon", &rusty_sword);
+
+        assert_eq!(
+            PerspectiveEngine::render(&template, &ctx).unwrap(),
+            "A goblin draws a rusty sword. The rusty sword is sharp."
+        );
+    }
+
+    #[test]
+    fn test_pronoun_fallback_article_upgrade() {
+        let wolf1 = MockEntity {
+            id: "mob_1".to_string(),
+            name: "wolf".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+        let wolf2 = MockEntity {
+            id: "mob_2".to_string(),
+            name: "wolf".to_string(), // Name collision with wolf1!
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+        let slime = MockEntity {
+            id: "mob_3".to_string(),
+            name: "slime".to_string(), // Pronoun collision (Neutral), but unique name!
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+
+        // Scenario 1: Unseen -> "A"
+        // The wolf hasn't been introduced, so the pronoun falls back to "A wolf".
+        let t1 = cache
+            .get_or_compile("{source:Subj} [source:howl].")
+            .unwrap();
+        let ctx1 = RenderContext::new("char_1").with_entity("source", &wolf1);
+        assert_eq!(
+            PerspectiveEngine::render(&t1, &ctx1).unwrap(),
+            "A wolf howls."
+        );
+
+        // Scenario 2: Pronoun Collision, but Unique Name -> "The"
+        // The slime makes the pronoun "It" ambiguous. It falls back to "A", which sees it's unique and upgrades to "The".
+        let t2 = cache
+            .get_or_compile("{a:source} and {a:slime} arrive. {source:Subj} [source:howl].")
+            .unwrap();
+        let ctx2 = RenderContext::new("char_1")
+            .with_entity("source", &wolf1)
+            .with_entity("slime", &slime);
+        assert_eq!(
+            PerspectiveEngine::render(&t2, &ctx2).unwrap(),
+            "A wolf and a slime arrive. The wolf howls."
+        );
+
+        // Scenario 3: Pronoun Collision AND Name Collision -> "A"
+        // The second wolf makes the pronoun "It" ambiguous. It falls back to "A", but sees "wolf" is no longer a unique description, so it stays "A".
+        let t3 = cache
+            .get_or_compile("{a:source} and {a:other} arrive. {source:Subj} [source:howl].")
+            .unwrap();
+        let ctx3 = RenderContext::new("char_1")
+            .with_entity("source", &wolf1)
+            .with_entity("other", &wolf2);
+        assert_eq!(
+            PerspectiveEngine::render(&t3, &ctx3).unwrap(),
+            "A wolf and another wolf arrive. The first wolf howls."
+        );
+    }
+
+    #[test]
+    fn test_manual_sentence_boundaries() {
+        let cache = TemplateCache::new(100);
+        let ctx = RenderContext::new("viewer");
+
+        // 1. [SB] forces a sentence boundary
+        let t_sb = cache.get_or_compile("wait, [SB]what?").unwrap();
+        let out_sb = PerspectiveEngine::render(&t_sb, &ctx).unwrap();
+        assert_eq!(out_sb, "Wait, What?");
+
+        // 2. [NO_SB] suppresses a sentence boundary
+        let t_no_sb = cache.get_or_compile("apples vs.[NO_SB] oranges.").unwrap();
+        let out_no_sb = PerspectiveEngine::render(&t_no_sb, &ctx).unwrap();
+        assert_eq!(out_no_sb, "Apples vs. oranges.");
+
+        // 3. Ensuring tags don't output stray whitespace and chain well
+        let t_combined = cache.get_or_compile("one.[NO_SB] two[SB] three.").unwrap();
+        let out_combined = PerspectiveEngine::render(&t_combined, &ctx).unwrap();
+        assert_eq!(out_combined, "One. two Three.");
+    }
+
+    #[test]
+    fn test_long_description_disambiguation() {
+        let wolf1 = MockEntity {
+            id: "mob_1".to_string(),
+            name: "wolf".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+        let wolf2 = MockEntity {
+            id: "mob_2_long".to_string(),
+            name: "wolf".to_string(), // Collides with wolf1!
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+
+        // 1. Direct Entity Tags
+        let t1 = cache
+            .get_or_compile("{A:source} and {a:other} arrive.")
+            .unwrap();
+        let ctx1 = RenderContext::new("char_1")
+            .with_entity("source", &wolf1)
+            .with_entity("other", &wolf2);
+
+        assert_eq!(
+            PerspectiveEngine::render(&t1, &ctx1).unwrap(),
+            "A wolf and a large wolf arrive."
+        );
+
+        // Clear the anaphora memory so the second template evaluates as a fresh encounter!
+        ctx1.clear_anaphora();
+
+        // 2. Pronoun Fallback Upgrades
+        let t2 = cache
+            .get_or_compile("{A:source} and {a:other} arrive. {other:Subj} [other:howl].")
+            .unwrap();
+
+        assert_eq!(
+            PerspectiveEngine::render(&t2, &ctx1).unwrap(),
+            "A wolf and a large wolf arrive. The large wolf howls."
+        );
+    }
+
+    #[test]
+    fn test_long_description_disambiguation_collision() {
+        let wolf1 = MockEntity {
+            id: "mob_2_long".to_string(), // Has long name "large wolf"
+            name: "wolf".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+        let wolf2 = MockEntity {
+            id: "mob_3_long_collide".to_string(), // Also has long name "large wolf"
+            name: "wolf".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+
+        let t1 = cache
+            .get_or_compile("{A:source} and {a:other} arrive.")
+            .unwrap();
+        let ctx1 = RenderContext::new("char_1")
+            .with_entity("source", &wolf1)
+            .with_entity("other", &wolf2);
+
+        assert_eq!(
+            PerspectiveEngine::render(&t1, &ctx1).unwrap(),
+            "A wolf and another wolf arrive."
+        );
+    }
+
+    #[test]
+    fn test_long_description_partial_disambiguation() {
+        let wolf_scrawny = MockEntity {
+            id: "mob_1_scrawny".to_string(),
+            name: "wolf".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+        let wolf_large1 = MockEntity {
+            id: "mob_2_long".to_string(),
+            name: "wolf".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+        let wolf_large2 = MockEntity {
+            id: "mob_3_long_collide".to_string(),
+            name: "wolf".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+
+        let t1 = cache
+            .get_or_compile("{A:w1} enters. {A:w2} enters. {A:w3} enters.")
+            .unwrap();
+        let ctx1 = RenderContext::new("char_1")
+            .with_entity("w1", &wolf_scrawny)
+            .with_entity("w2", &wolf_large1)
+            .with_entity("w3", &wolf_large2);
+
+        assert_eq!(
+            PerspectiveEngine::render(&t1, &ctx1).unwrap(),
+            "A wolf enters. A large wolf enters. Another large wolf enters."
+        );
+    }
+
+    #[test]
+    fn test_long_description_phantom_collision() {
+        let jim = MockEntity {
+            id: "char_jim".to_string(), // Has the long name "large wolf"
+            name: "Jim".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+        let wolf_scrawny = MockEntity {
+            id: "mob_1_scrawny".to_string(),
+            name: "wolf".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+        let wolf_large1 = MockEntity {
+            id: "mob_2_long".to_string(),
+            name: "wolf".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+        let wolf_large2 = MockEntity {
+            id: "mob_3_long_collide".to_string(),
+            name: "wolf".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+
+        // Jim's hidden long name should NOT prevent the wolves from disambiguating to "large wolf"
+        let t1 = cache
+            .get_or_compile("{A:jim} enters. {A:w1} enters. {A:w2} enters. {A:w3} enters.")
+            .unwrap();
+        let ctx1 = RenderContext::new("char_1")
+            .with_entity("jim", &jim)
+            .with_entity("w1", &wolf_scrawny)
+            .with_entity("w2", &wolf_large1)
+            .with_entity("w3", &wolf_large2);
+
+        assert_eq!(
+            PerspectiveEngine::render(&t1, &ctx1).unwrap(),
+            "Jim enters. A wolf enters. A large wolf enters. Another large wolf enters."
+        );
+    }
+
+    struct ConfigurableMockEntity {
+        id: String,
+        name: String,
+        long_name: Option<String>,
+        gender: Gender,
+    }
+
+    impl TemplateEntity for ConfigurableMockEntity {
+        fn contains_viewer(&self, viewer_id: &str) -> bool {
+            self.id == viewer_id
+        }
+        fn gender(&self) -> Gender {
+            self.gender
+        }
+        fn is_plural(&self) -> bool {
+            self.gender == Gender::Plural
+        }
+        fn is_proper_noun_for(&self, _: &str) -> bool {
+            false
+        }
+        fn display_name_for<'a>(&'a self, _: &str) -> Cow<'a, str> {
+            Cow::Borrowed(&self.name)
+        }
+        fn long_display_name_for<'a>(&'a self, _: &str) -> Option<Cow<'a, str>> {
+            self.long_name.as_deref().map(Cow::Borrowed)
+        }
+    }
+
+    #[test]
+    fn test_long_description_mutual_exclusion_fallback() {
+        let w1 = ConfigurableMockEntity {
+            id: "w1".into(),
+            name: "wolf".into(),
+            long_name: None,
+            gender: Gender::Neutral,
+        };
+        let w2 = ConfigurableMockEntity {
+            id: "w2".into(),
+            name: "wolf".into(),
+            long_name: Some("large wolf".into()),
+            gender: Gender::Neutral,
+        };
+
+        let cache = TemplateCache::new(100);
+        let t = cache
+            .get_or_compile("{A:w1} and {a:w2} arrive. {w1:Subj} [w1:bark]. {w2:Subj} [w2:growl].")
+            .unwrap();
+        let ctx = RenderContext::new("viewer")
+            .with_entity("w1", &w1)
+            .with_entity("w2", &w2);
+
+        // Because w2 vacates the "wolf" namespace to become "large wolf", w1 correctly
+        // realizes it is unique, resolving its pronoun fallback to "The wolf" rather than "A wolf"!
+        assert_eq!(
+            PerspectiveEngine::render(&t, &ctx).unwrap(),
+            "A wolf and a large wolf arrive. The wolf barks. The large wolf growls."
+        );
+    }
+
+    #[test]
+    fn test_long_description_identical_to_unrelated_short() {
+        let w1 = ConfigurableMockEntity {
+            id: "w1".into(),
+            name: "wolf".into(),
+            long_name: None,
+            gender: Gender::Neutral,
+        };
+        let w2 = ConfigurableMockEntity {
+            id: "w2".into(),
+            name: "wolf".into(),
+            long_name: Some("dire wolf".into()),
+            gender: Gender::Neutral,
+        };
+        let d1 = ConfigurableMockEntity {
+            id: "d1".into(),
+            name: "dire wolf".into(),
+            long_name: None,
+            gender: Gender::Neutral,
+        };
+
+        let cache = TemplateCache::new(100);
+        let t = cache
+            .get_or_compile("{A:w1}, {a:d1}, and {a:w2} arrive.")
+            .unwrap();
+        let ctx = RenderContext::new("viewer")
+            .with_entity("w1", &w1)
+            .with_entity("w2", &w2)
+            .with_entity("d1", &d1);
+
+        // w2 tries to use its long name ("dire wolf"). But doing so causes 1 collision (with d1).
+        // Its short name ("wolf") also causes 1 collision (with w1).
+        // Since the long name does not strictly DECREASE collisions (1 is not less than 1), it stays "wolf".
+        assert_eq!(
+            PerspectiveEngine::render(&t, &ctx).unwrap(),
+            "A wolf, a dire wolf, and another wolf arrive."
+        );
+    }
+
+    #[test]
+    fn test_long_description_identical_long_names() {
+        let w2 = ConfigurableMockEntity {
+            id: "w2".into(),
+            name: "wolf".into(),
+            long_name: Some("large wolf".into()),
+            gender: Gender::Neutral,
+        };
+        let w3 = ConfigurableMockEntity {
+            id: "w3".into(),
+            name: "wolf".into(),
+            long_name: Some("large wolf".into()),
+            gender: Gender::Neutral,
+        };
+
+        let cache = TemplateCache::new(100);
+        let t = cache.get_or_compile("{A:w2} and {a:w3} arrive.").unwrap();
+        let ctx = RenderContext::new("viewer")
+            .with_entity("w2", &w2)
+            .with_entity("w3", &w3);
+
+        // Both have the same short name (1 collision). Both have the same long name (1 collision).
+        // Because 1 is not less than 1, neither uses their long name!
+        assert_eq!(
+            PerspectiveEngine::render(&t, &ctx).unwrap(),
+            "A wolf and another wolf arrive."
+        );
+    }
+
+    #[test]
+    fn test_long_description_empty_or_same() {
+        let w1 = ConfigurableMockEntity {
+            id: "w1".into(),
+            name: "wolf".into(),
+            long_name: None,
+            gender: Gender::Neutral,
+        };
+        let w2 = ConfigurableMockEntity {
+            id: "w2".into(),
+            name: "wolf".into(),
+            long_name: Some("wolf".into()),
+            gender: Gender::Neutral,
+        };
+
+        let cache = TemplateCache::new(100);
+        let t = cache.get_or_compile("{A:w1} and {a:w2} arrive.").unwrap();
+        let ctx = RenderContext::new("viewer")
+            .with_entity("w1", &w1)
+            .with_entity("w2", &w2);
+
+        // w2's long name is exactly the same as its short name. The engine should bypass
+        // evaluation entirely and output "another wolf".
+        assert_eq!(
+            PerspectiveEngine::render(&t, &ctx).unwrap(),
+            "A wolf and another wolf arrive."
+        );
+    }
+
+    #[test]
+    fn test_long_description_mixed_availability_order_a() {
+        // w1 has a long name. w2 does not.
+        let w1 = ConfigurableMockEntity {
+            id: "w1".into(),
+            name: "wolf".into(),
+            long_name: Some("large wolf".into()),
+            gender: Gender::Neutral,
+        };
+        let w2 = ConfigurableMockEntity {
+            id: "w2".into(),
+            name: "wolf".into(),
+            long_name: None,
+            gender: Gender::Neutral,
+        };
+
+        let cache = TemplateCache::new(100);
+
+        // w1 goes FIRST. It doesn't know w2 exists yet, so it uses its short name.
+        let t = cache
+            .get_or_compile("{A:w1} and {a:w2} arrive. {w1:Subj} [w1:growl]. {w2:Subj} [w2:bark].")
+            .unwrap();
+        let ctx = RenderContext::new("viewer")
+            .with_entity("w1", &w1)
+            .with_entity("w2", &w2);
+
+        assert_eq!(
+            PerspectiveEngine::render(&t, &ctx).unwrap(),
+            "A wolf and another wolf arrive. The large wolf growls. The wolf barks."
+        );
+    }
+
+    #[test]
+    fn test_long_description_mixed_availability_order_b() {
+        // w1 has a long name. w2 does not.
+        let w1 = ConfigurableMockEntity {
+            id: "w1".into(),
+            name: "wolf".into(),
+            long_name: Some("large wolf".into()),
+            gender: Gender::Neutral,
+        };
+        let w2 = ConfigurableMockEntity {
+            id: "w2".into(),
+            name: "wolf".into(),
+            long_name: None,
+            gender: Gender::Neutral,
+        };
+
+        let cache = TemplateCache::new(100);
+
+        // w2 goes FIRST. When w1 goes second, it sees w2 and upgrades to its long name immediately!
+        let t = cache
+            .get_or_compile("{A:w2} and {a:w1} arrive. {w2:Subj} [w2:bark]. {w1:Subj} [w1:growl].")
+            .unwrap();
+        let ctx = RenderContext::new("viewer")
+            .with_entity("w1", &w1)
+            .with_entity("w2", &w2);
+
+        assert_eq!(
+            PerspectiveEngine::render(&t, &ctx).unwrap(),
+            "A wolf and a large wolf arrive. The wolf barks. The large wolf growls."
+        );
+    }
+
+    #[test]
+    fn test_long_description_lookahead() {
+        // w1 has a long name. w2 does not.
+        let w1 = ConfigurableMockEntity {
+            id: "w1".into(),
+            name: "wolf".into(),
+            long_name: Some("large wolf".into()),
+            gender: Gender::Neutral,
+        };
+        let w2 = ConfigurableMockEntity {
+            id: "w2".into(),
+            name: "wolf".into(),
+            long_name: None,
+            gender: Gender::Neutral,
+        };
+
+        let cache = TemplateCache::new(100);
+
+        let t = cache
+            .get_or_compile("{A:w1} and {a:w2} arrive. {w1:Subj} [w1:growl]. {w2:Subj} [w2:bark].")
+            .unwrap();
+
+        // Without lookahead (left-to-right causal pop-in)
+        let ctx_default = RenderContext::new("viewer")
+            .with_entity("w1", &w1)
+            .with_entity("w2", &w2);
+        assert_eq!(
+            PerspectiveEngine::render(&t, &ctx_default).unwrap(),
+            "A wolf and another wolf arrive. The large wolf growls. The wolf barks."
+        );
+
+        // With lookahead: w1 realizes w2 is coming and will cause a collision.
+        // It immediately preempts the ambiguity and uses its long name on the very first mention!
+        let ctx_lookahead = RenderContext::new("viewer")
+            .with_entity("w1", &w1)
+            .with_entity("w2", &w2)
+            .with_lookahead(true);
+        assert_eq!(
+            PerspectiveEngine::render(&t, &ctx_lookahead).unwrap(),
+            "A large wolf and a wolf arrive. The large wolf growls. The wolf barks."
+        );
+    }
+
+    #[test]
+    fn test_number_to_ordinal_word() {
+        assert_eq!(crate::grammar::number_to_ordinal_word(3, 9999), "third");
+        assert_eq!(
+            crate::grammar::number_to_ordinal_word(21, 9999),
+            "twenty-first"
+        );
+        assert_eq!(crate::grammar::number_to_ordinal_word(50, 9999), "fiftieth");
+        assert_eq!(
+            crate::grammar::number_to_ordinal_word(108, 9999),
+            "one hundred and eighth"
+        );
+        assert_eq!(
+            crate::grammar::number_to_ordinal_word(111, 9999),
+            "one hundred and eleventh"
+        );
+        assert_eq!(
+            crate::grammar::number_to_ordinal_word(999, 9999),
+            "nine hundred and ninety-ninth"
+        );
+        assert_eq!(
+            crate::grammar::number_to_ordinal_word(1000, 9999),
+            "one thousandth"
+        );
+        assert_eq!(
+            crate::grammar::number_to_ordinal_word(1001, 9999),
+            "one thousand and first"
+        );
+        assert_eq!(
+            crate::grammar::number_to_ordinal_word(2022, 9999),
+            "two thousand and twenty-second"
+        );
+        assert_eq!(
+            crate::grammar::number_to_ordinal_word(1_234_567, usize::MAX),
+            "one million two hundred and thirty-four thousand five hundred and sixty-seventh"
+        );
+        assert_eq!(
+            crate::grammar::number_to_ordinal_word(18_000_000_000_000_000_001, usize::MAX),
+            "eighteen quintillion and first"
+        );
+
+        // Test threshold behavior
+        assert_eq!(crate::grammar::number_to_ordinal_word(3, 0), "3rd");
+        assert_eq!(crate::grammar::number_to_ordinal_word(21, 20), "21st");
+    }
+
+    #[test]
+    fn test_indefinite_article_extended_occurrences() {
+        let w1 = ConfigurableMockEntity {
+            id: "w1".into(),
+            name: "wolf".into(),
+            long_name: None,
+            gender: Gender::Neutral,
+        };
+        let w2 = ConfigurableMockEntity {
+            id: "w2".into(),
+            name: "wolf".into(),
+            long_name: None,
+            gender: Gender::Neutral,
+        };
+        let w3 = ConfigurableMockEntity {
+            id: "w3".into(),
+            name: "wolf".into(),
+            long_name: None,
+            gender: Gender::Neutral,
+        };
+        let w4 = ConfigurableMockEntity {
+            id: "w4".into(),
+            name: "wolf".into(),
+            long_name: None,
+            gender: Gender::Neutral,
+        };
+
+        let cache = TemplateCache::new(100);
+        let t = cache
+            .get_or_compile("{A:w1} enters. {A:w2} enters. {A:w3} enters. {A:w4} enters.")
+            .unwrap();
+        let ctx = RenderContext::new("viewer")
+            .with_entity("w1", &w1)
+            .with_entity("w2", &w2)
+            .with_entity("w3", &w3)
+            .with_entity("w4", &w4);
+
+        assert_eq!(
+            PerspectiveEngine::render(&t, &ctx).unwrap(),
+            "A wolf enters. Another wolf enters. A third wolf enters. A fourth wolf enters."
+        );
+    }
+
+    #[test]
+    fn test_ordinals_and_resets() {
+        let w1 = ConfigurableMockEntity {
+            id: "w1".into(),
+            name: "wolf".into(),
+            long_name: None,
+            gender: Gender::Neutral,
+        };
+        let w2 = ConfigurableMockEntity {
+            id: "w2".into(),
+            name: "wolf".into(),
+            long_name: None,
+            gender: Gender::Neutral,
+        };
+
+        let cache = TemplateCache::new(100);
+        let ctx = RenderContext::new("viewer")
+            .with_entity("w1", &w1)
+            .with_entity("w2", &w2);
+
+        // First encounter
+        let t1 = cache
+            .get_or_compile("{A:w1} walks in. {A:w2} walks in. {The:w1} howls. {The:w2} grins.")
+            .unwrap();
+        assert_eq!(
+            PerspectiveEngine::render(&t1, &ctx).unwrap(),
+            "A wolf walks in. Another wolf walks in. The first wolf howls. The second wolf grins."
+        );
+
+        // Forget w2. Now only w1 is in the scene. The engine gracefully drops the ordinals for the lone entity!
+        ctx.forget_anaphora("w2");
+
+        let t2 = cache.get_or_compile("{The:w1} sighs.").unwrap();
+        assert_eq!(
+            PerspectiveEngine::render(&t2, &ctx).unwrap(),
+            "The wolf sighs."
+        );
+
+        // Now add w2 back. W1 gets re-assigned to "1" and W2 gets "2".
+        // We also test the pronoun fallback ordinal synergy!
+        let t3 = cache
+            .get_or_compile(
+                "{A:w2} returns. {w1:Subj} [w1:growl] at {the:w2}. {w2:Subj} [w2:flee].",
+            )
+            .unwrap();
+        assert_eq!(
+            PerspectiveEngine::render(&t3, &ctx).unwrap(),
+            "Another wolf returns. The first wolf growls at the second wolf. The second wolf flees."
+        );
+    }
+
+    #[test]
+    fn test_singular_overrides() {
+        let orcs = MockEntity {
+            id: "mob_1".to_string(),
+            name: "orcs".to_string(),
+            gender: Gender::Plural,
+            is_plural: true,
+            is_proper_noun: false,
+        };
+
+        let goblin = MockEntity {
+            id: "mob_2".to_string(),
+            name: "goblin".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+
+        // 1. Force Singular Verb on a Plural Entity
+        let t1 = cache
+            .get_or_compile("{One of the:orcs} [-orcs:bellow], and {-orcs:subj} [-orcs:charge]!")
+            .unwrap();
+        let ctx1 = RenderContext::new("viewer").with_entity("orcs", &orcs);
+
+        assert_eq!(
+            PerspectiveEngine::render(&t1, &ctx1).unwrap(),
+            "One of the orcs bellows, and it charges!"
+        );
+
+        // 2. Singular Override Pronoun Ambiguity Fallback
+        // The `-` prefix on the pronoun forces `is_plural = false` and `effective_gender = Neutral`.
+        // The goblin is Neutral. This causes an ambiguity!
+        // The engine should fallback gracefully to "One of the orcs" instead of "Some orcs".
+        let t2 = cache
+            .get_or_compile("{One of the:orcs} and {a:goblin} arrive. {-orcs:Subj} [-orcs:bellow].")
+            .unwrap();
+        let ctx2 = RenderContext::new("viewer")
+            .with_entity("orcs", &orcs)
+            .with_entity("goblin", &goblin);
+
+        assert_eq!(
+            PerspectiveEngine::render(&t2, &ctx2).unwrap(),
+            "One of the orcs and a goblin arrive. One of the orcs bellows."
+        );
+    }
+
+    #[test]
+    fn test_singular_override_tenses_and_stances() {
+        let orcs = MockEntity {
+            id: "mob_orcs".to_string(),
+            name: "orcs".to_string(),
+            gender: Gender::Plural,
+            is_plural: true,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+        let template = cache
+            .get_or_compile("{-orcs:Subj} [-orcs:charge].")
+            .unwrap();
+
+        // 1. Director Stance (Present, Past, Future)
+        let ctx_director_pres = RenderContext::new("viewer").with_entity("orcs", &orcs);
+        let ctx_director_past = ctx_director_pres
+            .clone()
+            .with_tense(crate::models::Tense::Past);
+        let ctx_director_fut = ctx_director_pres
+            .clone()
+            .with_tense(crate::models::Tense::Future);
+
+        assert_eq!(
+            PerspectiveEngine::render(&template, &ctx_director_pres).unwrap(),
+            "One of the orcs charges."
+        );
+
+        assert_eq!(
+            PerspectiveEngine::render(&template, &ctx_director_past).unwrap(),
+            "One of the orcs charged."
+        );
+
+        assert_eq!(
+            PerspectiveEngine::render(&template, &ctx_director_fut).unwrap(),
+            "One of the orcs will charge."
+        );
+
+        // 2. Actor Stance (First Person, Singular Override shifts "We" -> "I")
+        let ctx_actor_1st = RenderContext::new("mob_orcs")
+            .with_stance(crate::models::ActorStance::FirstPerson)
+            .with_entity("orcs", &orcs);
+        let ctx_actor_1st_past = ctx_actor_1st.clone().with_tense(crate::models::Tense::Past);
+
+        assert_eq!(
+            PerspectiveEngine::render(&template, &ctx_actor_1st).unwrap(),
+            "I charge."
+        );
+
+        assert_eq!(
+            PerspectiveEngine::render(&template, &ctx_actor_1st_past).unwrap(),
+            "I charged."
+        );
+
+        // Prove that without the override, it behaves as a standard plural first-person group ("We")
+        let t_no_override = cache.get_or_compile("{orcs:Subj} [orcs:charge].").unwrap();
+        assert_eq!(
+            PerspectiveEngine::render(&t_no_override, &ctx_actor_1st).unwrap(),
+            "We charge."
+        );
+    }
+
+    #[test]
+    fn test_singular_override_ambiguity_and_possessives() {
+        let orcs = MockEntity {
+            id: "mob_orcs".to_string(),
+            name: "orcs".to_string(),
+            gender: Gender::Plural,
+            is_plural: true,
+            is_proper_noun: false,
+        };
+        let goblin = MockEntity {
+            id: "mob_goblin".to_string(),
+            name: "goblin".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+        let ctx = RenderContext::new("viewer")
+            .with_entity("orcs", &orcs)
+            .with_entity("goblin", &goblin);
+
+        // Ambiguity Fallback! Singular override makes orcs "Neutral" gender. Goblin is also "Neutral".
+        // The pronoun {-orcs:Subj} will be ambiguous with the goblin.
+        // It should gracefully fall back to "One of the orcs".
+        // However, because `[-orcs:draw]` makes the orcs the active subject, `{-orcs:poss}` naturally collapses to "its"!
+        let t = cache
+            .get_or_compile("{A:goblin} snarls. {-orcs:Subj} [-orcs:draw] {-orcs:poss} blade!")
+            .unwrap();
+        assert_eq!(
+            PerspectiveEngine::render(&t, &ctx).unwrap(),
+            "A goblin snarls. One of the orcs draws its blade!"
+        );
+
+        ctx.clear_anaphora();
+
+        // If the orc WASN'T the active subject, the ambiguity would trigger the fallback.
+        // But the builder can stack the `!` and `-` modifiers to force the pronoun anyway!
+        let t2 = cache
+            .get_or_compile("{A:goblin} snarls at {-orcs:obj} and steals {!-orcs:poss} blade!")
+            .unwrap();
+        assert_eq!(
+            PerspectiveEngine::render(&t2, &ctx).unwrap(),
+            "A goblin snarls at one of the orcs and steals its blade!"
+        );
+    }
+
+    #[test]
+    fn test_singular_override_forced_conjugation_and_lookahead() {
+        let orcs = MockEntity {
+            id: "mob_orcs".to_string(),
+            name: "orcs".to_string(),
+            gender: Gender::Plural,
+            is_plural: true,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+        let ctx = RenderContext::new("viewer")
+            .with_entity("orcs", &orcs)
+            .with_lookahead(true);
+        let ctx_future = ctx.clone().with_tense(crate::models::Tense::Future);
+
+        // We use forced conjugation for a complex verb like "be" and "have".
+        // The `-` prefix should correctly route the forced conjugation to the 3rd person singular slot.
+        let t = cache.get_or_compile("{-orcs:Subj} [-orcs:be|am|are|is] here. {-orcs:Subj} [-orcs:have|have|have|has] arrived!").unwrap();
+
+        assert_eq!(
+            PerspectiveEngine::render(&t, &ctx).unwrap(),
+            "One of the orcs is here. It has arrived!"
+        );
+
+        // Ensure that shifting to the future tense safely bypasses all overrides and relies on "will"
+        assert_eq!(
+            PerspectiveEngine::render(&t, &ctx_future).unwrap(),
+            "One of the orcs will be here. It will have arrived!"
+        );
+    }
+
+    #[test]
+    fn test_modifier_stacking_order_independence() {
+        let player = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+
+        let cache = TemplateCache::new(100);
+        let ctx = RenderContext::new("char_1").with_entity("source", &player);
+
+        // The '+' forces 3rd person (ignoring the viewer ID).
+        // The '!' suppresses the anaphora fallback ambiguity check.
+        // The '-' forces singular.
+        // We test three different stacking orders to prove the engine evaluates them identically!
+        let t1 = cache
+            .get_or_compile("{+!-source:subj} [+source:nod].")
+            .unwrap();
+        let t2 = cache
+            .get_or_compile("{-!+source:subj} [+source:nod].")
+            .unwrap();
+        let t3 = cache
+            .get_or_compile("{!+-source:subj} [+source:nod].")
+            .unwrap();
+
+        assert_eq!(PerspectiveEngine::render(&t1, &ctx).unwrap(), "He nods.");
+        assert_eq!(PerspectiveEngine::render(&t2, &ctx).unwrap(), "He nods.");
+        assert_eq!(PerspectiveEngine::render(&t3, &ctx).unwrap(), "He nods.");
+    }
+
+    #[test]
+    fn test_nested_properties_returning_proper_nouns() {
+        struct Excalibur {
+            name: String,
+        }
+        impl TemplateEntity for Excalibur {
+            fn contains_viewer(&self, _: &str) -> bool {
+                false
+            }
+            fn gender(&self) -> Gender {
+                Gender::Neutral
+            }
+            fn is_plural(&self) -> bool {
+                false
+            }
+            fn is_proper_noun_for(&self, _: &str) -> bool {
+                true
+            } // The weapon is a proper noun!
+            fn display_name_for<'a>(&'a self, _: &str) -> Cow<'a, str> {
+                Cow::Borrowed(&self.name)
+            }
+        }
+
+        struct King {
+            name: String,
+            weapon: Excalibur,
+        }
+        impl TemplateEntity for King {
+            fn contains_viewer(&self, _: &str) -> bool {
+                false
+            }
+            fn gender(&self) -> Gender {
+                Gender::Male
+            }
+            fn is_plural(&self) -> bool {
+                false
+            }
+            fn is_proper_noun_for(&self, _: &str) -> bool {
+                true
+            }
+            fn display_name_for<'a>(&'a self, _: &str) -> Cow<'a, str> {
+                Cow::Borrowed(&self.name)
+            }
+            fn get_property(&self, property_name: &str) -> Option<&dyn TemplateEntity> {
+                if property_name == "weapon" {
+                    Some(&self.weapon)
+                } else {
+                    None
+                }
+            }
+        }
+
+        let arthur = King {
+            name: "Arthur".to_string(),
+            weapon: Excalibur {
+                name: "Excalibur".to_string(),
+            },
+        };
+
+        let cache = TemplateCache::new(100);
+        let ctx = RenderContext::new("viewer").with_entity("source", &arthur);
+
+        // Prove that the dot-notation path bubbles up the proper noun flag dynamically.
+        // Neither 'A' nor 'a' should be rendered in the output.
+        let t = cache
+            .get_or_compile("{A:source} draws {a:source.weapon}.")
+            .unwrap();
+        assert_eq!(
+            PerspectiveEngine::render(&t, &ctx).unwrap(),
+            "Arthur draws Excalibur."
+        );
+    }
+
+    #[test]
+    fn test_lookahead_prevents_silent_bob() {
+        let w1 = ConfigurableMockEntity {
+            id: "w1".into(),
+            name: "wolf".into(),
+            long_name: Some("large wolf".into()),
+            gender: Gender::Neutral,
+        };
+        let w2 = ConfigurableMockEntity {
+            id: "w2".into(),
+            name: "wolf".into(),
+            long_name: None,
+            gender: Gender::Neutral,
+        };
+
+        let cache = TemplateCache::new(100);
+
+        // We bind BOTH w1 and w2 to the context, and enable lookahead.
+        let ctx = RenderContext::new("viewer")
+            .with_entity("w1", &w1)
+            .with_entity("w2", &w2)
+            .with_lookahead(true);
+
+        // However, the template ONLY mentions w1.
+        let t = cache.get_or_compile("{A:w1} howls.").unwrap();
+
+        // If the lookahead blindly evaluated the entire context map, it would panic about the invisible w2
+        // and inappropriately force w1 to use its long name ("A large wolf howls.").
+        // By scoping strictly to the AST Pre-Pass, it safely ignores w2!
+        assert_eq!(
+            PerspectiveEngine::render(&t, &ctx).unwrap(),
+            "A wolf howls."
+        );
+    }
+
+    #[test]
+    fn test_article_upgrades_for_plural_viewers() {
+        let wolves = MockEntity {
+            id: "pack_1".to_string(),
+            name: "wolves".to_string(),
+            gender: Gender::Plural,
+            is_plural: true,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+        let ctx = RenderContext::new("pack_1")
+            .with_stance(crate::models::ActorStance::FirstPerson)
+            .with_entity("source", &wolves);
+
+        // As the active viewer, the engine should completely skip tracking occurrence permutations
+        // for 'A', 'Some', and 'One of the' and simply inject the viewer pronoun "We".
+        let t1 = cache.get_or_compile("{A:source} [source:howl].").unwrap();
+        let t2 = cache
+            .get_or_compile("{Some:source} [source:howl].")
+            .unwrap();
+        let t3 = cache
+            .get_or_compile("{One of the:source} [source:howl].")
+            .unwrap();
+
+        assert_eq!(PerspectiveEngine::render(&t1, &ctx).unwrap(), "We howl.");
+        assert_eq!(PerspectiveEngine::render(&t2, &ctx).unwrap(), "We howl.");
+        assert_eq!(PerspectiveEngine::render(&t3, &ctx).unwrap(), "We howl.");
+
+        // But if the singular override is attached, it should accurately treat the pack as an individual "I"!
+        let t4 = cache.get_or_compile("{-source} [-source:howl].").unwrap();
+        assert_eq!(PerspectiveEngine::render(&t4, &ctx).unwrap(), "I howl.");
+    }
+
+    #[test]
+    fn test_plural_ordinals_and_demonstratives() {
+        let w1 = ConfigurableMockEntity {
+            id: "w1".into(),
+            name: "wolves".into(),
+            long_name: None,
+            gender: Gender::Plural,
+        };
+        let w2 = ConfigurableMockEntity {
+            id: "w2".into(),
+            name: "wolves".into(),
+            long_name: None,
+            gender: Gender::Plural,
+        };
+        let w3 = ConfigurableMockEntity {
+            id: "w3".into(),
+            name: "wolves".into(),
+            long_name: None,
+            gender: Gender::Plural,
+        };
+
+        let cache = TemplateCache::new(100);
+        let ctx = RenderContext::new("viewer")
+            .with_entity("w1", &w1)
+            .with_entity("w2", &w2)
+            .with_entity("w3", &w3);
+
+        // 1. Plural Indefinite Upgrades (Some -> A second set -> A third set)
+        let t1 = cache
+            .get_or_compile("{A:w1} arrive. {A:w2} arrive. {A:w3} arrive.")
+            .unwrap();
+        assert_eq!(
+            PerspectiveEngine::render(&t1, &ctx).unwrap(),
+            "Some wolves arrive. A second set of wolves arrive. A third set of wolves arrive."
+        );
+
+        // 2. Plural Demonstratives (This first set, That second set)
+        let t2 = cache
+            .get_or_compile("{This:w1} howl. {That:w2} howl.")
+            .unwrap();
+        assert_eq!(
+            PerspectiveEngine::render(&t2, &ctx).unwrap(),
+            "This first set of wolves howl. That second set of wolves howl."
+        );
+
+        // 3. "One of the" and "Some" explicitly preserving ordinals
+        let t3 = cache
+            .get_or_compile("{One of the:w1} howls. {Some:w2} howl.")
+            .unwrap();
+        assert_eq!(
+            PerspectiveEngine::render(&t3, &ctx).unwrap(),
+            "One of the first set of wolves howls. A second set of wolves howl."
+        );
+    }
+
+    #[test]
+    fn test_plural_ordinals_with_collective_noun() {
+        struct Pack<'a> {
+            name: &'a str,
+            collective: &'a str,
+        }
+
+        impl TemplateEntity for Pack<'_> {
+            fn contains_viewer(&self, _: &str) -> bool {
+                false
+            }
+            fn gender(&self) -> Gender {
+                Gender::Plural
+            }
+            fn is_plural(&self) -> bool {
+                true
+            }
+            fn is_proper_noun_for(&self, _: &str) -> bool {
+                false
+            }
+            fn display_name_for<'a>(&'a self, _: &str) -> Cow<'a, str> {
+                Cow::Borrowed(self.name)
+            }
+            fn collective_noun(&self) -> Option<&str> {
+                Some(self.collective)
+            }
+        }
+
+        let p1 = Pack {
+            name: "wolves",
+            collective: "pack",
+        };
+        let p2 = Pack {
+            name: "wolves",
+            collective: "pack",
+        };
+        let p3 = Pack {
+            name: "wolves",
+            collective: "pack",
+        };
+
+        let cache = TemplateCache::new(100);
+        let ctx = RenderContext::new("viewer")
+            .with_entity("p1", &p1)
+            .with_entity("p2", &p2)
+            .with_entity("p3", &p3);
+
+        let t1 = cache
+            .get_or_compile("{A:p1} arrive. {A:p2} arrive. {A:p3} arrive.")
+            .unwrap();
+        assert_eq!(
+            PerspectiveEngine::render(&t1, &ctx).unwrap(),
+            "Some wolves arrive. A second pack of wolves arrive. A third pack of wolves arrive."
+        );
+    }
+
+    #[test]
+    fn test_no_smart_modifier_bypasses_ordinals() {
+        let w1 = ConfigurableMockEntity {
+            id: "w1".into(),
+            name: "wolf".into(),
+            long_name: None,
+            gender: Gender::Neutral,
+        };
+        let w2 = ConfigurableMockEntity {
+            id: "w2".into(),
+            name: "wolf".into(),
+            long_name: None,
+            gender: Gender::Neutral,
+        };
+        let w3 = ConfigurableMockEntity {
+            id: "w3".into(),
+            name: "wolf".into(),
+            long_name: None,
+            gender: Gender::Neutral,
+        };
+
+        let cache = TemplateCache::new(100);
+        let ctx = RenderContext::new("viewer")
+            .with_entity("w1", &w1)
+            .with_entity("w2", &w2)
+            .with_entity("w3", &w3);
+
+        // Normally this would evaluate to "A wolf, another wolf, and a third wolf."
+        // The `!` prefix completely disables smart anaphora, bypassing collision tracking entirely.
+        let t1 = cache
+            .get_or_compile("{!A:w1}, {!another:w2}, and {!a:w3} arrive.")
+            .unwrap();
+        assert_eq!(
+            PerspectiveEngine::render(&t1, &ctx).unwrap(),
+            "A wolf, another wolf, and a wolf arrive."
+        );
+
+        let t2 = cache.get_or_compile("{!The:w1} howls.").unwrap();
+        assert_eq!(
+            PerspectiveEngine::render(&t2, &ctx).unwrap(),
+            "The wolf howls."
+        );
+    }
+
+    #[test]
+    fn test_nested_properties_returning_group_entities() {
+        let goblin1 = MockEntity {
+            id: "m1".into(),
+            name: "goblin".into(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+        let goblin2 = MockEntity {
+            id: "m2".into(),
+            name: "slime".into(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+
+        struct Boss<'a> {
+            name: String,
+            minions: GroupEntity<'a>,
+        }
+        impl<'a> TemplateEntity for Boss<'a> {
+            fn contains_viewer(&self, _: &str) -> bool {
+                false
+            }
+            fn gender(&self) -> Gender {
+                Gender::Male
+            }
+            fn is_plural(&self) -> bool {
+                false
+            }
+            fn is_proper_noun_for(&self, _: &str) -> bool {
+                false
+            }
+            fn display_name_for<'b>(&'b self, _: &str) -> Cow<'b, str> {
+                Cow::Borrowed(&self.name)
+            }
+            fn get_property(&self, prop: &str) -> Option<&dyn TemplateEntity> {
+                if prop == "minions" {
+                    Some(&self.minions)
+                } else {
+                    None
+                }
+            }
+        }
+
+        let boss = Boss {
+            name: "boss".into(),
+            minions: GroupEntity::new(vec![&goblin1, &goblin2]),
+        };
+
+        let cache = TemplateCache::new(100);
+        let ctx = RenderContext::new("viewer").with_entity("boss", &boss);
+
+        // The dot notation safely traverses into the GroupEntity and triggers the Oxford comma formatter
+        // and correctly routes the plural 'attack' verb!
+        let t1 = cache
+            .get_or_compile("{The:boss.minions} [boss.minions:attack]!")
+            .unwrap();
+        assert_eq!(
+            PerspectiveEngine::render(&t1, &ctx).unwrap(),
+            "The goblin and the slime attack!"
+        );
+    }
+
+    #[test]
+    fn test_singular_override_reflexive_pronouns() {
+        let orcs = MockEntity {
+            id: "mob_1".to_string(),
+            name: "orcs".to_string(),
+            gender: Gender::Plural,
+            is_plural: true,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+        let ctx = RenderContext::new("viewer").with_entity("orcs", &orcs);
+
+        // Introduce the orcs so they are in anaphora memory
+        let t_intro = cache.get_or_compile("{The:orcs} are here.").unwrap();
+        let _ = PerspectiveEngine::render(&t_intro, &ctx).unwrap();
+
+        // Without override (Standard Plural):
+        let t1 = cache
+            .get_or_compile("{orcs:Subj} [orcs:hurt] {orcs:reflex}.")
+            .unwrap();
+        assert_eq!(
+            PerspectiveEngine::render(&t1, &ctx).unwrap(),
+            "They hurt themselves."
+        );
+
+        // With override: Shifts from Plural -> Neutral (It/itself)
+        let t2 = cache
+            .get_or_compile("{-orcs:Subj} [-orcs:hurt] {-orcs:reflex}.")
+            .unwrap();
+        assert_eq!(
+            PerspectiveEngine::render(&t2, &ctx).unwrap(),
+            "It hurts itself."
+        );
+    }
+
+    #[test]
+    fn test_plural_proper_noun_with_singular_override() {
+        let avengers = MockEntity {
+            id: "char_1".to_string(),
+            name: "the Avengers".to_string(),
+            gender: Gender::Plural,
+            is_plural: true,
+            is_proper_noun: true,
+        };
+
+        let cache = TemplateCache::new(100);
+        let ctx = RenderContext::new("viewer").with_entity("avengers", &avengers);
+
+        // Normally behaves as a plural entity
+        let t1 = cache
+            .get_or_compile(
+                "{avengers} [avengers:assemble] and [avengers:defend] {avengers:reflex}.",
+            )
+            .unwrap();
+        assert_eq!(
+            PerspectiveEngine::render(&t1, &ctx).unwrap(),
+            "The Avengers assemble and defend themselves."
+        );
+
+        // The singular override cleanly intercepts the verb and pronoun logic, even for proper nouns
+        let t2 = cache
+            .get_or_compile(
+                "{-avengers} [-avengers:assemble] and [-avengers:defend] {-avengers:reflex}.",
+            )
+            .unwrap();
+        assert_eq!(
+            PerspectiveEngine::render(&t2, &ctx).unwrap(),
+            "The Avengers assembles and defends itself."
         );
     }
 }

@@ -87,6 +87,25 @@ pub trait TemplateEntity {
     /// * `viewer_id` - The unique identifier of the observing entity.
     fn display_name_for<'a>(&'a self, viewer_id: &str) -> Cow<'a, str>;
 
+    /// Returns an optional long display name for the entity, explicitly tailored to the observer.
+    ///
+    /// If provided, the rendering engine will automatically use this description instead
+    /// of `display_name_for` when it detects a name collision with another recently
+    /// mentioned entity, preventing the need to fall back to "another".
+    ///
+    /// # Arguments
+    /// * `viewer_id` - The unique identifier of the observing entity.
+    fn long_display_name_for<'a>(&'a self, _viewer_id: &str) -> Option<Cow<'a, str>> {
+        None
+    }
+
+    /// Returns an optional collective noun for this entity if it represents a group.
+    /// This is used for plural ordinal phrasing (e.g., "a third pack of wolves").
+    /// If `None`, the engine defaults to "set".
+    fn collective_noun(&self) -> Option<&str> {
+        None
+    }
+
     /// Determines if the entity's current identity is a proper noun.
     ///
     /// If `true`, the rendering engine will automatically suppress indefinite (`a/an`)
@@ -118,6 +137,15 @@ pub trait TemplateEntity {
     }
 }
 
+/// Tracks the assignment of ordinals for entities with colliding names.
+#[derive(Debug, Clone, Default)]
+pub struct OrdinalState {
+    /// The next ordinal to assign (e.g., 1, 2, 3...)
+    pub next_ordinal: usize,
+    /// Maps an entity's template key to its assigned ordinal (e.g., "w1" -> 1)
+    pub members: HashMap<String, usize>,
+}
+
 /// The context environment passed to the rendering engine for a specific view generation.
 #[derive(Clone)]
 pub struct RenderContext<'a> {
@@ -127,6 +155,11 @@ pub struct RenderContext<'a> {
     pub stance: ActorStance,
     /// The grammatical tense used to render the template.
     pub tense: Tense,
+    /// Enables the AST Pre-Pass for omniscient short/long description and ordinal disambiguation.
+    pub lookahead: bool,
+    /// The number at which ordinal words ("third") switch to integer form ("3rd"). Defaults to 999.
+    /// Set to 0 to always use integer form.
+    pub ordinal_word_threshold: usize,
     /// The maximum number of entities to track for anaphora resolution before evicting the oldest.
     /// Defaults to 15. Set to 0 for unbounded growth.
     /// If all entities in memory are pinned, this limit will be temporarily exceeded to preserve narrative continuity.
@@ -144,6 +177,8 @@ pub struct RenderContext<'a> {
     /// Tracks all entities mentioned since the last anaphora clear.
     /// Used to detect ambiguous pronoun collisions between any non-subject entities.
     pub recent_entities: RefCell<Vec<RecentEntity>>,
+    /// Tracks the assignment of ordinals for entities with colliding names.
+    pub ordinals: RefCell<HashMap<String, OrdinalState>>,
 }
 
 bitflags::bitflags! {
@@ -184,6 +219,8 @@ pub struct AnaphoraState {
     pub active_subject: Option<String>,
     /// A cache of recently introduced entities to prevent pronoun collisions.
     pub recent_entities: Vec<RecentEntity>,
+    /// Tracks the assignment of stable ordinals for display names.
+    pub ordinals: HashMap<String, OrdinalState>,
 }
 
 impl<'a> RenderContext<'a> {
@@ -197,11 +234,14 @@ impl<'a> RenderContext<'a> {
             viewer_id,
             stance: ActorStance::SecondPerson,
             tense: Tense::Present,
+            lookahead: false,
+            ordinal_word_threshold: 999,
             anaphora_limit: 15,
             entities: HashMap::new(),
             last_mentioned: RefCell::new(None),
             active_subject: RefCell::new(None),
             recent_entities: RefCell::new(Vec::new()),
+            ordinals: RefCell::new(HashMap::new()),
         }
     }
 
@@ -224,6 +264,22 @@ impl<'a> RenderContext<'a> {
     #[must_use]
     pub fn with_tense(mut self, tense: Tense) -> Self {
         self.tense = tense;
+        self
+    }
+
+    /// Enables or disables the AST Pre-Pass to perfectly resolve name collisions ahead of time.
+    /// This is disabled by default to maximize performance, but can be enabled for critical narrative templates.
+    #[must_use]
+    pub fn with_lookahead(mut self, lookahead: bool) -> Self {
+        self.lookahead = lookahead;
+        self
+    }
+
+    /// Configures the number at which ordinal words switch to integer form.
+    /// Defaults to 999. Set to 0 to always use integer form.
+    #[must_use]
+    pub fn with_ordinal_word_threshold(mut self, threshold: usize) -> Self {
+        self.ordinal_word_threshold = threshold;
         self
     }
 
@@ -317,6 +373,7 @@ impl<'a> RenderContext<'a> {
             last_mentioned: self.last_mentioned.borrow().clone(),
             active_subject: self.active_subject.borrow().clone(),
             recent_entities: self.recent_entities.borrow().clone(),
+            ordinals: self.ordinals.borrow().clone(),
         }
     }
 
@@ -327,6 +384,7 @@ impl<'a> RenderContext<'a> {
         *self.last_mentioned.borrow_mut() = state.last_mentioned;
         *self.active_subject.borrow_mut() = state.active_subject;
         *self.recent_entities.borrow_mut() = state.recent_entities;
+        *self.ordinals.borrow_mut() = state.ordinals;
         self
     }
 
@@ -344,6 +402,7 @@ impl<'a> RenderContext<'a> {
         *self.last_mentioned.borrow_mut() = None;
         *self.active_subject.borrow_mut() = None;
         self.recent_entities.borrow_mut().clear();
+        self.ordinals.borrow_mut().clear();
     }
 
     /// Pins an entity in the anaphora memory so it will never be automatically evicted.
