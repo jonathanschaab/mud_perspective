@@ -25,6 +25,7 @@ pub fn add_irregular_verb(base: &str, conjugated: &str) -> Result<(), String> {
         ));
     }
 
+    let lower_conjugated = conjugated.to_lowercase();
     let custom_verbs = get_custom_verbs();
     loop {
         let current_map = custom_verbs.load();
@@ -35,7 +36,7 @@ pub fn add_irregular_verb(base: &str, conjugated: &str) -> Result<(), String> {
         }
 
         let mut new_map = (**current_map).clone();
-        new_map.insert(lower_base.clone(), conjugated.to_lowercase());
+        new_map.insert(lower_base.clone(), lower_conjugated.clone());
 
         let prev = custom_verbs.compare_and_swap(&current_map, Arc::new(new_map));
         if Arc::ptr_eq(&prev, &current_map) {
@@ -54,9 +55,11 @@ pub fn add_irregular_verb(base: &str, conjugated: &str) -> Result<(), String> {
 /// This function is infallible in the current implementation, but returns a `Result`
 /// for API backwards compatibility.
 pub fn force_add_irregular_verb(base: &str, conjugated: &str) -> Result<(), String> {
+    let lower_base = base.to_lowercase();
+    let lower_conjugated = conjugated.to_lowercase();
     get_custom_verbs().rcu(|current_map| {
         let mut new_map = (**current_map).clone();
-        new_map.insert(base.to_lowercase(), conjugated.to_lowercase());
+        new_map.insert(lower_base.clone(), lower_conjugated.clone());
         Arc::new(new_map)
     });
     Ok(())

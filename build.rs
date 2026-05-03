@@ -15,7 +15,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Closure to track duplicates and insert into the map safely
     let mut insert = |key: &str, value: &str| {
         if keys.insert(key.to_string()) {
-            map.entry(key.to_string(), format!("\"{}\"", value));
+            map.entry(key.to_string(), format!("{:?}", value));
         }
     };
 
