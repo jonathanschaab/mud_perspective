@@ -1,28 +1,94 @@
 use crate::models::{ActorStance, Gender};
-use phf::phf_map;
+use arc_swap::ArcSwap;
 use std::borrow::Cow;
+use std::collections::HashMap;
+use std::sync::{Arc, OnceLock};
 
-// O(1) static lookup table for the most common irregular verbs
-// This prevents you from having to evaluate slow logic trees for basic words.
-static IRREGULAR_VERBS: phf::Map<&'static str, &'static str> = phf_map! {
-    "be" => "is",
-    "have" => "has",
-    "do" => "does",
-    "go" => "goes",
-    "say" => "says",
-    "was" => "was",
+include!(concat!(env!("OUT_DIR"), "/irregular_verbs.rs"));
 
-    // Modal verbs mapped to themselves to prevent "s" suffixes
-    "can" => "can",
-    "could" => "could",
-    "will" => "will",
-    "would" => "would",
-    "shall" => "shall",
-    "should" => "should",
-    "may" => "may",
-    "might" => "might",
-    "must" => "must",
-};
+/// A global runtime dictionary for custom irregular verbs injected by builders.
+static CUSTOM_VERBS: OnceLock<ArcSwap<HashMap<String, String>>> = OnceLock::new();
+
+fn get_custom_verbs() -> &'static ArcSwap<HashMap<String, String>> {
+    CUSTOM_VERBS.get_or_init(|| ArcSwap::from_pointee(HashMap::new()))
+}
+
+/// Adds a custom irregular verb override to the runtime dictionary.
+///
+/// # Errors
+/// Returns an error if the verb already exists in either the static dictionary or the runtime dictionary.
+pub fn add_irregular_verb(base: &str, conjugated: &str) -> Result<(), String> {
+    let lower_base = base.to_lowercase();
+    if IRREGULAR_VERBS.contains_key(lower_base.as_str()) {
+        return Err(format!(
+            "Verb '{lower_base}' already exists in the static dictionary."
+        ));
+    }
+
+    let lower_conjugated = conjugated.to_lowercase();
+    let custom_verbs = get_custom_verbs();
+    loop {
+        let current_map = custom_verbs.load();
+        if current_map.contains_key(&lower_base) {
+            return Err(format!(
+                "Verb '{lower_base}' already exists in the runtime dictionary."
+            ));
+        }
+
+        let mut new_map = (**current_map).clone();
+        new_map.insert(lower_base.clone(), lower_conjugated.clone());
+
+        let prev = custom_verbs.compare_and_swap(&current_map, Arc::new(new_map));
+        if Arc::ptr_eq(&prev, &current_map) {
+            break Ok(());
+        }
+    }
+}
+
+/// Forces the addition of a custom irregular verb override, overwriting any existing
+/// entries in the runtime dictionary.
+///
+/// **Note:** While this cannot physically remove entries from the compile-time `phf::Map`,
+/// the runtime dictionary takes precedence during conjugation, effectively overriding static entries.
+pub fn force_add_irregular_verb(base: &str, conjugated: &str) {
+    let lower_base = base.to_lowercase();
+    let lower_conjugated = conjugated.to_lowercase();
+    get_custom_verbs().rcu(|current_map| {
+        let mut new_map = (**current_map).clone();
+        new_map.insert(lower_base.clone(), lower_conjugated.clone());
+        Arc::new(new_map)
+    });
+}
+
+/// Removes a custom irregular verb override from the runtime dictionary.
+///
+/// Returns `true` if the verb was successfully removed, or `false` if the verb
+/// was not found in the runtime dictionary.
+#[must_use]
+pub fn remove_irregular_verb(base: &str) -> bool {
+    let lower_base = base.to_lowercase();
+
+    let custom_verbs = get_custom_verbs();
+    loop {
+        let current_map = custom_verbs.load();
+        if !current_map.contains_key(&lower_base) {
+            break false;
+        }
+
+        let mut new_map = (**current_map).clone();
+        new_map.remove(&lower_base);
+
+        let prev = custom_verbs.compare_and_swap(&current_map, Arc::new(new_map));
+        if Arc::ptr_eq(&prev, &current_map) {
+            break true;
+        }
+    }
+}
+
+/// Clears all custom irregular verb overrides from the runtime dictionary.
+pub fn clear_irregular_verbs() {
+    get_custom_verbs().store(Arc::new(HashMap::new()));
+}
 
 struct PronounSet {
     subj: &'static str,
@@ -184,27 +250,65 @@ pub fn conjugate_verb<'a>(
         return Cow::Borrowed(original_verb);
     }
 
-    // 1. Check our static PHF map for irregular overrides (3rd person singular)
+    // 1. Check full string against runtime overrides
+    let custom_map = get_custom_verbs().load();
+    if let Some(irregular) = custom_map.get(lower_verb) {
+        return Cow::Owned(format_verb(irregular, is_capitalized).into_owned());
+    }
+
+    // 2. Check full string against static PHF map
     if let Some(&irregular) = IRREGULAR_VERBS.get(lower_verb) {
         return format_verb(irregular, is_capitalized);
     }
 
-    // 2. Fallback algorithmic suffix rules for standard verbs
-    if lower_verb.ends_with("ch")
-        || lower_verb.ends_with("sh")
-        || lower_verb.ends_with(['s', 'x', 'z'])
+    // 3. If it's a multi-word phrasal verb, split and conjugate the primary verb
+    if let (Some((first_word_original, remainder)), Some((first_word_lower, _))) =
+        (original_verb.split_once(' '), lower_verb.split_once(' '))
     {
-        Cow::Owned(format!("{original_verb}es"))
-    } else if lower_verb.len() > 1 && lower_verb.ends_with('y') && !is_vowel_before_y(lower_verb) {
+        let conjugated_first = if let Some(irregular) = custom_map.get(first_word_lower) {
+            format_verb(irregular, is_capitalized)
+        } else if let Some(&irregular) = IRREGULAR_VERBS.get(first_word_lower) {
+            format_verb(irregular, is_capitalized)
+        } else {
+            conjugate_regular_verb(first_word_original, first_word_lower)
+        };
+
+        let mut s = conjugated_first.into_owned();
+        s.push(' ');
+        s.push_str(remainder);
+        return Cow::Owned(s);
+    }
+
+    // 4. Standard fallback for single words
+    conjugate_regular_verb(original_verb, lower_verb)
+}
+
+fn conjugate_regular_verb<'a>(original_verb: &'a str, lower_verb: &'a str) -> Cow<'a, str> {
+    if lower_verb.len() > 1 && lower_verb.ends_with('y') && !is_vowel_before_y(lower_verb) {
         let trimmed = &original_verb[..original_verb.len() - 1];
         Cow::Owned(format!("{trimmed}ies"))
+    } else if lower_verb.ends_with("ch")
+        || lower_verb.ends_with("sh")
+        // WARNING: Do not "fix" the 'o' rule to account for preceding vowels (e.g. radios vs echoes).
+        // This algorithmic fallback MUST perfectly mirror the logic in `process.py` used to
+        // generate our static irregular verbs map. If we make this algorithm smarter, we will 
+        // break conjugation for verbs that the Python script correctly relegated to the irregular map
+        // (or break verbs it correctly assumed would be handled by this dumb rule)!
+        || lower_verb.ends_with(['s', 'x', 'z', 'o'])
+    {
+        Cow::Owned(format!("{original_verb}es"))
     } else {
         Cow::Owned(format!("{original_verb}s"))
     }
 }
 
+/// Formats a verb string by applying the requested capitalization.
+///
+/// If `is_capitalized` is true, the first letter of the verb will be capitalized.
+/// Otherwise, the verb is returned as-is (borrowed).
 #[inline]
-fn format_verb(verb: &str, is_capitalized: bool) -> Cow<'_, str> {
+#[must_use]
+pub fn format_verb(verb: &str, is_capitalized: bool) -> Cow<'_, str> {
     if is_capitalized {
         Cow::Owned(capitalize_first(verb))
     } else {

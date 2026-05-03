@@ -4,6 +4,7 @@ mod tests {
     use crate::cache::TemplateCache;
     use crate::engine::{PerspectiveEngine, Template};
     use crate::models::{Gender, GroupEntity, RenderContext, TemplateEntity};
+    use serial_test::serial;
     use std::borrow::Cow;
 
     /// A mock entity to represent game objects and characters in our tests.
@@ -555,6 +556,96 @@ mod tests {
 
         let err6 = Template::compile("The goblin [:attack].").unwrap_err();
         assert_eq!(err6, "Verb tag has an empty subject key: [:attack]");
+
+        let err7 = Template::compile("You [source:be|].").unwrap_err();
+        assert_eq!(
+            err7,
+            "Verb tag has an empty verb or forced conjugation segment: [source:be|]"
+        );
+
+        let err8 = Template::compile("You [source:|be].").unwrap_err();
+        assert_eq!(
+            err8,
+            "Verb tag has an empty verb or forced conjugation segment: [source:|be]"
+        );
+
+        let err9 = Template::compile("You [source:be|am||is].").unwrap_err();
+        assert_eq!(
+            err9,
+            "Verb tag has an empty forced conjugation segment: [source:be|am||is]"
+        );
+
+        let err10 = Template::compile("You [source:be|am|are|is|were].").unwrap_err();
+        assert_eq!(
+            err10,
+            "Verb tag has too many forced conjugation segments: [source:be|am|are|is|were]"
+        );
+    }
+
+    #[test]
+    fn test_extended_forced_conjugation() {
+        let player = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+
+        let wolves = MockEntity {
+            id: "mob_1".to_string(),
+            name: "wolves".to_string(),
+            gender: Gender::Plural,
+            is_plural: true,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+
+        // 1. Two-part syntax (Base/Plural | 3rd Singular)
+        let template_2 = cache
+            .get_or_compile("{the:source} [source:freak out|freak out|freaks out].")
+            .unwrap();
+        assert_eq!(
+            render_msg!("char_1", &template_2, "source" => &player).unwrap(),
+            "You freak out."
+        );
+        assert_eq!(
+            render_msg!("char_2", &template_2, "source" => &player).unwrap(),
+            "Aldran freaks out."
+        );
+        assert_eq!(
+            render_msg!("char_2", &template_2, "source" => &wolves).unwrap(),
+            "The wolves freak out."
+        );
+
+        // 2. Three-part syntax (1st Singular | 2nd/Plural | 3rd Singular)
+        let template_3 = cache
+            .get_or_compile("{the:source} [source:be|was|were|was] here.")
+            .unwrap();
+        let ctx_first = RenderContext::new("char_1")
+            .with_stance(crate::models::ActorStance::FirstPerson)
+            .with_entity("source", &player);
+        let ctx_second = RenderContext::new("char_1").with_entity("source", &player);
+        let ctx_third = RenderContext::new("char_2").with_entity("source", &player);
+        let ctx_plural = RenderContext::new("char_2").with_entity("source", &wolves);
+
+        assert_eq!(
+            PerspectiveEngine::render(&template_3, &ctx_first).unwrap(),
+            "I was here."
+        );
+        assert_eq!(
+            PerspectiveEngine::render(&template_3, &ctx_second).unwrap(),
+            "You were here."
+        );
+        assert_eq!(
+            PerspectiveEngine::render(&template_3, &ctx_third).unwrap(),
+            "Aldran was here."
+        );
+        assert_eq!(
+            PerspectiveEngine::render(&template_3, &ctx_plural).unwrap(),
+            "The wolves were here."
+        );
     }
 
     #[test]
@@ -2908,5 +2999,382 @@ mod tests {
         // Because the state extraction/injection preserved Bob's IS_PINNED flag, Tom is evicted instead.
         assert_eq!(ctx2.recent_entities.borrow().len(), 1);
         assert_eq!(ctx2.recent_entities.borrow()[0].key, "bob");
+    }
+
+    #[test]
+    fn test_irregular_verb_conjugations() {
+        let player = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+
+        let cache = TemplateCache::new(100);
+
+        // 1. "fly" -> "flies"
+        let template_fly = cache.get_or_compile("{source} [source:fly].").unwrap();
+        assert_eq!(
+            render_msg!("char_1", &template_fly, "source" => &player).unwrap(),
+            "You fly."
+        );
+        assert_eq!(
+            render_msg!("char_2", &template_fly, "source" => &player).unwrap(),
+            "Aldran flies."
+        );
+
+        // 2. "ran" -> "ran" (Past tense form natively mapped to itself via build.rs)
+        let template_ran = cache.get_or_compile("{source} [source:ran].").unwrap();
+        assert_eq!(
+            render_msg!("char_1", &template_ran, "source" => &player).unwrap(),
+            "You ran."
+        );
+        assert_eq!(
+            render_msg!("char_2", &template_ran, "source" => &player).unwrap(),
+            "Aldran ran."
+        );
+
+        // 3. "catch" -> "catches"
+        let template_catch = cache.get_or_compile("{source} [source:catch] it.").unwrap();
+        assert_eq!(
+            render_msg!("char_2", &template_catch, "source" => &player).unwrap(),
+            "Aldran catches it."
+        );
+
+        // 4. Fallback rule: consonant + y -> ies ("try" -> "tries")
+        let template_try = cache.get_or_compile("{source} [source:try].").unwrap();
+        assert_eq!(
+            render_msg!("char_2", &template_try, "source" => &player).unwrap(),
+            "Aldran tries."
+        );
+
+        // 5. Fallback rule: ends with x -> es ("box" -> "boxes")
+        let template_box = cache.get_or_compile("{source} [source:box].").unwrap();
+        assert_eq!(
+            render_msg!("char_2", &template_box, "source" => &player).unwrap(),
+            "Aldran boxes."
+        );
+
+        // 6. Modal verbs natively injected via build.rs
+        // This ensures colliding verbs (e.g. "cans" or "wills") don't overwrite modal behaviors.
+        let modals = [
+            "can", "could", "will", "would", "shall", "should", "may", "might", "must",
+        ];
+        for modal in modals {
+            let template_str = format!("{{source}} [source:{modal}].");
+            let template_modal = cache.get_or_compile(&template_str).unwrap();
+            assert_eq!(
+                render_msg!("char_1", &template_modal, "source" => &player).unwrap(),
+                format!("You {modal}.")
+            );
+            assert_eq!(
+                render_msg!("char_2", &template_modal, "source" => &player).unwrap(),
+                format!("Aldran {modal}.")
+            );
+        }
+    }
+
+    #[test]
+    fn test_first_person_and_be_verbs() {
+        let player = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+
+        let cache = TemplateCache::new(100);
+
+        let ctx_first = RenderContext::new("char_1")
+            .with_stance(crate::models::ActorStance::FirstPerson)
+            .with_entity("source", &player);
+
+        let ctx_second = RenderContext::new("char_1")
+            .with_stance(crate::models::ActorStance::SecondPerson) // Default
+            .with_entity("source", &player);
+
+        let ctx_third = RenderContext::new("char_2").with_entity("source", &player);
+
+        // 1. "be" (Handled dynamically by stance and perspective overrides)
+        let template_be = cache.get_or_compile("{source} [source:be] ready.").unwrap();
+        assert_eq!(
+            PerspectiveEngine::render(&template_be, &ctx_first).unwrap(),
+            "I am ready."
+        );
+        assert_eq!(
+            PerspectiveEngine::render(&template_be, &ctx_second).unwrap(),
+            "You are ready."
+        );
+        assert_eq!(
+            PerspectiveEngine::render(&template_be, &ctx_third).unwrap(),
+            "Aldran is ready."
+        );
+
+        // 2. "was" (Handled dynamically by stance and perspective overrides)
+        let template_was = cache
+            .get_or_compile("{source} [source:was] ready.")
+            .unwrap();
+        assert_eq!(
+            PerspectiveEngine::render(&template_was, &ctx_first).unwrap(),
+            "I was ready."
+        );
+        assert_eq!(
+            PerspectiveEngine::render(&template_was, &ctx_second).unwrap(),
+            "You were ready."
+        );
+        assert_eq!(
+            PerspectiveEngine::render(&template_was, &ctx_third).unwrap(),
+            "Aldran was ready."
+        );
+
+        // 3. "is" (Handled by the PHF map)
+        // Note: Builders should write `[source:be]`. If they write `[source:is]`, it works natively for
+        // the 3rd person due to the PHF map returning "is", but remains uninflected for 1st/2nd person.
+        let template_is = cache.get_or_compile("{source} [source:is] ready.").unwrap();
+        assert_eq!(
+            PerspectiveEngine::render(&template_is, &ctx_first).unwrap(),
+            "I is ready."
+        );
+        assert_eq!(
+            PerspectiveEngine::render(&template_is, &ctx_second).unwrap(),
+            "You is ready."
+        );
+        assert_eq!(
+            PerspectiveEngine::render(&template_is, &ctx_third).unwrap(),
+            "Aldran is ready."
+        );
+
+        // 4. Ensure first person leaves irregular and algorithmically modified verbs uninflected
+        let template_fly = cache.get_or_compile("{source} [source:fly].").unwrap();
+        assert_eq!(
+            PerspectiveEngine::render(&template_fly, &ctx_first).unwrap(),
+            "I fly."
+        );
+
+        let template_catch = cache.get_or_compile("{source} [source:catch] it.").unwrap();
+        assert_eq!(
+            PerspectiveEngine::render(&template_catch, &ctx_first).unwrap(),
+            "I catch it."
+        );
+
+        let template_try = cache.get_or_compile("{source} [source:try].").unwrap();
+        assert_eq!(
+            PerspectiveEngine::render(&template_try, &ctx_first).unwrap(),
+            "I try."
+        );
+    }
+
+    #[test]
+    fn test_past_tense_have_across_stances() {
+        let player = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+
+        let cache = TemplateCache::new(100);
+
+        let ctx_first = RenderContext::new("char_1")
+            .with_stance(crate::models::ActorStance::FirstPerson)
+            .with_entity("source", &player);
+
+        let ctx_second = RenderContext::new("char_1")
+            .with_stance(crate::models::ActorStance::SecondPerson) // Default
+            .with_entity("source", &player);
+
+        let ctx_third = RenderContext::new("char_2").with_entity("source", &player);
+
+        let template_have = cache
+            .get_or_compile("{source} [source:have] a sword.")
+            .unwrap();
+        assert_eq!(
+            PerspectiveEngine::render(&template_have, &ctx_first).unwrap(),
+            "I have a sword."
+        );
+        assert_eq!(
+            PerspectiveEngine::render(&template_have, &ctx_second).unwrap(),
+            "You have a sword."
+        );
+        assert_eq!(
+            PerspectiveEngine::render(&template_have, &ctx_third).unwrap(),
+            "Aldran has a sword."
+        );
+
+        let template_had = cache
+            .get_or_compile("{source} [source:had] a sword.")
+            .unwrap();
+        assert_eq!(
+            PerspectiveEngine::render(&template_had, &ctx_first).unwrap(),
+            "I had a sword."
+        );
+        assert_eq!(
+            PerspectiveEngine::render(&template_had, &ctx_second).unwrap(),
+            "You had a sword."
+        );
+        assert_eq!(
+            PerspectiveEngine::render(&template_had, &ctx_third).unwrap(),
+            "Aldran had a sword."
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn test_custom_runtime_verbs() {
+        let player = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+
+        let cache = TemplateCache::new(100);
+
+        // Add a completely new custom verb
+        crate::grammar::add_irregular_verb("yeet", "yeetses").unwrap();
+
+        let template = cache.get_or_compile("{source} [source:yeet].").unwrap();
+        assert_eq!(
+            render_msg!("char_2", &template, "source" => &player).unwrap(),
+            "Aldran yeetses."
+        );
+
+        // Attempting to add an existing PHF verb should fail
+        assert!(crate::grammar::add_irregular_verb("arise", "arises not").is_err());
+
+        // Forcing an existing PHF verb should succeed and override
+        crate::grammar::force_add_irregular_verb("arise", "arizez");
+
+        let template_arise = cache.get_or_compile("{source} [source:arise].").unwrap();
+        assert_eq!(
+            render_msg!("char_2", &template_arise, "source" => &player).unwrap(),
+            "Aldran arizez."
+        );
+
+        // Clean up the global state safely now that we are running serially
+        crate::grammar::clear_irregular_verbs();
+    }
+
+    #[test]
+    fn test_forced_conjugation_in_template() {
+        let player = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+
+        let cache = TemplateCache::new(100);
+
+        // 1. Force a pirate conjugation
+        let template_pirate = cache
+            .get_or_compile("{source} [source:be|be] looking tired.")
+            .unwrap();
+        assert_eq!(
+            render_msg!("char_1", &template_pirate, "source" => &player).unwrap(),
+            "You be looking tired."
+        );
+        assert_eq!(
+            render_msg!("char_2", &template_pirate, "source" => &player).unwrap(),
+            "Aldran be looking tired."
+        );
+
+        // 2. Force capitalization correctly
+        let template_cap = cache.get_or_compile("[source:Look|gaze] at me!").unwrap();
+        assert_eq!(
+            render_msg!("char_2", &template_cap, "source" => &player).unwrap(),
+            "Gaze at me!"
+        );
+    }
+
+    #[test]
+    fn test_phrasal_verbs() {
+        let player = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+
+        let cache = TemplateCache::new(100);
+
+        let ctx_second = RenderContext::new("char_1").with_entity("source", &player);
+        let ctx_third = RenderContext::new("char_2").with_entity("source", &player);
+
+        let template = cache
+            .get_or_compile("{source} [source:pick up] the sword.")
+            .unwrap();
+        assert_eq!(
+            PerspectiveEngine::render(&template, &ctx_second).unwrap(),
+            "You pick up the sword."
+        );
+        assert_eq!(
+            PerspectiveEngine::render(&template, &ctx_third).unwrap(),
+            "Aldran picks up the sword."
+        );
+
+        let template_cap = cache.get_or_compile("[source:Give up]!").unwrap();
+        assert_eq!(
+            PerspectiveEngine::render(&template_cap, &ctx_third).unwrap(),
+            "Gives up!"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn test_complex_phrasal_and_hyphenated_verbs() {
+        let player = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+        let cache = TemplateCache::new(100);
+        let ctx = RenderContext::new("char_2").with_entity("source", &player);
+
+        // 1. Phrasal verb naturally split ("look around" -> "looks around")
+        let t1 = cache
+            .get_or_compile("{source} [source:look around].")
+            .unwrap();
+        assert_eq!(
+            PerspectiveEngine::render(&t1, &ctx).unwrap(),
+            "Aldran looks around."
+        );
+
+        // 2. Phrasal verb explicitly in PHF ("pinch run" -> "pinch runs")
+        let t2 = cache
+            .get_or_compile("{source} [source:pinch run].")
+            .unwrap();
+        assert_eq!(
+            PerspectiveEngine::render(&t2, &ctx).unwrap(),
+            "Aldran pinch runs."
+        );
+
+        // 3. Hyphenated verb treated as single word ("cross-pollinate" -> "cross-pollinates")
+        let t3 = cache
+            .get_or_compile("{source} [source:cross-pollinate].")
+            .unwrap();
+        assert_eq!(
+            PerspectiveEngine::render(&t3, &ctx).unwrap(),
+            "Aldran cross-pollinates."
+        );
+
+        // 4. Runtime dictionary multi-word override ("make do" -> "makes do")
+        crate::grammar::add_irregular_verb("make do", "makes do").unwrap();
+        let t4 = cache.get_or_compile("{source} [source:make do].").unwrap();
+        assert_eq!(
+            PerspectiveEngine::render(&t4, &ctx).unwrap(),
+            "Aldran makes do."
+        );
+
+        // Clean up the global state safely now that we are running serially
+        crate::grammar::clear_irregular_verbs();
     }
 }

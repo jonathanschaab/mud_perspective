@@ -15,9 +15,18 @@ mxp = []
 msp = []
 
 [dependencies]
+arc-swap = "1.9.1"
 bitflags = "2.4"
 in_definite = "1.1.2"
 moka = { version = "0.12", features = ["sync"] }
 phf = { version = "0.13.1", features = ["macros"] }
 tracing = "0.1"
 unicode-segmentation = "1.13.2"
+
+[dev-dependencies]
+serial_test = "3.1"
+
+[build-dependencies]
+phf_codegen = "0.13.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"

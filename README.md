@@ -83,17 +83,17 @@ use mud_perspective::{render_msg, TemplateCache};
 let cache = TemplateCache::new(1000);
 
 // Compile the template  
-let template = cache.get_or_compile("{the:source} [source:watch] as {the:target} [target:approach].").unwrap();
+let template = cache.get_or_compile("{the:source} [source:watch] as {the:target} [target:approach].")?;
 
 let player = Character { /*... */ };  
 let goblin = Character { /*... */ };
 
 // Actor Stance (The player is the viewer)  
-let output_actor = render_msg!("char_1", &template, "source" => &player, "target" => &goblin).unwrap();  
+let output_actor = render_msg!("char_1", &template, "source" => &player, "target" => &goblin)?;  
 // Output: "You watch as the goblin approaches."
 
 // Director Stance (A third-party bystander is the viewer)  
-let output_director = render_msg!("char_3", &template, "source" => &player, "target" => &goblin).unwrap();  
+let output_director = render_msg!("char_3", &template, "source" => &player, "target" => &goblin)?;  
 // Output: "Aldran watches as the goblin approaches."
 ```
 
@@ -121,6 +121,20 @@ let ctx_third = RenderContext::new("char_1")
 // Output: "Aldran walks forward."
 ```
 
+### **2.2 Custom Runtime Verbs**
+
+The engine also allows developers to expand its vocabulary at runtime by injecting custom irregular verbs or dialect-specific forms. This makes it easy to add new verbs dynamically without modifying the static core map.
+
+```rust
+use mud_perspective::grammar::{add_irregular_verb, remove_irregular_verb, clear_irregular_verbs};
+
+if let Err(e) = add_irregular_verb("teleport", "teleports") {
+    eprintln!("Failed to add custom verb: {e}");
+}
+remove_irregular_verb("teleport");
+clear_irregular_verbs();
+```
+
 ### 3. Handling Groups and Swarms
 
 The library provides a built-in `GroupEntity` to easily represent dynamic groups of characters or objects. It automatically handles Oxford comma formatting, injects "you" if the viewer is in the group, and evaluates as plural so verbs and pronouns automatically conjugate correctly ("attack" instead of "attacks", "themselves", etc.).
@@ -131,7 +145,7 @@ Furthermore, the engine implements grammatical rules for mixed-person groups. If
 use mud_perspective::models::GroupEntity;
 
 let party = GroupEntity { members: vec![&player, &ally] };
-let template = cache.get_or_compile("{source} [source:open] the door.").unwrap();
+let template = cache.get_or_compile("{source} [source:open] the door.")?;
 
 // Player's Perspective (Second Person): "You and Bob open the door."
 // Player's Perspective (First Person): "Bob and I open the door."
@@ -146,7 +160,7 @@ let template = cache.get_or_compile("{source} [source:open] the door.").unwrap()
 * **Articles / Demonstratives:** {a:key}, {the:key}, {this:key}, or {that:key} prepends the appropriate word. Indefinite articles ("a") automatically adapt to "some" for plural entities, and demonstratives automatically adapt to plural ("these", "those"). Use {A:key}, {The:key}, etc. to force capitalization mid-sentence. These are automatically suppressed if the entity evaluates to the viewer ("you") or is flagged as a proper noun. You can force an article to render for a proper noun by prepending a plus sign (e.g., `{+this:key}`).
 * **Pronouns:** {key:type}. Supported types include subj (he/she/it/they), obj (him/her/it/them), poss (his/her/their), abs_poss (his/hers/theirs), and reflex (himself/themselves). Capitalize the type (e.g., {key:Subj}) to force capitalization mid-sentence. Prepend a plus (`{+key:subj}`) to force a 3rd-person pronoun (e.g., he/she/it/they) even if the viewer is the entity. The engine features automatic Anaphora Resolution to prevent pronoun ambiguity (see Section 5).
 
-* **Verbs:** [key:verb] explicitly binds a base verb to a subject to ensure correct conjugation (including "be" -> "is"/"are" and "was" -> "were"). Capitalize the verb (e.g., [key:Verb]) to force capitalization mid-sentence. Prepend a plus (`[+key:verb]`) to force 3rd-person conjugation. This prevents grammatical errors during compound subjects or passive voice structures.
+* **Verbs:** [key:verb] explicitly binds a base verb to a subject to ensure correct conjugation (including "be" -> "is"/"are" and "was" -> "were"). Capitalize the verb (e.g., [key:Verb]) to force capitalization mid-sentence. Prepend a plus (`[+key:verb]`) to force 3rd-person conjugation. You can also bypass conjugation across all perspectives by appending a pipe and the desired form (e.g., `[key:be|be]`). You can provide multiple pipe segments to explicitly define the forms for different perspectives: `[key:freak out|freak out|freaks out]` (base/plural and 3rd-person singular) or `[key:be|am|are|is]` (1st-person singular, 2nd-person/plural, and 3rd-person singular). Phrasal verbs (e.g. `[key:pick up]`) are naturally supported; the engine dynamically isolates the first word to ensure `"pick up"` correctly conjugates to `"picks up"`.
 
 * **Escaping:** Use a backslash (`\`) to escape special characters if you need to output literal braces or brackets (e.g., `\{`, `\}`, `\[`, `\]`). You can also escape a backslash itself (`\\`).
 
@@ -174,7 +188,7 @@ Using pronouns and active subject tracking allows builders to write multi-senten
 ```rust
 let template = cache.get_or_compile(
     "{source} [source:kick] {the:target} in the chest. {target:Subj} [target:stumble] backward, and {source:subj} [source:press] the advantage!"
-).unwrap();
+)?;
 
 // If Aldran kicks a goblin (Unambiguous pronouns):
 // "Aldran kicks the goblin in the chest. It stumbles backward, and he presses the advantage!"
@@ -207,5 +221,6 @@ While functional for standard MUD environments, the current architecture has sev
 
 1. **English-Only Morphology:** The verb conjugation and pronoun resolution algorithms are strictly hardcoded for English grammar. Supporting languages with complex declensions or grammatical gender agreement (e.g., Romance or Slavic languages) would require a fundamental rewrite of the grammar.rs module.  
 2. **Abbreviation Boundary Detection:** The typography post-processor relies on standard Unicode sentence segmentation to capitalize the first letter of each sentence. Because it lacks a comprehensive natural language abbreviation dictionary, it may incorrectly capitalize words immediately following common abbreviations (e.g., treating the period in "Mr. Smith" as a hard sentence boundary).
-
-3. **Static Irregular Verb Map:** The internal Perfect Hash Function (PHF) map currently only covers a curated core set of irregular and modal verbs. Verbs outside of this list fall back to algorithmic suffix rules (adding "s", "es", or "ies"), which will produce grammatically incorrect text for unmapped irregulars.  
+3. **Dynamic Tense Shifting:** The engine does not have a concept of narrative time. To output past-tense text, the builder must explicitly tag the past-tense form in the template (e.g., `[source:ran]`, not `[source:run]`).
+4. **Past Tense Inflection by Person:** In modern English, "to be" is the only verb that changes form in the past tense based on the subject (*I was, you were*). The engine hardcodes this specific exception, but cannot dynamically handle hypothetical or custom verbs that inflect by person in the past tense.
+5. **True Colliding Verbs:** The engine maps strings to strings and cannot determine the semantic context of a verb. For verbs where the past tense changes based on context (e.g., "I *bore* a sword" vs "The market *beared* it"), the static map cannot dynamically choose the correct form.
