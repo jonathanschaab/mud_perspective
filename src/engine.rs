@@ -88,7 +88,7 @@ impl Template {
         while let Some(&(i, c)) = chars.peek() {
             #[cfg(any(feature = "mxp", feature = "msp", feature = "ansi"))]
             if has_tags {
-                let remainder = &raw[i..];
+                let remainder = raw.get(i..).unwrap_or_default();
                 if skip_protocol_tags(&mut chars, remainder, i).is_some() {
                     continue;
                 }
@@ -120,7 +120,7 @@ impl Template {
                 let tag_name = if is_entity { "entity tag" } else { "verb tag" };
 
                 let end_idx = consume_until_closed(&mut chars, i, close_char, tag_name)?;
-                let content = &raw[i + 1..end_idx];
+                let content = raw.get(i + 1..end_idx).unwrap_or_default();
 
                 let token = if is_entity {
                     Self::parse_entity_or_pronoun(content)?
@@ -258,15 +258,23 @@ impl Template {
         let lower_verb = original_verb.to_lowercase();
 
         if let Some(options) = crate::grammar::get_collision_options(&lower_verb) {
+            let opt1 = options.first().copied().unwrap_or("unknown");
+            let opt2 = options.get(1).copied().unwrap_or("unknown");
             tracing::warn!(
                 "Ambiguous verb '{}' detected in template. In the past tense, it could shift to {}. \
                  To guarantee your intended meaning, annotate it with the correct past tense: [source:{}({})] or [source:{}({})]",
                 original_verb,
                 options.join(" or "),
                 original_verb,
-                options[0],
+                opt1,
                 original_verb,
-                options[1]
+                opt2
+            );
+        } else if lower_verb == "do" {
+            tracing::warn!(
+                "The verb 'do' drops entirely in the future tense when used as a helper verb (e.g., 'does not' -> 'will not'). \
+                 If you are using it for negation or questions, annotate it as [source:{}(aux)] to enable this behavior.",
+                original_verb
             );
         }
 
@@ -412,7 +420,8 @@ impl PerspectiveEngine {
                     format!("Missing property '{prop}' on entity '{current_path}'")
                 })?;
                 // Accumulate the traversed path slice by extending it over the dot and property
-                current_path = &key[..current_path.len() + 1 + prop.len()];
+                let next_len = current_path.len() + 1 + prop.len();
+                current_path = key.get(..next_len).unwrap_or(current_path);
             }
             return Ok(current);
         }
@@ -769,27 +778,28 @@ impl PerspectiveEngine {
 
         let conjugated = if let Some(forced) = forced_conjugation {
             // Note: `forced` only contains the override segments for the requested tense.
-            let forced_str = match forced.len() {
-                2 => {
+            let forced_str = match forced.as_slice() {
+                [first, second] => {
                     if !is_viewer && !is_plural {
-                        &forced[1]
+                        second
                     } else {
-                        &forced[0]
+                        first
                     }
                 }
-                3 => {
+                [first, second, third] => {
                     if is_viewer
                         && ctx.stance == crate::models::ActorStance::FirstPerson
                         && !is_plural
                     {
-                        &forced[0]
+                        first
                     } else if !is_viewer && !is_plural {
-                        &forced[2]
+                        third
                     } else {
-                        &forced[1]
+                        second
                     }
                 }
-                _ => &forced[0],
+                [first, ..] => first,
+                [] => original_verb,
             };
             crate::grammar::format_verb(forced_str, *is_capitalized)
         } else {
@@ -847,9 +857,11 @@ impl PerspectiveEngine {
             // 1, 2, & 3. Skip MXP Tags, MSP Triggers, and ANSI Escape Sequences
             #[cfg(any(feature = "mxp", feature = "msp", feature = "ansi"))]
             if has_tags {
-                let remainder = &input[i..];
+                let remainder = input.get(i..).unwrap_or_default();
                 if let Some(end_offset) = skip_protocol_tags(&mut chars, remainder, i) {
-                    output.push_str(&remainder[..=end_offset]);
+                    if let Some(skipped) = remainder.get(..=end_offset) {
+                        output.push_str(skipped);
+                    }
                     skipped_tag = true;
                 }
             }
@@ -1177,8 +1189,10 @@ fn capitalize_cow(
 
 #[inline]
 fn push_literal(tokens: &mut Vec<Token>, raw: &str, start: usize, end: usize) {
-    if end > start {
-        tokens.push(Token::Literal(raw[start..end].to_string()));
+    if end > start
+        && let Some(slice) = raw.get(start..end)
+    {
+        tokens.push(Token::Literal(slice.to_string()));
     }
 }
 

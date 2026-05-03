@@ -31,6 +31,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ("may", "may", "might"),
         ("might", "might", "might"),
         ("must", "must", "must"),
+        ("ought", "ought", "ought"),
     ];
     for (modal, present, past) in modals {
         insert(modal, present, past);

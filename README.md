@@ -179,9 +179,13 @@ For hypothetical "to be" scenarios, use inline overrides to force the static con
 
 ### **4.3 Future Tense and "Do-Support"**
 
-English uses the auxiliary verb "to do" to form negative sentences and questions (e.g., "Aldran *does* not run", "*Does* Aldran run?"). In the future tense, "do" is dropped and replaced with "will" ("Aldran *will* not run", "*Will* Aldran run?"). Because the engine evaluates tags independently and cannot determine if "do" is an auxiliary verb or a main verb (e.g., "Aldran *does* the laundry"), it will treat all instances of "do" as main verbs in the future tense (outputting the incorrect *"Aldran will do not run"*). 
+English uses the auxiliary verb "to do" to form negative sentences and questions (e.g., "Aldran *does* not run", "*Does* Aldran run?"). In the future tense, "do" is dropped and replaced with "will" ("Aldran *will* not run", "*Will* Aldran run?"). Because the engine evaluates tags independently and cannot determine if "do" is an auxiliary verb or a main verb (e.g., "Aldran *does* the laundry"), it natively treats all instances of "do" as main verbs. 
 
-**Workaround:** If a negative or question template might be evaluated in the future tense, rely on modal verbs. Write `{source} [source:will] not run.` In the Present/Future, this evaluates to *"Aldran will not run."* In the past tense, the engine automatically shifts the modal verb, gracefully evaluating to *"Aldran would not run."*
+To fix this, annotate the verb as an auxiliary helper: `[source:do(aux)]`. 
+*   `{source} [source:do(aux)] not run.`
+*   **Present:** "Aldran does not run."
+*   **Past:** "Aldran did not run."
+*   **Future:** "Aldran will not run." (The engine safely drops "do" and substitutes "will").
 
 ### **5. Smart Pronouns & Anaphora Resolution**
 
@@ -242,4 +246,4 @@ While functional for standard MUD environments, the current architecture has sev
 2. **Abbreviation Boundary Detection:** The typography post-processor relies on standard Unicode sentence segmentation to capitalize the first letter of each sentence. Because it lacks a comprehensive natural language abbreviation dictionary, it may incorrectly capitalize words immediately following common abbreviations (e.g., treating the period in "Mr. Smith" as a hard sentence boundary).
 3. **Past Tense Inflection by Person:** In modern English, "to be" is the only verb that changes form in the past tense based on the subject (*I was, you were*). The engine hardcodes this specific exception, but cannot dynamically handle hypothetical or custom verbs that inflect by person in the past tense.
 4. **Multiple Verbs per Tag:** The engine leverages space-splitting to isolate and conjugate the root word of phrasal verbs (e.g., `catch up` -> `catches up`). Consequently, placing entirely separate verbs into a single tag (e.g., `[source:run and jump]`) will fail to conjugate the subsequent verbs. Each verb must be wrapped in its own tag.
-5. **Semantic Syntax Limitations:** Because the engine is a rapid morphological formatter rather than an AI-driven NLP parser, it cannot detect contextual sentence structures. This results in the edge cases surrounding the subjunctive mood and future-tense "do-support" detailed in Sections 4.2 and 4.3.
+5. **Semantic Syntax Limitations:** Because the engine is a rapid morphological formatter rather than an AI-driven NLP parser, it cannot detect contextual sentence structures. This results in the edge cases surrounding the subjunctive mood detailed in Section 4.2.

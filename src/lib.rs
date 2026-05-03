@@ -8,7 +8,8 @@
     clippy::missing_panics_doc,
     clippy::must_use_candidate,
     clippy::doc_markdown,
-    clippy::unwrap_used
+    clippy::unwrap_used,
+    clippy::indexing_slicing
 )]
 #![allow(
     // module_name_repetitions will complain if a struct is named `TemplateCache` inside the `cache` module.

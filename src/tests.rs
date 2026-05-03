@@ -1,5 +1,6 @@
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
+#[allow(clippy::indexing_slicing)]
 mod tests {
     use crate::cache::TemplateCache;
     use crate::engine::{PerspectiveEngine, Template};
@@ -3093,7 +3094,7 @@ mod tests {
         // 6. Modal verbs natively injected via build.rs
         // This ensures colliding verbs (e.g. "cans" or "wills") don't overwrite modal behaviors.
         let modals = [
-            "can", "could", "will", "would", "shall", "should", "may", "might", "must",
+            "can", "could", "will", "would", "shall", "should", "may", "might", "must", "ought",
         ];
         for modal in modals {
             let template_str = format!("{{source}} [source:{modal}].");
@@ -4202,6 +4203,81 @@ mod tests {
         assert_eq!(
             PerspectiveEngine::render(&t_perfect_continuous, &ctx_future).unwrap(),
             "Aldran will have been walking."
+        );
+    }
+
+    #[test]
+    fn test_dynamic_future_tense_do_support() {
+        let player = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+
+        let cache = TemplateCache::new(100);
+
+        let ctx_pres = RenderContext::new("char_2").with_entity("source", &player);
+        let ctx_past = RenderContext::new("char_2")
+            .with_entity("source", &player)
+            .with_tense(crate::models::Tense::Past);
+        let ctx_future = RenderContext::new("char_2")
+            .with_entity("source", &player)
+            .with_tense(crate::models::Tense::Future);
+
+        // 1. Negative Sentence
+        let t_neg = cache
+            .get_or_compile("{source} [source:do(aux)] not run.")
+            .unwrap();
+
+        assert_eq!(
+            PerspectiveEngine::render(&t_neg, &ctx_pres).unwrap(),
+            "Aldran does not run."
+        );
+        assert_eq!(
+            PerspectiveEngine::render(&t_neg, &ctx_past).unwrap(),
+            "Aldran did not run."
+        );
+        assert_eq!(
+            PerspectiveEngine::render(&t_neg, &ctx_future).unwrap(),
+            "Aldran will not run."
+        );
+
+        // 2. Question Sentence (Capitalized)
+        let t_question = cache
+            .get_or_compile("[source:Do(aux)] {source:subj} run?")
+            .unwrap();
+
+        assert_eq!(
+            PerspectiveEngine::render(&t_question, &ctx_pres).unwrap(),
+            "Does he run?"
+        );
+        assert_eq!(
+            PerspectiveEngine::render(&t_question, &ctx_past).unwrap(),
+            "Did he run?"
+        );
+        assert_eq!(
+            PerspectiveEngine::render(&t_question, &ctx_future).unwrap(),
+            "Will he run?"
+        );
+
+        // 3. Main Verb (Unannotated "do")
+        let t_main = cache
+            .get_or_compile("{source} [source:do] the laundry.")
+            .unwrap();
+
+        assert_eq!(
+            PerspectiveEngine::render(&t_main, &ctx_pres).unwrap(),
+            "Aldran does the laundry."
+        );
+        assert_eq!(
+            PerspectiveEngine::render(&t_main, &ctx_past).unwrap(),
+            "Aldran did the laundry."
+        );
+        assert_eq!(
+            PerspectiveEngine::render(&t_main, &ctx_future).unwrap(),
+            "Aldran will do the laundry."
         );
     }
 }

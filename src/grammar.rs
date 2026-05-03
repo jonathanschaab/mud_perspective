@@ -228,14 +228,22 @@ pub fn resolve_pronoun(
 /// Conjugates a base verb into the appropriate person and number.
 #[must_use]
 pub fn conjugate_verb<'a>(
-    original_verb: &'a str,
-    lower_verb: &'a str,
+    mut original_verb: &'a str,
+    mut lower_verb: &'a str,
     is_capitalized: bool,
     is_viewer: bool,
     is_plural: bool,
     stance: ActorStance,
     tense: Tense,
 ) -> Cow<'a, str> {
+    if lower_verb == "do(aux)" {
+        if tense == Tense::Future {
+            return Cow::Borrowed(if is_capitalized { "Will" } else { "will" });
+        }
+        original_verb = if is_capitalized { "Do" } else { "do" };
+        lower_verb = "do";
+    }
+
     if tense == Tense::Future {
         // Modal verbs naturally imply future capability or obligation, and cannot be
         // stacked with "will" in standard English (e.g., "will must" is invalid).
@@ -253,17 +261,23 @@ pub fn conjugate_verb<'a>(
                 | "ought"
                 | "ought to"
         ) {
-            return Cow::Owned(format_verb(original_verb, is_capitalized).into_owned());
+            return format_verb(original_verb, is_capitalized);
         }
 
         // Lowercase the first character of the base verb so it sits cleanly after "will",
         // but preserve any inner camelCase (e.g., "MacGyver" -> "will macGyver")
+        let prefix = if is_capitalized { "Will " } else { "will " };
         let mut chars = original_verb.chars();
-        let first_char = chars.next().unwrap_or_default().to_lowercase().to_string();
-        let uncapitalized = format!("{first_char}{}", chars.as_str());
 
-        let future_verb = format!("will {uncapitalized}");
-        return Cow::Owned(format_verb(&future_verb, is_capitalized).into_owned());
+        if let Some(first_char) = chars.next() {
+            return Cow::Owned(format!(
+                "{prefix}{}{}",
+                first_char.to_lowercase(),
+                chars.as_str()
+            ));
+        }
+
+        return Cow::Owned(prefix.trim_end().to_string());
     }
 
     let is_first_person_singular = is_viewer && stance == ActorStance::FirstPerson && !is_plural;
@@ -333,7 +347,9 @@ pub fn conjugate_verb<'a>(
 
 fn conjugate_regular_verb<'a>(original_verb: &'a str, lower_verb: &'a str) -> Cow<'a, str> {
     if lower_verb.len() > 1 && lower_verb.ends_with('y') && !is_vowel_before_y(lower_verb) {
-        let trimmed = &original_verb[..original_verb.len() - 1];
+        let trimmed = original_verb
+            .get(..original_verb.len() - 1)
+            .unwrap_or(original_verb);
         Cow::Owned(format!("{trimmed}ies"))
     } else if lower_verb.ends_with("ch")
         || lower_verb.ends_with("sh")
@@ -354,7 +370,9 @@ fn conjugate_regular_past_verb<'a>(original_verb: &'a str, lower_verb: &'a str) 
     if lower_verb.ends_with('e') {
         Cow::Owned(format!("{original_verb}d"))
     } else if lower_verb.len() > 1 && lower_verb.ends_with('y') && !is_vowel_before_y(lower_verb) {
-        let trimmed = &original_verb[..original_verb.len() - 1];
+        let trimmed = original_verb
+            .get(..original_verb.len() - 1)
+            .unwrap_or(original_verb);
         Cow::Owned(format!("{trimmed}ied"))
     } else {
         Cow::Owned(format!("{original_verb}ed"))
@@ -462,7 +480,11 @@ pub fn format_oxford_list(mut items: Vec<Cow<'_, str>>) -> Cow<'_, str> {
     match items.len() {
         0 => Cow::Borrowed(""),
         1 => items.pop().unwrap_or_default(),
-        2 => Cow::Owned(format!("{} and {}", items[0], items[1])),
+        2 => {
+            let second = items.pop().unwrap_or_default();
+            let first = items.pop().unwrap_or_default();
+            Cow::Owned(format!("{first} and {second}"))
+        }
         _ => {
             let last = items.pop().unwrap_or_default();
             Cow::Owned(format!("{}, and {}", items.join(", "), last))
