@@ -562,7 +562,7 @@ fn to_words_lt_1000(mut n: usize, is_ordinal: bool) -> String {
             }
         }
     } else if parts.is_empty() {
-        return "zeroth".to_string(); // Handles n=0 at the start of to_ordinal_words_lt_1000
+        return (if is_ordinal { "zeroth" } else { "zero" }).to_string();
     }
 
     if is_ordinal {
