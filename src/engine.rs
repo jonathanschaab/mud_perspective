@@ -144,12 +144,12 @@ impl Template {
         let (p1, p2_opt) = split_tag(content, '{', "Malformed entity tag")?;
 
         if let Some(p2) = p2_opt {
-            let (p1_str, force_article, no_smart_article, force_singular_1) =
+            let (p1_str, force_article, no_smart_modifier, force_singular_1) =
                 parse_stance_prefixes(p1);
 
             // 2-part case: {article:key}
             if is_article(p1_str) {
-                let (p2_str, force_3rd_person, _no_smart_entity, force_singular_2, is_possessive) =
+                let (p2_str, force_3rd_person, _, force_singular_2, is_possessive) =
                     parse_entity_modifiers(p2);
 
                 if p2_str.is_empty() {
@@ -164,7 +164,7 @@ impl Template {
                     force_article,
                     force_3rd_person,
                     is_possessive,
-                    no_smart_article,
+                    no_smart_modifier,
                     force_singular_1 || force_singular_2,
                 );
                 create_entity_ref(p2_str, Some(p1_str), flags, content)
@@ -174,7 +174,7 @@ impl Template {
             }
         } else {
             // 1-part case: {key}
-            let (p1_str, force_3rd_person, _no_smart_entity, force_singular, is_possessive) =
+            let (p1_str, force_3rd_person, _, force_singular, is_possessive) =
                 parse_entity_modifiers(p1);
 
             reject_if(
@@ -197,7 +197,7 @@ impl Template {
 
     fn parse_verb(content: &str) -> Result<Token, String> {
         let (p1, p2_opt) = split_tag(content, '[', "Malformed verb tag")?;
-        let (p1_str, force_3rd_person, _no_smart, force_singular_1) = parse_stance_prefixes(p1);
+        let (p1_str, force_3rd_person, _, force_singular_1) = parse_stance_prefixes(p1);
 
         let (subject_key, verb_part) = if let Some(p2) = p2_opt {
             reject_if(
@@ -224,16 +224,16 @@ impl Template {
         };
 
         let (actual_verb, forced_present, forced_past) =
-            if let Some((v, forced)) = verb_part.split_once('|') {
+            if let Some((base_verb, forced)) = verb_part.split_once('|') {
                 reject_if(
-                    v.is_empty() || forced.is_empty(),
+                    base_verb.is_empty() || forced.is_empty(),
                     "Verb tag has an empty verb or forced conjugation segment",
                     content,
                     '[',
                 )?;
 
                 let (forced_present, forced_past) = parse_forced_conjugations(forced, content)?;
-                (v, forced_present, forced_past)
+                (base_verb, forced_present, forced_past)
             } else {
                 (verb_part, None, None)
             };
@@ -497,31 +497,33 @@ impl PerspectiveEngine {
         if let Some(other_long) = other_entity.long_display_name_for(effective_viewer)
             && other_long != name
         {
-            let mut o_short_cols = 0;
-            let mut o_long_cols = 0;
-            for &oo_key in keys_to_check {
-                if oo_key != other_key
-                    && let Ok(oo_ent) = Self::get_entity(ctx, oo_key)
+            let mut other_short_collisions = 0;
+            let mut other_long_collisions = 0;
+            for &eval_key in keys_to_check {
+                if eval_key != other_key
+                    && let Ok(eval_entity) = Self::get_entity(ctx, eval_key)
                 {
-                    let oo_short = oo_ent.display_name_for(effective_viewer);
-                    if oo_short == other_name {
-                        o_short_cols += 1;
+                    let eval_short_name = eval_entity.display_name_for(effective_viewer);
+                    if eval_short_name == other_name {
+                        other_short_collisions += 1;
                     }
 
-                    let mut is_long_col = oo_short == other_long;
+                    let mut is_long_col = eval_short_name == other_long;
                     if !is_long_col
-                        && oo_short == name
-                        && oo_ent.long_display_name_for(effective_viewer).as_deref()
+                        && eval_short_name == name
+                        && eval_entity
+                            .long_display_name_for(effective_viewer)
+                            .as_deref()
                             == Some(other_long.as_ref())
                     {
                         is_long_col = true;
                     }
                     if is_long_col {
-                        o_long_cols += 1;
+                        other_long_collisions += 1;
                     }
                 }
             }
-            if o_long_cols < o_short_cols {
+            if other_long_collisions < other_short_collisions {
                 return true;
             }
         }
@@ -784,7 +786,7 @@ impl PerspectiveEngine {
         let mut ends_with_possessive_pronoun = false;
         let mut decomposed_we = false;
         let mut formatted_names = Vec::with_capacity(total_visible + 1);
-        if let Some(v) = viewer_entity {
+        if let Some(viewer) = viewer_entity {
             if stance == crate::models::ActorStance::SecondPerson {
                 if params.flags.is_possessive() {
                     formatted_names.push(std::borrow::Cow::Borrowed("your"));
@@ -794,7 +796,7 @@ impl PerspectiveEngine {
                 } else {
                     formatted_names.push(std::borrow::Cow::Borrowed("you"));
                 }
-            } else if stance == crate::models::ActorStance::FirstPerson && v.is_plural() {
+            } else if stance == crate::models::ActorStance::FirstPerson && viewer.is_plural() {
                 if visible.is_empty() {
                     if params.flags.is_possessive() {
                         formatted_names.push(std::borrow::Cow::Borrowed("our"));
@@ -813,14 +815,15 @@ impl PerspectiveEngine {
             }
         }
 
-        let will_append_my = viewer_entity.is_some_and(|v| {
-            stance == crate::models::ActorStance::FirstPerson && (!v.is_plural() || decomposed_we)
+        let will_append_my = viewer_entity.is_some_and(|viewer| {
+            stance == crate::models::ActorStance::FirstPerson
+                && (!viewer.is_plural() || decomposed_we)
         });
 
         let distribute_possessives = viewer_entity.is_some() && params.flags.is_possessive();
 
         let mut first_visible_item = viewer_entity.is_none();
-        for (m, name) in visible {
+        for (member, name) in visible {
             let lower_article_storage: String;
             let article_to_use = if first_visible_item {
                 params.article
@@ -836,8 +839,8 @@ impl PerspectiveEngine {
                     resolve_article(
                         art,
                         &name,
-                        m.is_proper_noun_for(effective_viewer),
-                        m.is_plural(),
+                        member.is_proper_noun_for(effective_viewer),
+                        member.is_plural(),
                         params.flags.force_article(),
                         params.ordinal,
                         entity.collective_noun(),
@@ -849,7 +852,7 @@ impl PerspectiveEngine {
             };
 
             if distribute_possessives {
-                let suffix = Self::get_possessive_suffix(&final_name, m.is_plural());
+                let suffix = Self::get_possessive_suffix(&final_name, member.is_plural());
                 let mut owned = final_name.into_owned();
                 owned.push_str(suffix);
                 final_name = std::borrow::Cow::Owned(owned);
@@ -1431,17 +1434,18 @@ fn parse_forced_conjugations(
     let mut forced_present = None;
     let mut forced_past = None;
 
-    let (pres_str, past_str) = if let Some((p, pst)) = forced.split_once(';') {
-        (p, Some(pst))
-    } else {
-        (forced, None)
-    };
+    let (pres_str, past_str) =
+        if let Some((present_overrides, past_overrides)) = forced.split_once(';') {
+            (present_overrides, Some(past_overrides))
+        } else {
+            (forced, None)
+        };
 
     if !pres_str.is_empty() {
         let parts: Vec<String> = pres_str.split('|').map(str::to_string).collect();
-        for p in &parts {
+        for part in &parts {
             reject_if(
-                p.is_empty(),
+                part.is_empty(),
                 "Verb tag has an empty forced present conjugation segment",
                 content,
                 '[',
@@ -1456,17 +1460,17 @@ fn parse_forced_conjugations(
         forced_present = Some(parts);
     }
 
-    if let Some(pst) = past_str {
+    if let Some(past_overrides_str) = past_str {
         reject_if(
-            pst.is_empty(),
+            past_overrides_str.is_empty(),
             "Verb tag has an empty forced past conjugation segment",
             content,
             '[',
         )?;
-        let parts: Vec<String> = pst.split('|').map(str::to_string).collect();
-        for p in &parts {
+        let parts: Vec<String> = past_overrides_str.split('|').map(str::to_string).collect();
+        for part in &parts {
             reject_if(
-                p.is_empty(),
+                part.is_empty(),
                 "Verb tag has an empty forced past conjugation segment",
                 content,
                 '[',

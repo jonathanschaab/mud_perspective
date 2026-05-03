@@ -396,13 +396,13 @@ pub fn format_verb(verb: &str, is_capitalized: bool) -> Cow<'_, str> {
 /// Capitalizes the first letter of a string slice.
 #[must_use]
 pub fn capitalize_first(s: &str) -> String {
-    let mut c = s.chars();
-    match c.next() {
+    let mut chars = s.chars();
+    match chars.next() {
         None => String::new(),
-        Some(f) => {
+        Some(first_char) => {
             let mut result = String::with_capacity(s.len());
-            result.extend(f.to_uppercase());
-            result.push_str(c.as_str());
+            result.extend(first_char.to_uppercase());
+            result.push_str(chars.as_str());
             result
         }
     }
@@ -481,21 +481,32 @@ pub fn number_to_ordinal_word(mut n: usize) -> String {
     if (10..20).contains(&n) {
         parts.push(teens.get(n - 10).copied().unwrap_or_default().to_string());
     } else {
-        let t = n / 10;
-        let o = n % 10;
+        let tens_digit = n / 10;
+        let ones_digit = n % 10;
 
-        if t >= 2 {
-            if o == 0 {
-                parts.push(tens_ord.get(t).copied().unwrap_or_default().to_string());
+        if tens_digit >= 2 {
+            if ones_digit == 0 {
+                parts.push(
+                    tens_ord
+                        .get(tens_digit)
+                        .copied()
+                        .unwrap_or_default()
+                        .to_string(),
+                );
             } else {
                 parts.push(format!(
                     "{}-{}",
-                    decades.get(t).copied().unwrap_or_default(),
-                    ones.get(o).copied().unwrap_or_default()
+                    decades.get(tens_digit).copied().unwrap_or_default(),
+                    ones.get(ones_digit).copied().unwrap_or_default()
                 ));
             }
-        } else if o > 0 {
-            parts.push(ones.get(o).copied().unwrap_or_default().to_string());
+        } else if ones_digit > 0 {
+            parts.push(
+                ones.get(ones_digit)
+                    .copied()
+                    .unwrap_or_default()
+                    .to_string(),
+            );
         }
     }
 
