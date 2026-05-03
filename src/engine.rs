@@ -411,10 +411,10 @@ impl PerspectiveEngine {
                 } => Some(key.as_str()),
                 _ => None,
             };
-            if let Some(key) = k {
-                if !template_keys.contains(&key) {
-                    template_keys.push(key);
-                }
+            if let Some(key) = k
+                && !template_keys.contains(&key)
+            {
+                template_keys.push(key);
             }
         }
 
@@ -433,10 +433,10 @@ impl PerspectiveEngine {
             }
         }
         for r in ctx.recent_entities.borrow().iter() {
-            if !template_keys.contains(&r.key.as_str()) {
-                if let Ok(ent) = Self::get_entity(ctx, &r.key) {
-                    pre_resolved.push((r.key.clone(), ent));
-                }
+            if !template_keys.contains(&r.key.as_str())
+                && let Ok(ent) = Self::get_entity(ctx, &r.key)
+            {
+                pre_resolved.push((r.key.clone(), ent));
             }
         }
 
@@ -463,9 +463,17 @@ impl PerspectiveEngine {
                     &pre_resolved,
                 )?,
                 Token::PronounRef { .. } => {
-                    Self::render_pronoun_ref(ctx, &mut raw_output, token, &future_keys, &pre_resolved)?;
+                    Self::render_pronoun_ref(
+                        ctx,
+                        &mut raw_output,
+                        token,
+                        &future_keys,
+                        &pre_resolved,
+                    )?;
                 }
-                Token::VerbRef { .. } => Self::render_verb_ref(ctx, &mut raw_output, token, &pre_resolved)?,
+                Token::VerbRef { .. } => {
+                    Self::render_verb_ref(ctx, &mut raw_output, token, &pre_resolved)?;
+                }
                 Token::SentenceBreak => {
                     raw_output.push('\u{E000}');
                 }
@@ -573,10 +581,10 @@ impl PerspectiveEngine {
                 }
             }
             for &fk in future_keys {
-                if !recent_borrow.iter().any(|r| r.key == fk) {
-                    if let Some(&(_, ent)) = pre_resolved.iter().find(|(k, _)| k == fk) {
-                        resolved_others.push((fk, ent));
-                    }
+                if !recent_borrow.iter().any(|r| r.key == fk)
+                    && let Some(&(_, ent)) = pre_resolved.iter().find(|(k, _)| k == fk)
+                {
+                    resolved_others.push((fk, ent));
                 }
             }
 
