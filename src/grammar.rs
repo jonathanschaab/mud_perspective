@@ -457,57 +457,31 @@ const DECADES: &[&str] = &[
 
 #[inline]
 fn make_word_ordinal(last_word: &mut String) {
+    const REPLACEMENTS: &[(&str, &str)] = &[
+        ("one", "first"),
+        ("two", "second"),
+        ("three", "third"),
+        ("five", "fifth"),
+        ("eight", "eighth"),
+        ("nine", "ninth"),
+        ("twelve", "twelfth"),
+    ];
+
     if last_word.ends_with('y') {
-        *last_word = last_word
-            .strip_suffix('y')
-            .expect("Should have 'y'")
-            .to_string()
-            + "ieth";
-    } else if last_word.ends_with("one") {
-        *last_word = last_word
-            .strip_suffix("one")
-            .expect("Should have 'one'")
-            .to_string()
-            + "first";
-    } else if last_word.ends_with("two") {
-        *last_word = last_word
-            .strip_suffix("two")
-            .expect("Should have 'two'")
-            .to_string()
-            + "second";
-    } else if last_word.ends_with("three") {
-        *last_word = last_word
-            .strip_suffix("three")
-            .expect("Should have 'three'")
-            .to_string()
-            + "third";
-    } else if last_word.ends_with("five") {
-        *last_word = last_word
-            .strip_suffix("five")
-            .expect("Should have 'five'")
-            .to_string()
-            + "fifth";
-    } else if last_word.ends_with("eight") {
-        *last_word = last_word
-            .strip_suffix("eight")
-            .expect("Should have 'eight'")
-            .to_string()
-            + "eighth";
-    } else if last_word.ends_with("nine") {
-        *last_word = last_word
-            .strip_suffix("nine")
-            .expect("Should have 'nine'")
-            .to_string()
-            + "ninth";
-    } else if last_word.ends_with("twelve") {
-        *last_word = last_word
-            .strip_suffix("twelve")
-            .expect("Should have 'twelve'")
-            .to_string()
-            + "twelfth";
-    } else {
-        last_word.push_str("th");
+        last_word.pop(); // Remove the 'y'
+        last_word.push_str("ieth");
+        return;
     }
+
+    for &(suffix, replacement) in REPLACEMENTS {
+        if last_word.ends_with(suffix) {
+            last_word.truncate(last_word.len() - suffix.len());
+            last_word.push_str(replacement);
+            return;
+        }
+    }
+
+    last_word.push_str("th");
 }
 
 /// Internal helper to convert a number from 0-999 to words, with an ordinal flag.

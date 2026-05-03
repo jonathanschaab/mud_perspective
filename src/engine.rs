@@ -117,11 +117,7 @@ impl Template {
             if c == TAG_ESCAPE {
                 chars.next();
                 if let Some(&(next_i, next_c)) = chars.peek()
-                    && (next_c == TAG_ENTITY_OPEN
-                        || next_c == TAG_VERB_OPEN
-                        || next_c == TAG_ENTITY_CLOSE
-                        || next_c == TAG_VERB_CLOSE
-                        || next_c == TAG_ESCAPE)
+                    && is_escapable_char(next_c)
                 {
                     push_literal(&mut tokens, raw, last_literal_start, i);
                     last_literal_start = next_i;
@@ -1721,15 +1717,32 @@ fn push_literal(tokens: &mut Vec<Token>, raw: &str, start: usize, end: usize) {
 
 #[inline]
 fn is_article(s: &str) -> bool {
-    matches!(
-        s.to_lowercase().as_str(),
-        "a" | "an" | "the" | "this" | "that" | "another" | "one" | "one of" | "one of the" | "some"
-    )
+    const ARTICLES: &[&str] = &[
+        "a",
+        "an",
+        "the",
+        "this",
+        "that",
+        "another",
+        "one",
+        "one of",
+        "one of the",
+        "some",
+    ];
+    ARTICLES.iter().any(|&art| s.eq_ignore_ascii_case(art))
 }
 
 #[inline]
 fn is_indefinite_article(s: &str) -> bool {
     s.eq_ignore_ascii_case("a") || s.eq_ignore_ascii_case("an")
+}
+
+#[inline]
+const fn is_escapable_char(c: char) -> bool {
+    matches!(
+        c,
+        TAG_ENTITY_OPEN | TAG_VERB_OPEN | TAG_ENTITY_CLOSE | TAG_VERB_CLOSE | TAG_ESCAPE
+    )
 }
 
 #[inline]
