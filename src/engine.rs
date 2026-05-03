@@ -18,7 +18,7 @@ const TAG_ESCAPE: char = '\\';
 const VERB_TENSE_SEP: char = ';';
 const VERB_FORM_SEP: char = '|';
 
-const MOD_FORCE_3RD_PERSON: char = '+';
+const MOD_FORCE: char = '+';
 const MOD_NO_SMART: char = '!';
 const MOD_FORCE_SINGULAR: char = '-';
 const MOD_POSSESSIVE: &str = "'s";
@@ -193,13 +193,11 @@ impl Template {
         let (p1, p2_opt) = split_tag(content, TAG_ENTITY_OPEN, "Malformed entity tag")?;
 
         if let Some(p2) = p2_opt {
-            let (p1_str, force_article, no_smart_modifier, force_singular_1) =
-                parse_stance_prefixes(p1);
+            let (p1_str, p1_flags) = parse_stance_prefixes(p1);
 
             // 2-part case: {article:key}
             if is_article(p1_str) {
-                let (p2_str, force_3rd_person, _, force_singular_2, is_possessive) =
-                    parse_entity_modifiers(p2);
+                let (p2_str, p2_flags) = parse_entity_modifiers(p2);
 
                 if p2_str.is_empty() {
                     return Err(validation_error(
@@ -208,16 +206,33 @@ impl Template {
                         TAG_ENTITY_OPEN,
                     ));
                 }
-                let flags = TagFlags::new(
-                    is_capitalized(p2_str),
-                    force_article,
-                    force_3rd_person,
-                    is_possessive,
-                    no_smart_modifier,
-                    force_singular_1 || force_singular_2,
-                    is_indefinite_article(p1_str),
-                    is_capitalized(p1_str),
+
+                let mut flags = TagFlags::empty();
+                flags.set(TagFlags::IS_CAPITALIZED, is_capitalized(p2_str));
+                flags.set(
+                    TagFlags::FORCE_ARTICLE,
+                    p1_flags.contains(TagFlags::FORCE_3RD_PERSON),
                 );
+                flags.set(
+                    TagFlags::FORCE_3RD_PERSON,
+                    p2_flags.contains(TagFlags::FORCE_3RD_PERSON),
+                );
+                flags.set(
+                    TagFlags::IS_POSSESSIVE,
+                    p2_flags.contains(TagFlags::IS_POSSESSIVE),
+                );
+                flags.set(
+                    TagFlags::NO_SMART,
+                    p1_flags.contains(TagFlags::NO_SMART) || p2_flags.contains(TagFlags::NO_SMART),
+                );
+                flags.set(
+                    TagFlags::FORCE_SINGULAR,
+                    p1_flags.contains(TagFlags::FORCE_SINGULAR)
+                        || p2_flags.contains(TagFlags::FORCE_SINGULAR),
+                );
+                flags.set(TagFlags::ARTICLE_INDEFINITE, is_indefinite_article(p1_str));
+                flags.set(TagFlags::ARTICLE_CAPITALIZED, is_capitalized(p1_str));
+
                 create_entity_ref(p2_str, Some(p1_str), flags, content)
             } else {
                 // 2-part case: {key:pronoun}
@@ -225,8 +240,7 @@ impl Template {
             }
         } else {
             // 1-part case: {key}
-            let (p1_str, force_3rd_person, _, force_singular, is_possessive) =
-                parse_entity_modifiers(p1);
+            let (p1_str, mut flags) = parse_entity_modifiers(p1);
 
             reject_if(
                 p1_str.is_empty(),
@@ -234,23 +248,14 @@ impl Template {
                 content,
                 TAG_ENTITY_OPEN,
             )?;
-            let flags = TagFlags::new(
-                is_capitalized(p1_str),
-                false,
-                force_3rd_person,
-                is_possessive,
-                false,
-                force_singular,
-                false,
-                false,
-            );
+            flags.set(TagFlags::IS_CAPITALIZED, is_capitalized(p1_str));
             create_entity_ref(p1_str, None, flags, content)
         }
     }
 
     fn parse_verb(content: &str) -> Result<Token, String> {
         let (p1, p2_opt) = split_tag(content, TAG_VERB_OPEN, "Malformed verb tag")?;
-        let (p1_str, force_3rd_person, _, force_singular_1) = parse_stance_prefixes(p1);
+        let (p1_str, p1_flags) = parse_stance_prefixes(p1);
 
         let (subject_key, verb_part) = if let Some(p2) = p2_opt {
             reject_if(
@@ -322,15 +327,15 @@ impl Template {
             );
         }
 
-        let flags = TagFlags::new(
-            is_capitalized,
-            false,
-            force_3rd_person,
-            false,
-            false,
-            force_singular_1,
-            false,
-            false,
+        let mut flags = TagFlags::empty();
+        flags.set(TagFlags::IS_CAPITALIZED, is_capitalized);
+        flags.set(
+            TagFlags::FORCE_3RD_PERSON,
+            p1_flags.contains(TagFlags::FORCE_3RD_PERSON),
+        );
+        flags.set(
+            TagFlags::FORCE_SINGULAR,
+            p1_flags.contains(TagFlags::FORCE_SINGULAR),
         );
 
         Ok(Token::VerbRef {
@@ -584,6 +589,7 @@ impl PerspectiveEngine {
     fn check_will_vacate(
         effective_viewer: &str,
         recent_borrow: &[crate::models::RecentEntity],
+        recent_keys: &HashSet<&str>,
         future_keys: &[&str],
         pre_resolved: &HashMap<String, &dyn TemplateEntity>,
         other_key: &str,
@@ -626,7 +632,7 @@ impl PerspectiveEngine {
                 }
             }
             for &fk in future_keys {
-                if !recent_borrow.iter().any(|r| r.key == fk)
+                if !recent_keys.contains(fk)
                     && let Some(&eval_entity) = pre_resolved.get(fk)
                 {
                     check_entity(fk, eval_entity);
@@ -657,6 +663,7 @@ impl PerspectiveEngine {
             let mut short_collisions = 0;
             let mut unresolved_short_collisions = 0;
             let recent_borrow = ctx.recent_entities.borrow();
+            let recent_keys: HashSet<&str> = recent_borrow.iter().map(|r| r.key.as_str()).collect();
 
             // We use a closure here to iterate over the live `recent_borrow` and `future_keys`.
             // Evaluating collisions dynamically avoids allocations while ensuring we accurately
@@ -670,6 +677,7 @@ impl PerspectiveEngine {
                     if !Self::check_will_vacate(
                         effective_viewer,
                         &recent_borrow,
+                        &recent_keys,
                         future_keys,
                         pre_resolved,
                         other_key,
@@ -690,7 +698,7 @@ impl PerspectiveEngine {
                 }
             }
             for &fk in future_keys {
-                if !recent_borrow.iter().any(|r| r.key == fk)
+                if !recent_keys.contains(fk)
                     && let Some(&other_entity) = pre_resolved.get(fk)
                 {
                     check_collision(fk, other_entity);
@@ -729,7 +737,7 @@ impl PerspectiveEngine {
                     }
                 }
                 for &fk in future_keys {
-                    if !recent_borrow.iter().any(|r| r.key == fk)
+                    if !recent_keys.contains(fk)
                         && let Some(&other_entity) = pre_resolved.get(fk)
                     {
                         check_long(fk, other_entity);
@@ -1504,43 +1512,43 @@ fn validation_error(message: &str, content: &str, open_char: char) -> String {
 }
 
 /// Parses prefix modifiers (like `+`) used to force perspectives, returning the
-/// stripped string alongside the boolean flags for `force_3rd_person`/`force_article`, `no_smart`, and `force_singular`.
+/// stripped string alongside the extracted `TagFlags`.
 #[inline]
-fn parse_stance_prefixes(mut s: &str) -> (&str, bool, bool, bool) {
-    let mut force_3rd_person = false;
-    let mut no_smart = false;
-    let mut force_singular = false;
+fn parse_stance_prefixes(mut s: &str) -> (&str, TagFlags) {
+    let mut flags = TagFlags::empty();
     loop {
-        if let Some(stripped) = s.strip_prefix(MOD_FORCE_3RD_PERSON) {
-            force_3rd_person = true;
+        if let Some(stripped) = s.strip_prefix(MOD_FORCE) {
+            flags |= TagFlags::FORCE_3RD_PERSON;
             s = stripped;
         } else if let Some(stripped) = s.strip_prefix(MOD_NO_SMART) {
-            no_smart = true;
+            flags |= TagFlags::NO_SMART;
             s = stripped;
         } else if let Some(stripped) = s.strip_prefix(MOD_FORCE_SINGULAR) {
-            force_singular = true;
+            flags |= TagFlags::FORCE_SINGULAR;
             s = stripped;
         } else {
             break;
         }
     }
-    (s, force_3rd_person, no_smart, force_singular)
+    (s, flags)
 }
 
 #[inline]
-fn parse_entity_modifiers(s: &str) -> (&str, bool, bool, bool, bool) {
-    let (s, force_3rd_person, no_smart, force_singular) = parse_stance_prefixes(s);
+fn parse_entity_modifiers(s: &str) -> (&str, TagFlags) {
+    let (s, mut flags) = parse_stance_prefixes(s);
     let (s, is_possessive) = parse_possessive_suffix(s);
-    (s, force_3rd_person, no_smart, force_singular, is_possessive)
+    if is_possessive {
+        flags |= TagFlags::IS_POSSESSIVE;
+    }
+    (s, flags)
 }
 
 type ParsedForcedConjugations = (Option<Vec<String>>, Option<Vec<String>>);
 
 #[inline]
 fn create_pronoun_ref(p1: &str, p2: &str, content: &str) -> Result<Token, String> {
-    let (p1_str, force_3rd_person, no_smart_entity, force_singular_1, _) =
-        parse_entity_modifiers(p1);
-    let (p2_str, _, force_pronoun, force_singular_2) = parse_stance_prefixes(p2);
+    let (p1_str, p1_flags) = parse_entity_modifiers(p1);
+    let (p2_str, p2_flags) = parse_stance_prefixes(p2);
 
     reject_if(
         p1_str.is_empty() || p2_str.is_empty(),
@@ -1554,16 +1562,21 @@ fn create_pronoun_ref(p1: &str, p2: &str, content: &str) -> Result<Token, String
         content,
         TAG_ENTITY_OPEN,
     )?;
-    let flags = TagFlags::new(
-        is_capitalized(p2_str),
-        false,
-        force_3rd_person,
-        false,
-        force_pronoun || no_smart_entity,
-        force_singular_1 || force_singular_2,
-        false,
-        false,
+    let mut flags = TagFlags::empty();
+    flags.set(TagFlags::IS_CAPITALIZED, is_capitalized(p2_str));
+    flags.set(
+        TagFlags::FORCE_3RD_PERSON,
+        p1_flags.contains(TagFlags::FORCE_3RD_PERSON),
     );
+    flags.set(
+        TagFlags::NO_SMART,
+        p1_flags.contains(TagFlags::NO_SMART) || p2_flags.contains(TagFlags::NO_SMART),
+    );
+    flags.set(
+        TagFlags::FORCE_SINGULAR,
+        p1_flags.contains(TagFlags::FORCE_SINGULAR) || p2_flags.contains(TagFlags::FORCE_SINGULAR),
+    );
+
     Ok(Token::PronounRef {
         key: p1_str.to_lowercase(),
         p_type: p2_str.to_lowercase(),
