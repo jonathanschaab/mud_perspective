@@ -50,11 +50,7 @@ pub fn add_irregular_verb(base: &str, conjugated: &str) -> Result<(), String> {
 ///
 /// **Note:** While this cannot physically remove entries from the compile-time `phf::Map`,
 /// the runtime dictionary takes precedence during conjugation, effectively overriding static entries.
-///
-/// # Errors
-/// This function is infallible in the current implementation, but returns a `Result`
-/// for API backwards compatibility.
-pub fn force_add_irregular_verb(base: &str, conjugated: &str) -> Result<(), String> {
+pub fn force_add_irregular_verb(base: &str, conjugated: &str) {
     let lower_base = base.to_lowercase();
     let lower_conjugated = conjugated.to_lowercase();
     get_custom_verbs().rcu(|current_map| {
@@ -62,25 +58,21 @@ pub fn force_add_irregular_verb(base: &str, conjugated: &str) -> Result<(), Stri
         new_map.insert(lower_base.clone(), lower_conjugated.clone());
         Arc::new(new_map)
     });
-    Ok(())
 }
 
 /// Removes a custom irregular verb override from the runtime dictionary.
 ///
-/// Returns `Ok(true)` if the verb was successfully removed, or `Ok(false)` if the verb
+/// Returns `true` if the verb was successfully removed, or `false` if the verb
 /// was not found in the runtime dictionary.
-///
-/// # Errors
-/// This function is infallible in the current implementation, but returns a `Result`
-/// for API backwards compatibility.
-pub fn remove_irregular_verb(base: &str) -> Result<bool, String> {
+#[must_use]
+pub fn remove_irregular_verb(base: &str) -> bool {
     let lower_base = base.to_lowercase();
 
     let custom_verbs = get_custom_verbs();
     loop {
         let current_map = custom_verbs.load();
         if !current_map.contains_key(&lower_base) {
-            break Ok(false);
+            break false;
         }
 
         let mut new_map = (**current_map).clone();
@@ -88,19 +80,14 @@ pub fn remove_irregular_verb(base: &str) -> Result<bool, String> {
 
         let prev = custom_verbs.compare_and_swap(&current_map, Arc::new(new_map));
         if Arc::ptr_eq(&prev, &current_map) {
-            break Ok(true);
+            break true;
         }
     }
 }
 
 /// Clears all custom irregular verb overrides from the runtime dictionary.
-///
-/// # Errors
-/// This function is infallible in the current implementation, but returns a `Result`
-/// for API backwards compatibility.
-pub fn clear_irregular_verbs() -> Result<(), String> {
+pub fn clear_irregular_verbs() {
     get_custom_verbs().store(Arc::new(HashMap::new()));
-    Ok(())
 }
 
 struct PronounSet {

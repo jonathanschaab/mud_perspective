@@ -83,17 +83,17 @@ use mud_perspective::{render_msg, TemplateCache};
 let cache = TemplateCache::new(1000);
 
 // Compile the template  
-let template = cache.get_or_compile("{the:source} [source:watch] as {the:target} [target:approach].").unwrap();
+let template = cache.get_or_compile("{the:source} [source:watch] as {the:target} [target:approach].")?;
 
 let player = Character { /*... */ };  
 let goblin = Character { /*... */ };
 
 // Actor Stance (The player is the viewer)  
-let output_actor = render_msg!("char_1", &template, "source" => &player, "target" => &goblin).unwrap();  
+let output_actor = render_msg!("char_1", &template, "source" => &player, "target" => &goblin)?;  
 // Output: "You watch as the goblin approaches."
 
 // Director Stance (A third-party bystander is the viewer)  
-let output_director = render_msg!("char_3", &template, "source" => &player, "target" => &goblin).unwrap();  
+let output_director = render_msg!("char_3", &template, "source" => &player, "target" => &goblin)?;  
 // Output: "Aldran watches as the goblin approaches."
 ```
 
@@ -128,9 +128,11 @@ The engine also allows developers to expand its vocabulary at runtime by injecti
 ```rust
 use mud_perspective::grammar::{add_irregular_verb, remove_irregular_verb, clear_irregular_verbs};
 
-add_irregular_verb("teleport", "teleports").unwrap();
-remove_irregular_verb("teleport").unwrap();
-clear_irregular_verbs().unwrap();
+if let Err(e) = add_irregular_verb("teleport", "teleports") {
+    eprintln!("Failed to add custom verb: {e}");
+}
+remove_irregular_verb("teleport");
+clear_irregular_verbs();
 ```
 
 ### 3. Handling Groups and Swarms
@@ -143,7 +145,7 @@ Furthermore, the engine implements grammatical rules for mixed-person groups. If
 use mud_perspective::models::GroupEntity;
 
 let party = GroupEntity { members: vec![&player, &ally] };
-let template = cache.get_or_compile("{source} [source:open] the door.").unwrap();
+let template = cache.get_or_compile("{source} [source:open] the door.")?;
 
 // Player's Perspective (Second Person): "You and Bob open the door."
 // Player's Perspective (First Person): "Bob and I open the door."
@@ -186,7 +188,7 @@ Using pronouns and active subject tracking allows builders to write multi-senten
 ```rust
 let template = cache.get_or_compile(
     "{source} [source:kick] {the:target} in the chest. {target:Subj} [target:stumble] backward, and {source:subj} [source:press] the advantage!"
-).unwrap();
+)?;
 
 // If Aldran kicks a goblin (Unambiguous pronouns):
 // "Aldran kicks the goblin in the chest. It stumbles backward, and he presses the advantage!"

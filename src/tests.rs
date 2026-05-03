@@ -3247,7 +3247,7 @@ mod tests {
         assert!(crate::grammar::add_irregular_verb("arise", "arises not").is_err());
 
         // Forcing an existing PHF verb should succeed and override
-        crate::grammar::force_add_irregular_verb("arise", "arizez").unwrap();
+        crate::grammar::force_add_irregular_verb("arise", "arizez");
 
         let template_arise = cache.get_or_compile("{source} [source:arise].").unwrap();
         assert_eq!(
@@ -3256,7 +3256,7 @@ mod tests {
         );
 
         // Clean up the global state safely now that we are running serially
-        crate::grammar::clear_irregular_verbs().unwrap();
+        crate::grammar::clear_irregular_verbs();
     }
 
     #[test]
@@ -3375,6 +3375,6 @@ mod tests {
         );
 
         // Clean up the global state safely now that we are running serially
-        crate::grammar::clear_irregular_verbs().unwrap();
+        crate::grammar::clear_irregular_verbs();
     }
 }

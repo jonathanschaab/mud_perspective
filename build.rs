@@ -41,13 +41,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let reader = BufReader::new(file_in);
             let verbs: Vec<Vec<Option<String>>> = serde_json::from_reader(reader)?;
             for entry in verbs {
-                if entry.len() >= 2 {
-                    if let (Some(base), Some(third_person)) = (&entry[0], &entry[1]) {
-                        insert(base, third_person);
-                    }
-                }
-                if entry.len() >= 3 {
-                    if let Some(past) = &entry[2] {
+                if let [Some(base), Some(third_person), rest @ ..] = entry.as_slice() {
+                    insert(base, third_person);
+                    if let [Some(past), ..] = rest {
                         // Inserting the past tense form natively maps [source:ran] to 'ran'
                         insert(past, past);
                     }
