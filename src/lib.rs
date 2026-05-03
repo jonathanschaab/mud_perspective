@@ -66,5 +66,26 @@ macro_rules! render_msg {
     }};
 }
 
+/// Ergonomically registers multiple custom irregular verbs into the runtime dictionary at once.
+///
+/// This macro is highly useful during server initialization for injecting a large
+/// number of custom or lore-specific verbs. It silently overwrites any existing
+/// runtime entries for the provided base verbs.
+///
+/// # Example
+/// ```ignore
+/// mud_perspective::register_custom_verbs! {
+///     "yeet" => ("yeetses", "yeeted"),
+///     "make do" => ("makes do", "made do"),
+///     "respawn" => ("respawns", "respawned"),
+/// };
+/// ```
+#[macro_export]
+macro_rules! register_custom_verbs {
+    ($($base:expr => ($present:expr, $past:expr)),* $(,)?) => {
+        $( $crate::grammar::force_add_irregular_verb($base, $present, $past); )*
+    };
+}
+
 #[cfg(test)]
 mod tests;

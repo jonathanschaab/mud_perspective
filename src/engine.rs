@@ -45,9 +45,11 @@ pub enum Token {
         is_capitalized: bool,
         /// A flag indicating if the builder explicitly forced 3rd-person conjugation (e.g. [+source:pulse]).
         force_3rd_person: bool,
-        /// A sequence of explicit overrides that bypasses the algorithm entirely (e.g., `["am", "are", "is"]` from `[source:be|am|are|is]`).
+        /// A sequence of explicit present-tense overrides that bypasses the algorithm entirely (e.g., `["am", "are", "is"]`).
         /// Note: This vector does not include the base verb itself, which is stored in `original_verb`.
-        forced_conjugation: Option<Vec<String>>,
+        forced_present: Option<Vec<String>>,
+        /// A sequence of explicit past-tense overrides that bypasses the algorithm entirely (e.g., `["was", "were", "was"]`).
+        forced_past: Option<Vec<String>>,
     },
 }
 
@@ -236,40 +238,37 @@ impl Template {
             (None, p1_str)
         };
 
-        let (actual_verb, forced_conjugation) = if let Some((v, forced)) = verb_part.split_once('|')
-        {
-            reject_if(
-                v.is_empty() || forced.is_empty(),
-                "Verb tag has an empty verb or forced conjugation segment",
-                content,
-                '[',
-            )?;
-            let parts: Vec<String> = forced.split('|').map(str::to_string).collect();
-            for p in &parts {
+        let (actual_verb, forced_present, forced_past) =
+            if let Some((v, forced)) = verb_part.split_once('|') {
                 reject_if(
-                    p.is_empty(),
-                    "Verb tag has an empty forced conjugation segment",
+                    v.is_empty() || forced.is_empty(),
+                    "Verb tag has an empty verb or forced conjugation segment",
                     content,
                     '[',
                 )?;
-            }
-            // Note: `v` (the base verb) was already split off above via `split_once('|')`.
-            // Therefore, `parts` only contains the forced overrides (e.g., `["am", "are", "is"]`).
-            // A maximum of 3 overrides is allowed, representing the 3 grammatical groups in English.
-            reject_if(
-                parts.len() > 3,
-                "Verb tag has too many forced conjugation segments",
-                content,
-                '[',
-            )?;
-            (v, Some(parts))
-        } else {
-            (verb_part, None)
-        };
+
+                let (forced_present, forced_past) = parse_forced_conjugations(forced, content)?;
+                (v, forced_present, forced_past)
+            } else {
+                (verb_part, None, None)
+            };
 
         let original_verb = actual_verb.to_string();
         let is_capitalized = is_capitalized(&original_verb);
         let lower_verb = original_verb.to_lowercase();
+
+        if let Some(options) = crate::grammar::get_collision_options(&lower_verb) {
+            tracing::warn!(
+                "Ambiguous verb '{}' detected in template. In the past tense, it could shift to {}. \
+                 To guarantee your intended meaning, annotate it with the correct past tense: [source:{}({})] or [source:{}({})]",
+                original_verb,
+                options.join(" or "),
+                original_verb,
+                options[0],
+                original_verb,
+                options[1]
+            );
+        }
 
         if original_verb.is_empty() {
             tracing::warn!(
@@ -283,7 +282,8 @@ impl Template {
             lower_verb,
             is_capitalized,
             force_3rd_person,
-            forced_conjugation,
+            forced_present,
+            forced_past,
         })
     }
 }
@@ -741,7 +741,8 @@ impl PerspectiveEngine {
             lower_verb,
             is_capitalized,
             force_3rd_person,
-            forced_conjugation,
+            forced_present,
+            forced_past,
         } = token
         else {
             return Ok(());
@@ -760,9 +761,14 @@ impl PerspectiveEngine {
             (false, false)
         };
 
+        let forced_conjugation = match ctx.tense {
+            crate::models::Tense::Present => forced_present.as_ref(),
+            crate::models::Tense::Past => forced_past.as_ref(),
+            crate::models::Tense::Future => None,
+        };
+
         let conjugated = if let Some(forced) = forced_conjugation {
-            // Note: `forced` only contains the override segments, not the base verb.
-            // e.g., for `[source:be|am|are|is]`, `forced.len()` is exactly 3.
+            // Note: `forced` only contains the override segments for the requested tense.
             let forced_str = match forced.len() {
                 2 => {
                     if !is_viewer && !is_plural {
@@ -794,6 +800,7 @@ impl PerspectiveEngine {
                 is_viewer,
                 is_plural,
                 ctx.stance,
+                ctx.tense,
             )
         };
         raw_output.push_str(&conjugated);
@@ -1021,6 +1028,69 @@ fn parse_entity_modifiers(s: &str) -> (&str, bool, bool) {
     let (s, force_3rd_person) = parse_stance_prefixes(s);
     let (s, is_possessive) = parse_possessive_suffix(s);
     (s, force_3rd_person, is_possessive)
+}
+
+type ParsedForcedConjugations = (Option<Vec<String>>, Option<Vec<String>>);
+
+#[inline]
+fn parse_forced_conjugations(
+    forced: &str,
+    content: &str,
+) -> Result<ParsedForcedConjugations, String> {
+    let mut forced_present = None;
+    let mut forced_past = None;
+
+    let (pres_str, past_str) = if let Some((p, pst)) = forced.split_once(';') {
+        (p, Some(pst))
+    } else {
+        (forced, None)
+    };
+
+    if !pres_str.is_empty() {
+        let parts: Vec<String> = pres_str.split('|').map(str::to_string).collect();
+        for p in &parts {
+            reject_if(
+                p.is_empty(),
+                "Verb tag has an empty forced present conjugation segment",
+                content,
+                '[',
+            )?;
+        }
+        reject_if(
+            parts.len() > 3,
+            "Verb tag has too many forced present conjugation segments",
+            content,
+            '[',
+        )?;
+        forced_present = Some(parts);
+    }
+
+    if let Some(pst) = past_str {
+        reject_if(
+            pst.is_empty(),
+            "Verb tag has an empty forced past conjugation segment",
+            content,
+            '[',
+        )?;
+        let parts: Vec<String> = pst.split('|').map(str::to_string).collect();
+        for p in &parts {
+            reject_if(
+                p.is_empty(),
+                "Verb tag has an empty forced past conjugation segment",
+                content,
+                '[',
+            )?;
+        }
+        reject_if(
+            parts.len() > 3,
+            "Verb tag has too many forced past conjugation segments",
+            content,
+            '[',
+        )?;
+        forced_past = Some(parts);
+    }
+
+    Ok((forced_present, forced_past))
 }
 
 #[inline]

@@ -1,4 +1,4 @@
-use crate::models::{ActorStance, Gender};
+use crate::models::{ActorStance, Gender, Tense};
 use arc_swap::ArcSwap;
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -7,17 +7,23 @@ use std::sync::{Arc, OnceLock};
 include!(concat!(env!("OUT_DIR"), "/irregular_verbs.rs"));
 
 /// A global runtime dictionary for custom irregular verbs injected by builders.
-static CUSTOM_VERBS: OnceLock<ArcSwap<HashMap<String, String>>> = OnceLock::new();
+static CUSTOM_VERBS: OnceLock<ArcSwap<HashMap<String, (String, String)>>> = OnceLock::new();
 
-fn get_custom_verbs() -> &'static ArcSwap<HashMap<String, String>> {
+fn get_custom_verbs() -> &'static ArcSwap<HashMap<String, (String, String)>> {
     CUSTOM_VERBS.get_or_init(|| ArcSwap::from_pointee(HashMap::new()))
+}
+
+/// Retrieves a list of possible past-tense conjugations for an ambiguous base verb, if any.
+#[must_use]
+pub fn get_collision_options(verb: &str) -> Option<&'static [&'static str]> {
+    COLLIDING_VERBS.get(verb).copied()
 }
 
 /// Adds a custom irregular verb override to the runtime dictionary.
 ///
 /// # Errors
 /// Returns an error if the verb already exists in either the static dictionary or the runtime dictionary.
-pub fn add_irregular_verb(base: &str, conjugated: &str) -> Result<(), String> {
+pub fn add_irregular_verb(base: &str, present: &str, past: &str) -> Result<(), String> {
     let lower_base = base.to_lowercase();
     if IRREGULAR_VERBS.contains_key(lower_base.as_str()) {
         return Err(format!(
@@ -25,7 +31,8 @@ pub fn add_irregular_verb(base: &str, conjugated: &str) -> Result<(), String> {
         ));
     }
 
-    let lower_conjugated = conjugated.to_lowercase();
+    let lower_present = present.to_lowercase();
+    let lower_past = past.to_lowercase();
     let custom_verbs = get_custom_verbs();
     loop {
         let current_map = custom_verbs.load();
@@ -36,7 +43,10 @@ pub fn add_irregular_verb(base: &str, conjugated: &str) -> Result<(), String> {
         }
 
         let mut new_map = (**current_map).clone();
-        new_map.insert(lower_base.clone(), lower_conjugated.clone());
+        new_map.insert(
+            lower_base.clone(),
+            (lower_present.clone(), lower_past.clone()),
+        );
 
         let prev = custom_verbs.compare_and_swap(&current_map, Arc::new(new_map));
         if Arc::ptr_eq(&prev, &current_map) {
@@ -50,12 +60,16 @@ pub fn add_irregular_verb(base: &str, conjugated: &str) -> Result<(), String> {
 ///
 /// **Note:** While this cannot physically remove entries from the compile-time `phf::Map`,
 /// the runtime dictionary takes precedence during conjugation, effectively overriding static entries.
-pub fn force_add_irregular_verb(base: &str, conjugated: &str) {
+pub fn force_add_irregular_verb(base: &str, present: &str, past: &str) {
     let lower_base = base.to_lowercase();
-    let lower_conjugated = conjugated.to_lowercase();
+    let lower_present = present.to_lowercase();
+    let lower_past = past.to_lowercase();
     get_custom_verbs().rcu(|current_map| {
         let mut new_map = (**current_map).clone();
-        new_map.insert(lower_base.clone(), lower_conjugated.clone());
+        new_map.insert(
+            lower_base.clone(),
+            (lower_present.clone(), lower_past.clone()),
+        );
         Arc::new(new_map)
     });
 }
@@ -220,55 +234,85 @@ pub fn conjugate_verb<'a>(
     is_viewer: bool,
     is_plural: bool,
     stance: ActorStance,
+    tense: Tense,
 ) -> Cow<'a, str> {
-    if is_viewer {
-        if stance == ActorStance::FirstPerson && !is_plural {
-            if lower_verb == "be" {
-                return format_verb("am", is_capitalized);
-            }
-            if lower_verb == "was" {
-                return format_verb("was", is_capitalized);
-            }
-        } else {
-            if lower_verb == "be" {
-                return format_verb("are", is_capitalized);
-            }
-            if lower_verb == "was" {
-                return format_verb("were", is_capitalized);
-            }
+    if tense == Tense::Future {
+        // Modal verbs naturally imply future capability or obligation, and cannot be
+        // stacked with "will" in standard English (e.g., "will must" is invalid).
+        if matches!(
+            lower_verb,
+            "can"
+                | "could"
+                | "may"
+                | "might"
+                | "must"
+                | "shall"
+                | "should"
+                | "will"
+                | "would"
+                | "ought"
+                | "ought to"
+        ) {
+            return Cow::Owned(format_verb(original_verb, is_capitalized).into_owned());
         }
-        return Cow::Borrowed(original_verb);
+
+        // Lowercase the first character of the base verb so it sits cleanly after "will",
+        // but preserve any inner camelCase (e.g., "MacGyver" -> "will macGyver")
+        let mut chars = original_verb.chars();
+        let first_char = chars.next().unwrap_or_default().to_lowercase().to_string();
+        let uncapitalized = format!("{first_char}{}", chars.as_str());
+
+        let future_verb = format!("will {uncapitalized}");
+        return Cow::Owned(format_verb(&future_verb, is_capitalized).into_owned());
     }
 
-    if is_plural {
-        if lower_verb == "be" {
-            return format_verb("are", is_capitalized);
-        }
-        if lower_verb == "was" {
+    let is_first_person_singular = is_viewer && stance == ActorStance::FirstPerson && !is_plural;
+
+    if lower_verb == "be" {
+        if tense == Tense::Past {
+            if is_first_person_singular || (!is_viewer && !is_plural) {
+                return format_verb("was", is_capitalized);
+            }
             return format_verb("were", is_capitalized);
         }
+
+        if is_first_person_singular {
+            return format_verb("am", is_capitalized);
+        } else if is_viewer || is_plural {
+            return format_verb("are", is_capitalized);
+        }
+        return format_verb("is", is_capitalized);
+    }
+
+    if tense == Tense::Present && (is_viewer || is_plural) {
         return Cow::Borrowed(original_verb);
     }
 
     // 1. Check full string against runtime overrides
     let custom_map = get_custom_verbs().load();
-    if let Some(irregular) = custom_map.get(lower_verb) {
-        return Cow::Owned(format_verb(irregular, is_capitalized).into_owned());
+    if let Some((present, past)) = custom_map.get(lower_verb) {
+        let word = if tense == Tense::Past { past } else { present };
+        return Cow::Owned(format_verb(word, is_capitalized).into_owned());
     }
 
     // 2. Check full string against static PHF map
-    if let Some(&irregular) = IRREGULAR_VERBS.get(lower_verb) {
-        return format_verb(irregular, is_capitalized);
+    if let Some(&(present, past)) = IRREGULAR_VERBS.get(lower_verb) {
+        let word = if tense == Tense::Past { past } else { present };
+        return format_verb(word, is_capitalized);
     }
 
     // 3. If it's a multi-word phrasal verb, split and conjugate the primary verb
     if let (Some((first_word_original, remainder)), Some((first_word_lower, _))) =
         (original_verb.split_once(' '), lower_verb.split_once(' '))
     {
-        let conjugated_first = if let Some(irregular) = custom_map.get(first_word_lower) {
-            format_verb(irregular, is_capitalized)
-        } else if let Some(&irregular) = IRREGULAR_VERBS.get(first_word_lower) {
-            format_verb(irregular, is_capitalized)
+        let conjugated_first = if let Some((present, past)) = custom_map.get(first_word_lower) {
+            let word = if tense == Tense::Past { past } else { present };
+            format_verb(word, is_capitalized)
+        } else if let Some(&(present, past)) = IRREGULAR_VERBS.get(first_word_lower) {
+            let word = if tense == Tense::Past { past } else { present };
+            format_verb(word, is_capitalized)
+        } else if tense == Tense::Past {
+            conjugate_regular_past_verb(first_word_original, first_word_lower)
         } else {
             conjugate_regular_verb(first_word_original, first_word_lower)
         };
@@ -280,7 +324,11 @@ pub fn conjugate_verb<'a>(
     }
 
     // 4. Standard fallback for single words
-    conjugate_regular_verb(original_verb, lower_verb)
+    if tense == Tense::Past {
+        conjugate_regular_past_verb(original_verb, lower_verb)
+    } else {
+        conjugate_regular_verb(original_verb, lower_verb)
+    }
 }
 
 fn conjugate_regular_verb<'a>(original_verb: &'a str, lower_verb: &'a str) -> Cow<'a, str> {
@@ -299,6 +347,17 @@ fn conjugate_regular_verb<'a>(original_verb: &'a str, lower_verb: &'a str) -> Co
         Cow::Owned(format!("{original_verb}es"))
     } else {
         Cow::Owned(format!("{original_verb}s"))
+    }
+}
+
+fn conjugate_regular_past_verb<'a>(original_verb: &'a str, lower_verb: &'a str) -> Cow<'a, str> {
+    if lower_verb.ends_with('e') {
+        Cow::Owned(format!("{original_verb}d"))
+    } else if lower_verb.len() > 1 && lower_verb.ends_with('y') && !is_vowel_before_y(lower_verb) {
+        let trimmed = &original_verb[..original_verb.len() - 1];
+        Cow::Owned(format!("{trimmed}ied"))
+    } else {
+        Cow::Owned(format!("{original_verb}ed"))
     }
 }
 

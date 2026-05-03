@@ -33,6 +33,18 @@ pub enum ActorStance {
     ThirdPerson,
 }
 
+/// The grammatical tense used to render the template.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Tense {
+    /// Renders verbs in the present tense (e.g., "walks").
+    #[default]
+    Present,
+    /// Renders verbs in the past tense (e.g., "walked").
+    Past,
+    /// Renders verbs in the future tense (e.g., "will walk").
+    Future,
+}
+
 /// A generic trait implemented by game objects to allow them to be referenced
 /// dynamically within text templates.
 ///
@@ -107,11 +119,14 @@ pub trait TemplateEntity {
 }
 
 /// The context environment passed to the rendering engine for a specific view generation.
+#[derive(Clone)]
 pub struct RenderContext<'a> {
     /// The unique identifier of the entity actively reading the text.
     pub viewer_id: &'a str,
     /// The narrative stance used to refer to the viewing entity.
     pub stance: ActorStance,
+    /// The grammatical tense used to render the template.
+    pub tense: Tense,
     /// The maximum number of entities to track for anaphora resolution before evicting the oldest.
     /// Defaults to 15. Set to 0 for unbounded growth.
     /// If all entities in memory are pinned, this limit will be temporarily exceeded to preserve narrative continuity.
@@ -181,6 +196,7 @@ impl<'a> RenderContext<'a> {
         Self {
             viewer_id,
             stance: ActorStance::SecondPerson,
+            tense: Tense::Present,
             anaphora_limit: 15,
             entities: HashMap::new(),
             last_mentioned: RefCell::new(None),
@@ -189,10 +205,25 @@ impl<'a> RenderContext<'a> {
         }
     }
 
+    /// Configures the viewer ID for the rendering context.
+    /// This is particularly useful when cloning a base context to render the same event for multiple observers.
+    #[must_use]
+    pub fn with_viewer(mut self, viewer_id: &'a str) -> Self {
+        self.viewer_id = viewer_id;
+        self
+    }
+
     /// Configures the actor stance for the rendering context.
     #[must_use]
     pub fn with_stance(mut self, stance: ActorStance) -> Self {
         self.stance = stance;
+        self
+    }
+
+    /// Configures the grammatical tense for the rendering context.
+    #[must_use]
+    pub fn with_tense(mut self, tense: Tense) -> Self {
+        self.tense = tense;
         self
     }
 
