@@ -1,5 +1,6 @@
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
+#[allow(clippy::indexing_slicing)]
 mod tests {
     use crate::cache::TemplateCache;
     use crate::engine::{PerspectiveEngine, Template};
@@ -572,13 +573,31 @@ mod tests {
         let err9 = Template::compile("You [source:be|am||is].").unwrap_err();
         assert_eq!(
             err9,
-            "Verb tag has an empty forced conjugation segment: [source:be|am||is]"
+            "Verb tag has an empty forced present conjugation segment: [source:be|am||is]"
         );
 
         let err10 = Template::compile("You [source:be|am|are|is|were].").unwrap_err();
         assert_eq!(
             err10,
-            "Verb tag has too many forced conjugation segments: [source:be|am|are|is|were]"
+            "Verb tag has too many forced present conjugation segments: [source:be|am|are|is|were]"
+        );
+
+        let err11 = Template::compile("You [source:be|am|are|is;].").unwrap_err();
+        assert_eq!(
+            err11,
+            "Verb tag has an empty forced past conjugation segment: [source:be|am|are|is;]"
+        );
+
+        let err12 = Template::compile("You [source:be|;was||was].").unwrap_err();
+        assert_eq!(
+            err12,
+            "Verb tag has an empty forced past conjugation segment: [source:be|;was||was]"
+        );
+
+        let err13 = Template::compile("You [source:be|am|are|is;was|were|was|were].").unwrap_err();
+        assert_eq!(
+            err13,
+            "Verb tag has too many forced past conjugation segments: [source:be|am|are|is;was|were|was|were]"
         );
     }
 
@@ -1211,17 +1230,26 @@ mod tests {
 
         // 1. Demonstratives (this -> these) combined with Past Tense "To Be" (was -> were)
         let template = cache
-            .get_or_compile("{This:source} [source:was] angry.")
+            .get_or_compile("{This:source} [source:be] angry.")
             .unwrap();
 
-        let out_singular = render_msg!("char_2", &template, "source" => &goblin).unwrap();
+        let ctx_singular = RenderContext::new("char_2")
+            .with_tense(crate::models::Tense::Past)
+            .with_entity("source", &goblin);
+        let out_singular = PerspectiveEngine::render(&template, &ctx_singular).unwrap();
         assert_eq!(out_singular, "This goblin was angry.");
 
-        let out_plural = render_msg!("char_2", &template, "source" => &wolves).unwrap();
+        let ctx_plural = RenderContext::new("char_2")
+            .with_tense(crate::models::Tense::Past)
+            .with_entity("source", &wolves);
+        let out_plural = PerspectiveEngine::render(&template, &ctx_plural).unwrap();
         assert_eq!(out_plural, "These wolves were angry.");
 
         // 2. Automatically suppresses the demonstrative for the viewer just like an article
-        let out_viewer = render_msg!("mob_2", &template, "source" => &wolves).unwrap();
+        let ctx_viewer = RenderContext::new("mob_2")
+            .with_tense(crate::models::Tense::Past)
+            .with_entity("source", &wolves);
+        let out_viewer = PerspectiveEngine::render(&template, &ctx_viewer).unwrap();
         assert_eq!(out_viewer, "You were angry.");
 
         // 3. Forcing an article for a proper noun using the `+` prefix
@@ -2263,11 +2291,12 @@ mod tests {
             "I am looking for my sword."
         );
 
-        let template_was = cache
-            .get_or_compile("Before, {source} [source:was] looking.")
+        let template_past = cache
+            .get_or_compile("Before, {source} [source:be] looking.")
             .unwrap();
+        let ctx_past = ctx_first.with_tense(crate::models::Tense::Past);
         assert_eq!(
-            PerspectiveEngine::render(&template_was, &ctx_first).unwrap(),
+            PerspectiveEngine::render(&template_past, &ctx_past).unwrap(),
             "Before, I was looking."
         );
     }
@@ -3024,14 +3053,20 @@ mod tests {
             "Aldran flies."
         );
 
-        // 2. "ran" -> "ran" (Past tense form natively mapped to itself via build.rs)
-        let template_ran = cache.get_or_compile("{source} [source:ran].").unwrap();
+        // 2. "run" -> "ran" (Dynamic past tense shift)
+        let template_run = cache.get_or_compile("{source} [source:run].").unwrap();
+        let ctx_actor_past = RenderContext::new("char_1")
+            .with_tense(crate::models::Tense::Past)
+            .with_entity("source", &player);
         assert_eq!(
-            render_msg!("char_1", &template_ran, "source" => &player).unwrap(),
+            PerspectiveEngine::render(&template_run, &ctx_actor_past).unwrap(),
             "You ran."
         );
+        let ctx_director_past = RenderContext::new("char_2")
+            .with_tense(crate::models::Tense::Past)
+            .with_entity("source", &player);
         assert_eq!(
-            render_msg!("char_2", &template_ran, "source" => &player).unwrap(),
+            PerspectiveEngine::render(&template_run, &ctx_director_past).unwrap(),
             "Aldran ran."
         );
 
@@ -3059,7 +3094,7 @@ mod tests {
         // 6. Modal verbs natively injected via build.rs
         // This ensures colliding verbs (e.g. "cans" or "wills") don't overwrite modal behaviors.
         let modals = [
-            "can", "could", "will", "would", "shall", "should", "may", "might", "must",
+            "can", "could", "will", "would", "shall", "should", "may", "might", "must", "ought",
         ];
         for modal in modals {
             let template_str = format!("{{source}} [source:{modal}].");
@@ -3112,41 +3147,29 @@ mod tests {
             "Aldran is ready."
         );
 
-        // 2. "was" (Handled dynamically by stance and perspective overrides)
-        let template_was = cache
-            .get_or_compile("{source} [source:was] ready.")
-            .unwrap();
+        // 2. "was" (Handled dynamically in past tense by stance and perspective overrides)
+        let ctx_first_past = ctx_first.with_tense(crate::models::Tense::Past);
+        let ctx_second_past = ctx_second.with_tense(crate::models::Tense::Past);
+        let ctx_third_past = ctx_third.with_tense(crate::models::Tense::Past);
+
         assert_eq!(
-            PerspectiveEngine::render(&template_was, &ctx_first).unwrap(),
+            PerspectiveEngine::render(&template_be, &ctx_first_past).unwrap(),
             "I was ready."
         );
         assert_eq!(
-            PerspectiveEngine::render(&template_was, &ctx_second).unwrap(),
+            PerspectiveEngine::render(&template_be, &ctx_second_past).unwrap(),
             "You were ready."
         );
         assert_eq!(
-            PerspectiveEngine::render(&template_was, &ctx_third).unwrap(),
+            PerspectiveEngine::render(&template_be, &ctx_third_past).unwrap(),
             "Aldran was ready."
         );
 
-        // 3. "is" (Handled by the PHF map)
-        // Note: Builders should write `[source:be]`. If they write `[source:is]`, it works natively for
-        // the 3rd person due to the PHF map returning "is", but remains uninflected for 1st/2nd person.
-        let template_is = cache.get_or_compile("{source} [source:is] ready.").unwrap();
-        assert_eq!(
-            PerspectiveEngine::render(&template_is, &ctx_first).unwrap(),
-            "I is ready."
-        );
-        assert_eq!(
-            PerspectiveEngine::render(&template_is, &ctx_second).unwrap(),
-            "You is ready."
-        );
-        assert_eq!(
-            PerspectiveEngine::render(&template_is, &ctx_third).unwrap(),
-            "Aldran is ready."
-        );
+        // 3. Ensure first person leaves irregular and algorithmically modified verbs uninflected
+        let ctx_first = RenderContext::new("char_1")
+            .with_stance(crate::models::ActorStance::FirstPerson)
+            .with_entity("source", &player);
 
-        // 4. Ensure first person leaves irregular and algorithmically modified verbs uninflected
         let template_fly = cache.get_or_compile("{source} [source:fly].").unwrap();
         assert_eq!(
             PerspectiveEngine::render(&template_fly, &ctx_first).unwrap(),
@@ -3204,19 +3227,20 @@ mod tests {
             "Aldran has a sword."
         );
 
-        let template_had = cache
-            .get_or_compile("{source} [source:had] a sword.")
-            .unwrap();
+        let ctx_first_past = ctx_first.with_tense(crate::models::Tense::Past);
+        let ctx_second_past = ctx_second.with_tense(crate::models::Tense::Past);
+        let ctx_third_past = ctx_third.with_tense(crate::models::Tense::Past);
+
         assert_eq!(
-            PerspectiveEngine::render(&template_had, &ctx_first).unwrap(),
+            PerspectiveEngine::render(&template_have, &ctx_first_past).unwrap(),
             "I had a sword."
         );
         assert_eq!(
-            PerspectiveEngine::render(&template_had, &ctx_second).unwrap(),
+            PerspectiveEngine::render(&template_have, &ctx_second_past).unwrap(),
             "You had a sword."
         );
         assert_eq!(
-            PerspectiveEngine::render(&template_had, &ctx_third).unwrap(),
+            PerspectiveEngine::render(&template_have, &ctx_third_past).unwrap(),
             "Aldran had a sword."
         );
     }
@@ -3235,7 +3259,7 @@ mod tests {
         let cache = TemplateCache::new(100);
 
         // Add a completely new custom verb
-        crate::grammar::add_irregular_verb("yeet", "yeetses").unwrap();
+        crate::grammar::add_irregular_verb("yeet", "yeetses", "yeeted").unwrap();
 
         let template = cache.get_or_compile("{source} [source:yeet].").unwrap();
         assert_eq!(
@@ -3244,15 +3268,63 @@ mod tests {
         );
 
         // Attempting to add an existing PHF verb should fail
-        assert!(crate::grammar::add_irregular_verb("arise", "arises not").is_err());
+        assert!(crate::grammar::add_irregular_verb("arise", "arises not", "arose not").is_err());
 
         // Forcing an existing PHF verb should succeed and override
-        crate::grammar::force_add_irregular_verb("arise", "arizez");
+        crate::grammar::force_add_irregular_verb("arise", "arizez", "arouze");
 
         let template_arise = cache.get_or_compile("{source} [source:arise].").unwrap();
         assert_eq!(
             render_msg!("char_2", &template_arise, "source" => &player).unwrap(),
             "Aldran arizez."
+        );
+
+        // Clean up the global state safely now that we are running serially
+        crate::grammar::clear_irregular_verbs();
+    }
+
+    #[test]
+    #[serial]
+    fn test_macro_register_custom_verbs() {
+        let player = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+
+        let cache = TemplateCache::new(100);
+
+        // Ergonomically register multiple custom verbs at once
+        crate::register_custom_verbs! {
+            "bloop" => ("bloopses", "bloopeded"),
+            "blarg" => ("blargs", "blarged"),
+        };
+
+        let ctx_pres = RenderContext::new("char_2").with_entity("source", &player);
+        let ctx_past = RenderContext::new("char_2")
+            .with_entity("source", &player)
+            .with_tense(crate::models::Tense::Past);
+
+        let t1 = cache.get_or_compile("{source} [source:bloop].").unwrap();
+        assert_eq!(
+            PerspectiveEngine::render(&t1, &ctx_pres).unwrap(),
+            "Aldran bloopses."
+        );
+        assert_eq!(
+            PerspectiveEngine::render(&t1, &ctx_past).unwrap(),
+            "Aldran bloopeded."
+        );
+
+        let t2 = cache.get_or_compile("{source} [source:blarg].").unwrap();
+        assert_eq!(
+            PerspectiveEngine::render(&t2, &ctx_pres).unwrap(),
+            "Aldran blargs."
+        );
+        assert_eq!(
+            PerspectiveEngine::render(&t2, &ctx_past).unwrap(),
+            "Aldran blarged."
         );
 
         // Clean up the global state safely now that we are running serially
@@ -3367,7 +3439,7 @@ mod tests {
         );
 
         // 4. Runtime dictionary multi-word override ("make do" -> "makes do")
-        crate::grammar::add_irregular_verb("make do", "makes do").unwrap();
+        crate::grammar::add_irregular_verb("make do", "makes do", "made do").unwrap();
         let t4 = cache.get_or_compile("{source} [source:make do].").unwrap();
         assert_eq!(
             PerspectiveEngine::render(&t4, &ctx).unwrap(),
@@ -3376,5 +3448,836 @@ mod tests {
 
         // Clean up the global state safely now that we are running serially
         crate::grammar::clear_irregular_verbs();
+    }
+
+    #[test]
+    fn test_dynamic_past_tense() {
+        let player = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+        let goblin = MockEntity {
+            id: "mob_1".to_string(),
+            name: "goblin".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+        let template = cache
+            .get_or_compile("{source} [source:hit] {the:target} and [source:laugh].")
+            .unwrap();
+
+        let ctx_present = RenderContext::new("char_1")
+            .with_entity("source", &player)
+            .with_entity("target", &goblin);
+
+        assert_eq!(
+            PerspectiveEngine::render(&template, &ctx_present).unwrap(),
+            "You hit the goblin and laugh."
+        );
+
+        let ctx_past = RenderContext::new("char_1")
+            .with_entity("source", &player)
+            .with_entity("target", &goblin)
+            .with_tense(crate::models::Tense::Past);
+
+        assert_eq!(
+            PerspectiveEngine::render(&template, &ctx_past).unwrap(),
+            "You hit the goblin and laughed."
+        );
+
+        let ctx_past_director = RenderContext::new("char_2")
+            .with_entity("source", &player)
+            .with_entity("target", &goblin)
+            .with_tense(crate::models::Tense::Past);
+
+        assert_eq!(
+            PerspectiveEngine::render(&template, &ctx_past_director).unwrap(),
+            "Aldran hit the goblin and laughed."
+        );
+    }
+
+    #[test]
+    fn test_dynamic_past_tense_with_groups() {
+        let player = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+        let goblin = MockEntity {
+            id: "mob_1".to_string(),
+            name: "goblin".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+        let party = GroupEntity {
+            members: vec![&player, &goblin],
+        };
+
+        let cache = TemplateCache::new(100);
+        let template = cache
+            .get_or_compile("{the:source} [source:be] here, and [source:try] to escape.")
+            .unwrap();
+
+        let ctx_solo_actor = RenderContext::new("char_1")
+            .with_stance(crate::models::ActorStance::FirstPerson)
+            .with_tense(crate::models::Tense::Past)
+            .with_entity("source", &player);
+
+        assert_eq!(
+            PerspectiveEngine::render(&template, &ctx_solo_actor).unwrap(),
+            "I was here, and tried to escape."
+        );
+
+        let ctx_solo_director = RenderContext::new("char_2")
+            .with_tense(crate::models::Tense::Past)
+            .with_entity("source", &goblin);
+
+        assert_eq!(
+            PerspectiveEngine::render(&template, &ctx_solo_director).unwrap(),
+            "The goblin was here, and tried to escape."
+        );
+
+        let ctx_party_actor = RenderContext::new("char_1")
+            .with_stance(crate::models::ActorStance::FirstPerson)
+            .with_tense(crate::models::Tense::Past)
+            .with_entity("source", &party);
+
+        assert_eq!(
+            PerspectiveEngine::render(&template, &ctx_party_actor).unwrap(),
+            "The goblin and I were here, and tried to escape."
+        );
+    }
+
+    #[test]
+    fn test_dynamic_past_tense_regular_fallbacks() {
+        let player = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+
+        let cache = TemplateCache::new(100);
+
+        let test_cases = vec![
+            ("chase", "chased"),
+            ("dry", "dried"),
+            ("play", "played"),
+            ("walk", "walked"),
+            ("box", "boxed"),
+        ];
+
+        for (verb, expected_past) in test_cases {
+            let template_str = format!("{{source}} [source:{verb}].");
+            let template = cache.get_or_compile(&template_str).unwrap();
+            let ctx = RenderContext::new("char_2")
+                .with_tense(crate::models::Tense::Past)
+                .with_entity("source", &player);
+
+            assert_eq!(
+                PerspectiveEngine::render(&template, &ctx).unwrap(),
+                format!("Aldran {expected_past}.")
+            );
+        }
+    }
+
+    #[test]
+    fn test_dynamic_past_tense_irregular_phrasal() {
+        let player = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+
+        let cache = TemplateCache::new(100);
+
+        let template = cache.get_or_compile("{source} [source:catch up].").unwrap();
+        let ctx = RenderContext::new("char_2")
+            .with_tense(crate::models::Tense::Past)
+            .with_entity("source", &player);
+
+        assert_eq!(
+            PerspectiveEngine::render(&template, &ctx).unwrap(),
+            "Aldran caught up."
+        );
+    }
+
+    #[test]
+    fn test_dynamic_past_tense_forced_conjugation() {
+        let player = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+
+        let cache = TemplateCache::new(100);
+
+        let ctx_director_present = RenderContext::new("char_2").with_entity("source", &player);
+        let ctx_director_past = RenderContext::new("char_2")
+            .with_entity("source", &player)
+            .with_tense(crate::models::Tense::Past);
+
+        // 1. Present-only override (falls back to native algorithmic conjugation for past)
+        let t_pres_only = cache
+            .get_or_compile("{source} [source:freak out|freak out|freaks out].")
+            .unwrap();
+
+        assert_eq!(
+            PerspectiveEngine::render(&t_pres_only, &ctx_director_present).unwrap(),
+            "Aldran freaks out."
+        );
+        assert_eq!(
+            PerspectiveEngine::render(&t_pres_only, &ctx_director_past).unwrap(),
+            "Aldran freaked out."
+        );
+
+        // 2. Both present and past overrides
+        let t_both = cache
+            .get_or_compile("{source} [source:be|am|are|is;was|were|was] here.")
+            .unwrap();
+
+        let ctx_actor_first_present = RenderContext::new("char_1")
+            .with_entity("source", &player)
+            .with_stance(crate::models::ActorStance::FirstPerson);
+        let ctx_actor_first_past = RenderContext::new("char_1")
+            .with_entity("source", &player)
+            .with_stance(crate::models::ActorStance::FirstPerson)
+            .with_tense(crate::models::Tense::Past);
+
+        assert_eq!(
+            PerspectiveEngine::render(&t_both, &ctx_actor_first_present).unwrap(),
+            "I am here."
+        );
+        assert_eq!(
+            PerspectiveEngine::render(&t_both, &ctx_actor_first_past).unwrap(),
+            "I was here."
+        );
+        assert_eq!(
+            PerspectiveEngine::render(&t_both, &ctx_director_present).unwrap(),
+            "Aldran is here."
+        );
+        assert_eq!(
+            PerspectiveEngine::render(&t_both, &ctx_director_past).unwrap(),
+            "Aldran was here."
+        );
+
+        // 3. Past-only override (falls back to native algorithmic conjugation for present)
+        let t_past_only = cache
+            .get_or_compile("{source} [source:bloop|;blorped].")
+            .unwrap();
+        assert_eq!(
+            PerspectiveEngine::render(&t_past_only, &ctx_director_present).unwrap(),
+            "Aldran bloops."
+        );
+        assert_eq!(
+            PerspectiveEngine::render(&t_past_only, &ctx_director_past).unwrap(),
+            "Aldran blorped."
+        );
+    }
+
+    #[test]
+    fn test_dynamic_past_tense_pronouns_and_possessives() {
+        let player = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+
+        let cache = TemplateCache::new(100);
+        // Tests combining dynamically shifted verbs with possessive pronouns, absolute possessives, and reflexive pronouns.
+        let template = cache
+            .get_or_compile("{source} [source:draw] {source:poss} sword to defend {source:reflex}. The victory [source:be] {source:abs_poss}!")
+            .unwrap();
+
+        let ctx_present = RenderContext::new("char_2").with_entity("source", &player);
+        assert_eq!(
+            PerspectiveEngine::render(&template, &ctx_present).unwrap(),
+            "Aldran draws his sword to defend himself. The victory is his!"
+        );
+
+        let ctx_past = RenderContext::new("char_2")
+            .with_tense(crate::models::Tense::Past)
+            .with_entity("source", &player);
+
+        // Pronouns should not be affected by tense, but all verbs ("draw" -> "drew", "be" -> "was") should shift.
+        assert_eq!(
+            PerspectiveEngine::render(&template, &ctx_past).unwrap(),
+            "Aldran drew his sword to defend himself. The victory was his!"
+        );
+    }
+
+    #[test]
+    fn test_dynamic_past_tense_have_and_be() {
+        let player = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+
+        let cache = TemplateCache::new(100);
+        let template = cache
+            .get_or_compile("{source} [source:have] no choice, {source:subj} [source:be] trapped.")
+            .unwrap();
+
+        let ctx_present = RenderContext::new("char_2").with_entity("source", &player);
+        assert_eq!(
+            PerspectiveEngine::render(&template, &ctx_present).unwrap(),
+            "Aldran has no choice, he is trapped."
+        );
+
+        let ctx_past = RenderContext::new("char_2")
+            .with_tense(crate::models::Tense::Past)
+            .with_entity("source", &player);
+        assert_eq!(
+            PerspectiveEngine::render(&template, &ctx_past).unwrap(),
+            "Aldran had no choice, he was trapped."
+        );
+    }
+
+    #[test]
+    fn test_dynamic_past_tense_anaphora() {
+        let player = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+        let goblin = MockEntity {
+            id: "mob_1".to_string(),
+            name: "goblin".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+        let template = cache
+            .get_or_compile("{the:source} [source:strike] {target}. {target:Subj} [target:fall].")
+            .unwrap();
+
+        let ctx_past = RenderContext::new("char_3")
+            .with_tense(crate::models::Tense::Past)
+            .with_entity("source", &goblin)
+            .with_entity("target", &player);
+
+        assert_eq!(
+            PerspectiveEngine::render(&template, &ctx_past).unwrap(),
+            "The goblin struck Aldran. He fell."
+        );
+    }
+
+    #[test]
+    fn test_colliding_verbs_disambiguation() {
+        let player = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+
+        let cache = TemplateCache::new(100);
+
+        // 1. lie -> lay (e.g. resting)
+        let t_lay = cache
+            .get_or_compile("{source} [source:lie(lay)] down.")
+            .unwrap();
+        // 2. lie -> lied (e.g. deceiving)
+        let t_lied = cache
+            .get_or_compile("{source} [source:lie(lied)] to me.")
+            .unwrap();
+
+        let ctx_pres = RenderContext::new("char_2").with_entity("source", &player);
+        let ctx_past = RenderContext::new("char_2")
+            .with_entity("source", &player)
+            .with_tense(crate::models::Tense::Past);
+
+        // In the present tense, both flawlessly evaluate to "lies"
+        assert_eq!(
+            PerspectiveEngine::render(&t_lay, &ctx_pres).unwrap(),
+            "Aldran lies down."
+        );
+        assert_eq!(
+            PerspectiveEngine::render(&t_lied, &ctx_pres).unwrap(),
+            "Aldran lies to me."
+        );
+
+        // In the past tense, they diverge to their intended meanings!
+        assert_eq!(
+            PerspectiveEngine::render(&t_lay, &ctx_past).unwrap(),
+            "Aldran lay down."
+        );
+        assert_eq!(
+            PerspectiveEngine::render(&t_lied, &ctx_past).unwrap(),
+            "Aldran lied to me."
+        );
+    }
+
+    #[test]
+    fn test_dynamic_past_tense_capitalization() {
+        let player = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+
+        let cache = TemplateCache::new(100);
+
+        // 1. Regular Verb
+        let t_walk = cache.get_or_compile("[source:Walk] away.").unwrap();
+        // 2. Irregular Verb
+        let t_run = cache.get_or_compile("[source:Run] away.").unwrap();
+        // 3. Phrasal Verb
+        let t_pick = cache.get_or_compile("[source:Pick up] the sword.").unwrap();
+        // 4. "To Be"
+        let t_be = cache.get_or_compile("[source:Be] ready.").unwrap();
+
+        let ctx = RenderContext::new("char_2")
+            .with_entity("source", &player)
+            .with_tense(crate::models::Tense::Past);
+
+        // All of these should retain their first-letter capitalization despite dynamic shifting!
+        assert_eq!(
+            PerspectiveEngine::render(&t_walk, &ctx).unwrap(),
+            "Walked away."
+        );
+        assert_eq!(
+            PerspectiveEngine::render(&t_run, &ctx).unwrap(),
+            "Ran away."
+        );
+        assert_eq!(
+            PerspectiveEngine::render(&t_pick, &ctx).unwrap(),
+            "Picked up the sword."
+        );
+        assert_eq!(
+            PerspectiveEngine::render(&t_be, &ctx).unwrap(),
+            "Was ready."
+        );
+    }
+
+    #[test]
+    fn test_dynamic_past_tense_modal_verbs() {
+        let player = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+
+        let cache = TemplateCache::new(100);
+        let ctx = RenderContext::new("char_2")
+            .with_entity("source", &player)
+            .with_tense(crate::models::Tense::Past);
+
+        // Modal verbs naturally shift to past tense
+        let t_can = cache.get_or_compile("{source} [source:can] win.").unwrap();
+        let t_will = cache.get_or_compile("{source} [source:will] win.").unwrap();
+        let t_shall = cache
+            .get_or_compile("{source} [source:shall] win.")
+            .unwrap();
+        let t_may = cache.get_or_compile("{source} [source:may] win.").unwrap();
+
+        assert_eq!(
+            PerspectiveEngine::render(&t_can, &ctx).unwrap(),
+            "Aldran could win."
+        );
+        assert_eq!(
+            PerspectiveEngine::render(&t_will, &ctx).unwrap(),
+            "Aldran would win."
+        );
+        assert_eq!(
+            PerspectiveEngine::render(&t_shall, &ctx).unwrap(),
+            "Aldran should win."
+        );
+        assert_eq!(
+            PerspectiveEngine::render(&t_may, &ctx).unwrap(),
+            "Aldran might win."
+        );
+    }
+
+    #[test]
+    fn test_dynamic_future_tense() {
+        let player = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+
+        let cache = TemplateCache::new(100);
+        let ctx = RenderContext::new("char_2")
+            .with_entity("source", &player)
+            .with_tense(crate::models::Tense::Future);
+
+        // 1. Regular verb
+        let t_walk = cache.get_or_compile("{source} [source:walk].").unwrap();
+        assert_eq!(
+            PerspectiveEngine::render(&t_walk, &ctx).unwrap(),
+            "Aldran will walk."
+        );
+
+        // 2. Irregular verb
+        let t_be = cache.get_or_compile("{source} [source:be] ready.").unwrap();
+        assert_eq!(
+            PerspectiveEngine::render(&t_be, &ctx).unwrap(),
+            "Aldran will be ready."
+        );
+
+        // 3. Phrasal verb
+        let t_pick = cache
+            .get_or_compile("{source} [source:pick up] the sword.")
+            .unwrap();
+        assert_eq!(
+            PerspectiveEngine::render(&t_pick, &ctx).unwrap(),
+            "Aldran will pick up the sword."
+        );
+
+        // 4. Modal verbs (should remain unchanged, preventing "will can")
+        let t_can = cache.get_or_compile("{source} [source:can] win.").unwrap();
+        assert_eq!(
+            PerspectiveEngine::render(&t_can, &ctx).unwrap(),
+            "Aldran can win."
+        );
+
+        // 5. Capitalization preservation
+        let t_cap = cache.get_or_compile("[source:Attack]!").unwrap();
+        assert_eq!(
+            PerspectiveEngine::render(&t_cap, &ctx).unwrap(),
+            "Will attack!"
+        );
+
+        // 6. Forced conjugation ignored natively
+        let t_forced = cache
+            .get_or_compile("{source} [source:freak out|freak out|freaks out]!")
+            .unwrap();
+        assert_eq!(
+            PerspectiveEngine::render(&t_forced, &ctx).unwrap(),
+            "Aldran will freak out!"
+        );
+
+        // 7. Phrasal modal and quasi-modal edge cases
+        let t_have_to = cache
+            .get_or_compile("{source} [source:have to] win.")
+            .unwrap();
+        assert_eq!(
+            PerspectiveEngine::render(&t_have_to, &ctx).unwrap(),
+            "Aldran will have to win."
+        );
+
+        let t_ought_to = cache
+            .get_or_compile("{source} [source:ought to] win.")
+            .unwrap();
+        assert_eq!(
+            PerspectiveEngine::render(&t_ought_to, &ctx).unwrap(),
+            "Aldran ought to win."
+        );
+    }
+
+    #[test]
+    fn test_dynamic_future_tense_pronouns_and_possessives() {
+        let player = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+
+        let cache = TemplateCache::new(100);
+        // Tests combining dynamically shifted future verbs with possessive pronouns, absolute possessives, and reflexive pronouns.
+        let template = cache
+            .get_or_compile("{source} [source:draw] {source:poss} sword to defend {source:reflex}. The victory [source:be] {source:abs_poss}!")
+            .unwrap();
+
+        let ctx_future = RenderContext::new("char_2")
+            .with_tense(crate::models::Tense::Future)
+            .with_entity("source", &player);
+
+        // Pronouns should not be affected by tense, but all verbs ("draw" -> "will draw", "be" -> "will be") should shift.
+        assert_eq!(
+            PerspectiveEngine::render(&template, &ctx_future).unwrap(),
+            "Aldran will draw his sword to defend himself. The victory will be his!"
+        );
+    }
+
+    #[test]
+    fn test_dynamic_future_tense_anaphora() {
+        let player = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+        let goblin = MockEntity {
+            id: "mob_1".to_string(),
+            name: "goblin".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+        let template = cache
+            .get_or_compile("{the:source} [source:strike] {target}. {target:Subj} [target:fall].")
+            .unwrap();
+
+        let ctx_future = RenderContext::new("char_3")
+            .with_tense(crate::models::Tense::Future)
+            .with_entity("source", &goblin)
+            .with_entity("target", &player);
+
+        assert_eq!(
+            PerspectiveEngine::render(&template, &ctx_future).unwrap(),
+            "The goblin will strike Aldran. He will fall."
+        );
+    }
+
+    #[test]
+    fn test_dynamic_future_tense_with_groups() {
+        let player = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+        let goblin = MockEntity {
+            id: "mob_1".to_string(),
+            name: "goblin".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+        let party = GroupEntity {
+            members: vec![&player, &goblin],
+        };
+
+        let cache = TemplateCache::new(100);
+        let template = cache
+            .get_or_compile("{the:source} [source:be] here, and [source:try] to escape.")
+            .unwrap();
+
+        let ctx_party_actor = RenderContext::new("char_1")
+            .with_stance(crate::models::ActorStance::FirstPerson)
+            .with_tense(crate::models::Tense::Future)
+            .with_entity("source", &party);
+
+        assert_eq!(
+            PerspectiveEngine::render(&template, &ctx_party_actor).unwrap(),
+            "The goblin and I will be here, and will try to escape."
+        );
+    }
+
+    #[test]
+    fn test_dynamic_future_tense_force_director_stance() {
+        let player = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+
+        let cache = TemplateCache::new(100);
+        let template = cache
+            .get_or_compile("{+source} [+source:win] the battle.")
+            .unwrap();
+
+        let ctx_future = RenderContext::new("char_1") // Player is the viewer
+            .with_tense(crate::models::Tense::Future)
+            .with_entity("source", &player);
+
+        // Even though the viewer is the actor, the `+` syntax forces third person logic
+        assert_eq!(
+            PerspectiveEngine::render(&template, &ctx_future).unwrap(),
+            "Aldran will win the battle."
+        );
+    }
+
+    #[test]
+    fn test_all_twelve_english_tenses() {
+        let player = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+
+        let cache = TemplateCache::new(100);
+
+        let t_simple = cache.get_or_compile("{source} [source:walk].").unwrap();
+        let t_continuous = cache
+            .get_or_compile("{source} [source:be] walking.")
+            .unwrap();
+        let t_perfect = cache
+            .get_or_compile("{source} [source:have] walked.")
+            .unwrap();
+        let t_perfect_continuous = cache
+            .get_or_compile("{source} [source:have] been walking.")
+            .unwrap();
+
+        let ctx_pres = RenderContext::new("char_2").with_entity("source", &player);
+        let ctx_past = RenderContext::new("char_2")
+            .with_entity("source", &player)
+            .with_tense(crate::models::Tense::Past);
+        let ctx_future = RenderContext::new("char_2")
+            .with_entity("source", &player)
+            .with_tense(crate::models::Tense::Future);
+
+        // 1. Simple Tenses
+        assert_eq!(
+            PerspectiveEngine::render(&t_simple, &ctx_pres).unwrap(),
+            "Aldran walks."
+        );
+        assert_eq!(
+            PerspectiveEngine::render(&t_simple, &ctx_past).unwrap(),
+            "Aldran walked."
+        );
+        assert_eq!(
+            PerspectiveEngine::render(&t_simple, &ctx_future).unwrap(),
+            "Aldran will walk."
+        );
+
+        // 2. Continuous Tenses
+        assert_eq!(
+            PerspectiveEngine::render(&t_continuous, &ctx_pres).unwrap(),
+            "Aldran is walking."
+        );
+        assert_eq!(
+            PerspectiveEngine::render(&t_continuous, &ctx_past).unwrap(),
+            "Aldran was walking."
+        );
+        assert_eq!(
+            PerspectiveEngine::render(&t_continuous, &ctx_future).unwrap(),
+            "Aldran will be walking."
+        );
+
+        // 3. Perfect Tenses
+        assert_eq!(
+            PerspectiveEngine::render(&t_perfect, &ctx_pres).unwrap(),
+            "Aldran has walked."
+        );
+        assert_eq!(
+            PerspectiveEngine::render(&t_perfect, &ctx_past).unwrap(),
+            "Aldran had walked."
+        );
+        assert_eq!(
+            PerspectiveEngine::render(&t_perfect, &ctx_future).unwrap(),
+            "Aldran will have walked."
+        );
+
+        // 4. Perfect Continuous Tenses
+        assert_eq!(
+            PerspectiveEngine::render(&t_perfect_continuous, &ctx_pres).unwrap(),
+            "Aldran has been walking."
+        );
+        assert_eq!(
+            PerspectiveEngine::render(&t_perfect_continuous, &ctx_past).unwrap(),
+            "Aldran had been walking."
+        );
+        assert_eq!(
+            PerspectiveEngine::render(&t_perfect_continuous, &ctx_future).unwrap(),
+            "Aldran will have been walking."
+        );
+    }
+
+    #[test]
+    fn test_dynamic_future_tense_do_support() {
+        let player = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+
+        let cache = TemplateCache::new(100);
+
+        let ctx_pres = RenderContext::new("char_2").with_entity("source", &player);
+        let ctx_past = RenderContext::new("char_2")
+            .with_entity("source", &player)
+            .with_tense(crate::models::Tense::Past);
+        let ctx_future = RenderContext::new("char_2")
+            .with_entity("source", &player)
+            .with_tense(crate::models::Tense::Future);
+
+        // 1. Negative Sentence
+        let t_neg = cache
+            .get_or_compile("{source} [source:do(aux)] not run.")
+            .unwrap();
+
+        assert_eq!(
+            PerspectiveEngine::render(&t_neg, &ctx_pres).unwrap(),
+            "Aldran does not run."
+        );
+        assert_eq!(
+            PerspectiveEngine::render(&t_neg, &ctx_past).unwrap(),
+            "Aldran did not run."
+        );
+        assert_eq!(
+            PerspectiveEngine::render(&t_neg, &ctx_future).unwrap(),
+            "Aldran will not run."
+        );
+
+        // 2. Question Sentence (Capitalized)
+        let t_question = cache
+            .get_or_compile("[source:Do(aux)] {source:subj} run?")
+            .unwrap();
+
+        assert_eq!(
+            PerspectiveEngine::render(&t_question, &ctx_pres).unwrap(),
+            "Does he run?"
+        );
+        assert_eq!(
+            PerspectiveEngine::render(&t_question, &ctx_past).unwrap(),
+            "Did he run?"
+        );
+        assert_eq!(
+            PerspectiveEngine::render(&t_question, &ctx_future).unwrap(),
+            "Will he run?"
+        );
+
+        // 3. Main Verb (Unannotated "do")
+        let t_main = cache
+            .get_or_compile("{source} [source:do] the laundry.")
+            .unwrap();
+
+        assert_eq!(
+            PerspectiveEngine::render(&t_main, &ctx_pres).unwrap(),
+            "Aldran does the laundry."
+        );
+        assert_eq!(
+            PerspectiveEngine::render(&t_main, &ctx_past).unwrap(),
+            "Aldran did the laundry."
+        );
+        assert_eq!(
+            PerspectiveEngine::render(&t_main, &ctx_future).unwrap(),
+            "Aldran will do the laundry."
+        );
     }
 }
