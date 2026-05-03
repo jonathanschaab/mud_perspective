@@ -1,6 +1,6 @@
 use crate::grammar::{conjugate_verb, resolve_article, resolve_pronoun};
 use crate::models::{NULL_VIEWER, RenderContext, TemplateEntity};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use unicode_segmentation::UnicodeSegmentation;
 
 /// Represents a parsed unit of a template string.
@@ -400,7 +400,7 @@ impl PerspectiveEngine {
     /// Returns a `String` error if the template references a key not provided in the `ctx`.
     #[tracing::instrument(level = "trace", skip_all, fields(viewer_id = %ctx.viewer_id))]
     pub fn render(template: &Template, ctx: &RenderContext) -> Result<String, String> {
-        let mut future_keys = Vec::new();
+        let mut future_keys_set = HashSet::new();
         if ctx.lookahead {
             for token in &template.tokens {
                 let k = match token {
@@ -412,13 +412,13 @@ impl PerspectiveEngine {
                     } => Some(key.as_str()),
                     _ => None,
                 };
-                if let Some(key) = k
-                    && !future_keys.contains(&key)
-                {
-                    future_keys.push(key);
+                if let Some(key) = k {
+                    future_keys_set.insert(key);
                 }
             }
         }
+
+        let future_keys: Vec<&str> = future_keys_set.into_iter().collect();
 
         // 1. Pre-allocate buffer to prevent continuous heap allocations
         let mut raw_output = String::with_capacity(template.estimated_length);
@@ -547,13 +547,12 @@ impl PerspectiveEngine {
             let mut unresolved_short_collisions = 0;
 
             let recent_borrow = ctx.recent_entities.borrow();
-            let mut keys_to_check: Vec<&str> =
+            let mut keys_set: HashSet<&str> =
                 recent_borrow.iter().map(|r| r.key.as_str()).collect();
             for &fk in future_keys {
-                if !keys_to_check.contains(&fk) {
-                    keys_to_check.push(fk);
-                }
+                keys_set.insert(fk);
             }
+            let keys_to_check: Vec<&str> = keys_set.into_iter().collect();
 
             for &other_key in &keys_to_check {
                 if other_key != key
