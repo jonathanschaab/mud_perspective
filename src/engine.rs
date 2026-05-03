@@ -3,6 +3,29 @@ use crate::models::{NULL_VIEWER, RenderContext, TemplateEntity};
 use std::collections::{HashMap, HashSet};
 use unicode_segmentation::UnicodeSegmentation;
 
+const SENTENCE_BREAK_SENTINEL: char = '\u{E000}';
+const NO_SENTENCE_BREAK_SENTINEL: char = '\u{E001}';
+
+// --- Template Syntax Constants ---
+const TAG_ENTITY_OPEN: char = '{';
+const TAG_ENTITY_CLOSE: char = '}';
+const TAG_VERB_OPEN: char = '[';
+const TAG_VERB_CLOSE: char = ']';
+const TAG_SEPARATOR: char = ':';
+const TAG_PROPERTY_SEP: char = '.';
+const TAG_ESCAPE: char = '\\';
+
+const VERB_TENSE_SEP: char = ';';
+const VERB_FORM_SEP: char = '|';
+
+const MOD_FORCE_3RD_PERSON: char = '+';
+const MOD_NO_SMART: char = '!';
+const MOD_FORCE_SINGULAR: char = '-';
+const MOD_POSSESSIVE: &str = "'s";
+
+const CTRL_SENTENCE_BREAK: &str = "SB";
+const CTRL_NO_SENTENCE_BREAK: &str = "NO_SB";
+
 /// Represents a parsed unit of a template string.
 #[derive(Debug)]
 pub enum Token {
@@ -57,6 +80,8 @@ pub enum Token {
 pub struct Template {
     /// The sequence of tokens that make up this compiled template.
     pub tokens: Vec<Token>,
+    /// The unique entity keys referenced in the template, in order of first appearance.
+    pub template_keys: Vec<String>,
     /// A heuristic estimation of the rendered string's length, used for buffer pre-allocation.
     pub estimated_length: usize,
 }
@@ -89,14 +114,14 @@ impl Template {
                 }
             }
 
-            if c == '\\' {
+            if c == TAG_ESCAPE {
                 chars.next();
                 if let Some(&(next_i, next_c)) = chars.peek()
-                    && (next_c == '{'
-                        || next_c == '['
-                        || next_c == '}'
-                        || next_c == ']'
-                        || next_c == '\\')
+                    && (next_c == TAG_ENTITY_OPEN
+                        || next_c == TAG_VERB_OPEN
+                        || next_c == TAG_ENTITY_CLOSE
+                        || next_c == TAG_VERB_CLOSE
+                        || next_c == TAG_ESCAPE)
                 {
                     push_literal(&mut tokens, raw, last_literal_start, i);
                     last_literal_start = next_i;
@@ -105,13 +130,17 @@ impl Template {
                 continue;
             }
 
-            if c == '{' || c == '[' {
+            if c == TAG_ENTITY_OPEN || c == TAG_VERB_OPEN {
                 // Push any preceding literal text
                 push_literal(&mut tokens, raw, last_literal_start, i);
                 chars.next(); // Consume the opening brace or bracket
 
-                let is_entity = c == '{';
-                let close_char = if is_entity { '}' } else { ']' };
+                let is_entity = c == TAG_ENTITY_OPEN;
+                let close_char = if is_entity {
+                    TAG_ENTITY_CLOSE
+                } else {
+                    TAG_VERB_CLOSE
+                };
                 let tag_name = if is_entity { "entity tag" } else { "verb tag" };
 
                 let end_idx = consume_until_closed(&mut chars, i, close_char, tag_name)?;
@@ -134,14 +163,34 @@ impl Template {
         // Push any remaining literal text at the end of the string
         push_literal(&mut tokens, raw, last_literal_start, raw.len());
 
+        let mut template_keys = Vec::new();
+        let mut seen_keys = HashSet::new();
+        for token in &tokens {
+            let k = match token {
+                Token::EntityRef { key, .. }
+                | Token::PronounRef { key, .. }
+                | Token::VerbRef {
+                    subject_key: Some(key),
+                    ..
+                } => Some(key.as_str()),
+                _ => None,
+            };
+            if let Some(key) = k
+                && seen_keys.insert(key)
+            {
+                template_keys.push(key.to_string());
+            }
+        }
+
         Ok(Template {
             tokens,
+            template_keys,
             estimated_length: raw.len() + (raw.len() / 5),
         })
     }
 
     fn parse_entity_or_pronoun(content: &str) -> Result<Token, String> {
-        let (p1, p2_opt) = split_tag(content, '{', "Malformed entity tag")?;
+        let (p1, p2_opt) = split_tag(content, TAG_ENTITY_OPEN, "Malformed entity tag")?;
 
         if let Some(p2) = p2_opt {
             let (p1_str, force_article, no_smart_modifier, force_singular_1) =
@@ -156,7 +205,7 @@ impl Template {
                     return Err(validation_error(
                         "Entity tag has an article but an empty key",
                         content,
-                        '{',
+                        TAG_ENTITY_OPEN,
                     ));
                 }
                 let flags = TagFlags::new(
@@ -166,6 +215,8 @@ impl Template {
                     is_possessive,
                     no_smart_modifier,
                     force_singular_1 || force_singular_2,
+                    is_indefinite_article(p1_str),
+                    is_capitalized(p1_str),
                 );
                 create_entity_ref(p2_str, Some(p1_str), flags, content)
             } else {
@@ -181,7 +232,7 @@ impl Template {
                 p1_str.is_empty(),
                 "Entity tag has an empty key",
                 content,
-                '{',
+                TAG_ENTITY_OPEN,
             )?;
             let flags = TagFlags::new(
                 is_capitalized(p1_str),
@@ -190,13 +241,15 @@ impl Template {
                 is_possessive,
                 false,
                 force_singular,
+                false,
+                false,
             );
             create_entity_ref(p1_str, None, flags, content)
         }
     }
 
     fn parse_verb(content: &str) -> Result<Token, String> {
-        let (p1, p2_opt) = split_tag(content, '[', "Malformed verb tag")?;
+        let (p1, p2_opt) = split_tag(content, TAG_VERB_OPEN, "Malformed verb tag")?;
         let (p1_str, force_3rd_person, _, force_singular_1) = parse_stance_prefixes(p1);
 
         let (subject_key, verb_part) = if let Some(p2) = p2_opt {
@@ -204,32 +257,32 @@ impl Template {
                 p1_str.is_empty(),
                 "Verb tag has an empty subject key",
                 content,
-                '[',
+                TAG_VERB_OPEN,
             )?;
             validate_property_segments(
                 p1_str,
                 "Verb tag has an empty property segment",
                 content,
-                '[',
+                TAG_VERB_OPEN,
             )?;
             (Some(p1_str.to_lowercase()), p2)
         } else {
-            if p1_str == "SB" {
+            if p1_str == CTRL_SENTENCE_BREAK {
                 return Ok(Token::SentenceBreak);
             }
-            if p1_str == "NO_SB" {
+            if p1_str == CTRL_NO_SENTENCE_BREAK {
                 return Ok(Token::NoSentenceBreak);
             }
             (None, p1_str)
         };
 
         let (actual_verb, forced_present, forced_past) =
-            if let Some((base_verb, forced)) = verb_part.split_once('|') {
+            if let Some((base_verb, forced)) = verb_part.split_once(VERB_FORM_SEP) {
                 reject_if(
                     base_verb.is_empty() || forced.is_empty(),
                     "Verb tag has an empty verb or forced conjugation segment",
                     content,
-                    '[',
+                    TAG_VERB_OPEN,
                 )?;
 
                 let (forced_present, forced_past) = parse_forced_conjugations(forced, content)?;
@@ -276,6 +329,8 @@ impl Template {
             false,
             false,
             force_singular_1,
+            false,
+            false,
         );
 
         Ok(Token::VerbRef {
@@ -305,6 +360,10 @@ bitflags::bitflags! {
         const NO_SMART = 1 << 4;
         /// A flag indicating if the builder explicitly forced singular conjugation (e.g. {-source}).
         const FORCE_SINGULAR = 1 << 5;
+        /// A flag indicating if the article provided is an indefinite article (e.g. "a", "an").
+        const ARTICLE_INDEFINITE = 1 << 6;
+        /// A flag indicating if the article provided was capitalized (e.g. {A:source}).
+        const ARTICLE_CAPITALIZED = 1 << 7;
     }
 }
 
@@ -313,6 +372,7 @@ impl TagFlags {
     #[inline]
     #[must_use]
     #[allow(clippy::fn_params_excessive_bools)]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         is_capitalized: bool,
         force_article: bool,
@@ -320,6 +380,8 @@ impl TagFlags {
         is_possessive: bool,
         no_smart: bool,
         force_singular: bool,
+        article_indefinite: bool,
+        article_capitalized: bool,
     ) -> Self {
         let mut flags = Self::empty();
         flags.set(Self::IS_CAPITALIZED, is_capitalized);
@@ -328,6 +390,8 @@ impl TagFlags {
         flags.set(Self::IS_POSSESSIVE, is_possessive);
         flags.set(Self::NO_SMART, no_smart);
         flags.set(Self::FORCE_SINGULAR, force_singular);
+        flags.set(Self::ARTICLE_INDEFINITE, article_indefinite);
+        flags.set(Self::ARTICLE_CAPITALIZED, article_capitalized);
         flags
     }
 
@@ -372,6 +436,20 @@ impl TagFlags {
     pub const fn force_singular(self) -> bool {
         self.contains(Self::FORCE_SINGULAR)
     }
+
+    /// Returns `true` if the article provided is indefinite.
+    #[inline]
+    #[must_use]
+    pub const fn article_indefinite(self) -> bool {
+        self.contains(Self::ARTICLE_INDEFINITE)
+    }
+
+    /// Returns `true` if the article provided was capitalized.
+    #[inline]
+    #[must_use]
+    pub const fn article_capitalized(self) -> bool {
+        self.contains(Self::ARTICLE_CAPITALIZED)
+    }
 }
 
 /// Parameters extracted from a token or fallback logic to render an entity.
@@ -400,44 +478,25 @@ impl PerspectiveEngine {
     /// Returns a `String` error if the template references a key not provided in the `ctx`.
     #[tracing::instrument(level = "trace", skip_all, fields(viewer_id = %ctx.viewer_id))]
     pub fn render(template: &Template, ctx: &RenderContext) -> Result<String, String> {
-        let mut template_keys = Vec::new();
-        let mut seen_keys = HashSet::new();
-        for token in &template.tokens {
-            let k = match token {
-                Token::EntityRef { key, .. }
-                | Token::PronounRef { key, .. }
-                | Token::VerbRef {
-                    subject_key: Some(key),
-                    ..
-                } => Some(key.as_str()),
-                _ => None,
-            };
-            if let Some(key) = k
-                && seen_keys.insert(key)
-            {
-                template_keys.push(key);
-            }
-        }
-
-        let future_keys = if ctx.lookahead {
-            template_keys.clone()
+        let future_keys: Vec<&str> = if ctx.lookahead {
+            template.template_keys.iter().map(String::as_str).collect()
         } else {
             Vec::new()
         };
 
         // Pre-resolve all entities that could possibly be checked during this render call
         // to avoid redundant string splitting and hash map lookups in the subsequent hot loops.
-        let mut pre_resolved = Vec::new();
-        for k in &template_keys {
+        let mut pre_resolved = HashMap::new();
+        for k in &template.template_keys {
             if let Ok(ent) = Self::get_entity(ctx, k) {
-                pre_resolved.push((k.to_string(), ent));
+                pre_resolved.insert(k.clone(), ent);
             }
         }
         for r in ctx.recent_entities.borrow().iter() {
-            if !template_keys.contains(&r.key.as_str())
+            if !pre_resolved.contains_key(&r.key)
                 && let Ok(ent) = Self::get_entity(ctx, &r.key)
             {
-                pre_resolved.push((r.key.clone(), ent));
+                pre_resolved.insert(r.key.clone(), ent);
             }
         }
 
@@ -476,9 +535,9 @@ impl PerspectiveEngine {
                     Self::render_verb_ref(ctx, &mut raw_output, token, &pre_resolved)?;
                 }
                 Token::SentenceBreak => {
-                    raw_output.push('\u{E000}');
+                    raw_output.push(SENTENCE_BREAK_SENTINEL);
                 }
-                Token::NoSentenceBreak => raw_output.push('\u{E001}'),
+                Token::NoSentenceBreak => raw_output.push(NO_SENTENCE_BREAK_SENTINEL),
             }
         }
 
@@ -494,11 +553,11 @@ impl PerspectiveEngine {
         }
 
         // 2. Try dot notation traversal (e.g., "source.left_arm.weapon")
-        if let Some((root_key, remainder)) = key.split_once('.')
+        if let Some((root_key, remainder)) = key.split_once(TAG_PROPERTY_SEP)
             && let Some(mut current) = ctx.entities.get(root_key).copied()
         {
             let mut current_path = root_key;
-            for prop in remainder.split('.') {
+            for prop in remainder.split(TAG_PROPERTY_SEP) {
                 current = current.get_property(prop).ok_or_else(|| {
                     format!("Missing property '{prop}' on entity '{current_path}'")
                 })?;
@@ -564,7 +623,7 @@ impl PerspectiveEngine {
         effective_viewer: &str,
         no_smart: bool,
         future_keys: &[&str],
-        pre_resolved: &[(String, &'a dyn TemplateEntity)],
+        pre_resolved: &HashMap<String, &'a dyn TemplateEntity>,
     ) -> (std::borrow::Cow<'a, str>, Option<usize>) {
         let mut name = entity.display_name_for(effective_viewer);
         let mut name_collision = false;
@@ -577,13 +636,13 @@ impl PerspectiveEngine {
             let mut resolved_others = Vec::with_capacity(recent_borrow.len() + future_keys.len());
 
             for r in recent_borrow.iter() {
-                if let Some(&(_, ent)) = pre_resolved.iter().find(|(k, _)| k == &r.key) {
+                if let Some(&ent) = pre_resolved.get(&r.key) {
                     resolved_others.push((r.key.as_str(), ent));
                 }
             }
             for &fk in future_keys {
                 if !recent_borrow.iter().any(|r| r.key == fk)
-                    && let Some(&(_, ent)) = pre_resolved.iter().find(|(k, _)| k == fk)
+                    && let Some(&ent) = pre_resolved.get(fk)
                 {
                     resolved_others.push((fk, ent));
                 }
@@ -681,12 +740,12 @@ impl PerspectiveEngine {
         raw_output: &mut String,
         params: &EntityRefParams<'_>,
         future_keys: &[&str],
-        pre_resolved: &[(String, &'a dyn TemplateEntity)],
+        pre_resolved: &HashMap<String, &'a dyn TemplateEntity>,
     ) -> Result<(), String> {
         let entity = pre_resolved
-            .iter()
-            .find(|(k, _)| k == params.key)
-            .map_or_else(|| Self::get_entity(ctx, params.key), |(_, ent)| Ok(*ent))?;
+            .get(params.key)
+            .copied()
+            .map_or_else(|| Self::get_entity(ctx, params.key), Ok)?;
         let already_seen = ctx
             .recent_entities
             .borrow()
@@ -707,12 +766,10 @@ impl PerspectiveEngine {
 
         let mut article_to_use = params.article;
 
-        if !params.flags.no_smart()
-            && let Some(art) = article_to_use
-            && is_indefinite_article(art)
+        if !params.flags.no_smart() && params.article.is_some() && params.flags.article_indefinite()
         {
             if already_seen {
-                article_to_use = Some(if art.starts_with(char::is_uppercase) {
+                article_to_use = Some(if params.flags.article_capitalized() {
                     "The"
                 } else {
                     "the"
@@ -720,7 +777,7 @@ impl PerspectiveEngine {
             } else if let Some(ord) = ordinal
                 && ord == 2
             {
-                article_to_use = Some(if art.starts_with(char::is_uppercase) {
+                article_to_use = Some(if params.flags.article_capitalized() {
                     "Another"
                 } else {
                     "another"
@@ -955,7 +1012,7 @@ impl PerspectiveEngine {
         if matches!(Self::get_last_visible_char(name), Some('s' | 'S')) && is_plural {
             return "'";
         }
-        "'s"
+        MOD_POSSESSIVE
     }
 
     fn render_pronoun_ref<'a>(
@@ -963,16 +1020,16 @@ impl PerspectiveEngine {
         raw_output: &mut String,
         token: &Token,
         future_keys: &[&str],
-        pre_resolved: &[(String, &'a dyn TemplateEntity)],
+        pre_resolved: &HashMap<String, &'a dyn TemplateEntity>,
     ) -> Result<(), String> {
         let Token::PronounRef { key, p_type, flags } = token else {
             return Ok(());
         };
 
         let entity = pre_resolved
-            .iter()
-            .find(|(k, _)| k == key)
-            .map_or_else(|| Self::get_entity(ctx, key), |(_, ent)| Ok(*ent))?;
+            .get(key)
+            .copied()
+            .map_or_else(|| Self::get_entity(ctx, key), Ok)?;
         let effective_viewer = effective_viewer_id(ctx, flags.force_3rd_person());
 
         let is_viewer = entity.contains_viewer(effective_viewer);
@@ -1065,6 +1122,7 @@ impl PerspectiveEngine {
                 if flags.is_capitalized() { "A" } else { "a" }
             };
 
+            let is_indefinite = !flags.force_singular() || !entity.is_plural();
             let fallback_params = EntityRefParams {
                 key,
                 article: Some(fallback_article),
@@ -1079,6 +1137,8 @@ impl PerspectiveEngine {
                     is_possessive,
                     false,
                     flags.force_singular(),
+                    is_indefinite,
+                    flags.is_capitalized(),
                 ),
                 ordinal: None,
             };
@@ -1091,7 +1151,7 @@ impl PerspectiveEngine {
         ctx: &'a RenderContext,
         raw_output: &mut String,
         token: &Token,
-        pre_resolved: &[(String, &'a dyn TemplateEntity)],
+        pre_resolved: &HashMap<String, &'a dyn TemplateEntity>,
     ) -> Result<(), String> {
         let Token::VerbRef {
             subject_key,
@@ -1108,9 +1168,9 @@ impl PerspectiveEngine {
         // Explicitly bind the verb to its subject to solve passive voice / compound subjects
         let (is_viewer, mut is_plural) = if let Some(key) = subject_key {
             let entity = pre_resolved
-                .iter()
-                .find(|(k, _)| k == key)
-                .map_or_else(|| Self::get_entity(ctx, key), |(_, ent)| Ok(*ent))?;
+                .get(key)
+                .copied()
+                .map_or_else(|| Self::get_entity(ctx, key), Ok)?;
             let effective_viewer = effective_viewer_id(ctx, flags.force_3rd_person());
             update_memory(&ctx.active_subject, key);
             update_memory(&ctx.last_mentioned, key);
@@ -1174,9 +1234,6 @@ impl PerspectiveEngine {
 
     /// Segments the text by true sentence boundaries and capitalizes the first letter.
     fn post_process_typography(input: &str) -> String {
-        const SENTENCE_BREAK_SENTINEL: char = '\u{E000}';
-        const NO_SENTENCE_BREAK_SENTINEL: char = '\u{E001}';
-
         let mut output = String::with_capacity(input.len());
 
         let mut bounds = input.split_sentence_bound_indices();
@@ -1396,7 +1453,11 @@ fn find_skipped_tag_end(remainder: &str) -> Option<usize> {
 
 #[cold]
 fn validation_error(message: &str, content: &str, open_char: char) -> String {
-    let close_char = if open_char == '{' { '}' } else { ']' };
+    let close_char = if open_char == TAG_ENTITY_OPEN {
+        TAG_ENTITY_CLOSE
+    } else {
+        TAG_VERB_CLOSE
+    };
     let formatted_message = format!("{message}: {open_char}{content}{close_char}");
     tracing::error!("{}", formatted_message);
     formatted_message
@@ -1410,13 +1471,13 @@ fn parse_stance_prefixes(mut s: &str) -> (&str, bool, bool, bool) {
     let mut no_smart = false;
     let mut force_singular = false;
     loop {
-        if let Some(stripped) = s.strip_prefix('+') {
+        if let Some(stripped) = s.strip_prefix(MOD_FORCE_3RD_PERSON) {
             force_3rd_person = true;
             s = stripped;
-        } else if let Some(stripped) = s.strip_prefix('!') {
+        } else if let Some(stripped) = s.strip_prefix(MOD_NO_SMART) {
             no_smart = true;
             s = stripped;
-        } else if let Some(stripped) = s.strip_prefix('-') {
+        } else if let Some(stripped) = s.strip_prefix(MOD_FORCE_SINGULAR) {
             force_singular = true;
             s = stripped;
         } else {
@@ -1445,13 +1506,13 @@ fn create_pronoun_ref(p1: &str, p2: &str, content: &str) -> Result<Token, String
         p1_str.is_empty() || p2_str.is_empty(),
         "Pronoun tag has an empty key or type",
         content,
-        '{',
+        TAG_ENTITY_OPEN,
     )?;
     validate_property_segments(
         p1_str,
         "Pronoun tag has an empty property segment",
         content,
-        '{',
+        TAG_ENTITY_OPEN,
     )?;
     let flags = TagFlags::new(
         is_capitalized(p2_str),
@@ -1460,6 +1521,8 @@ fn create_pronoun_ref(p1: &str, p2: &str, content: &str) -> Result<Token, String
         false,
         force_pronoun || no_smart_entity,
         force_singular_1 || force_singular_2,
+        false,
+        false,
     );
     Ok(Token::PronounRef {
         key: p1_str.to_lowercase(),
@@ -1477,27 +1540,27 @@ fn parse_forced_conjugations(
     let mut forced_past = None;
 
     let (pres_str, past_str) =
-        if let Some((present_overrides, past_overrides)) = forced.split_once(';') {
+        if let Some((present_overrides, past_overrides)) = forced.split_once(VERB_TENSE_SEP) {
             (present_overrides, Some(past_overrides))
         } else {
             (forced, None)
         };
 
     if !pres_str.is_empty() {
-        let parts: Vec<String> = pres_str.split('|').map(str::to_string).collect();
+        let parts: Vec<String> = pres_str.split(VERB_FORM_SEP).map(str::to_string).collect();
         for part in &parts {
             reject_if(
                 part.is_empty(),
                 "Verb tag has an empty forced present conjugation segment",
                 content,
-                '[',
+                TAG_VERB_OPEN,
             )?;
         }
         reject_if(
             parts.len() > 3,
             "Verb tag has too many forced present conjugation segments",
             content,
-            '[',
+            TAG_VERB_OPEN,
         )?;
         forced_present = Some(parts);
     }
@@ -1507,22 +1570,25 @@ fn parse_forced_conjugations(
             past_overrides_str.is_empty(),
             "Verb tag has an empty forced past conjugation segment",
             content,
-            '[',
+            TAG_VERB_OPEN,
         )?;
-        let parts: Vec<String> = past_overrides_str.split('|').map(str::to_string).collect();
+        let parts: Vec<String> = past_overrides_str
+            .split(VERB_FORM_SEP)
+            .map(str::to_string)
+            .collect();
         for part in &parts {
             reject_if(
                 part.is_empty(),
                 "Verb tag has an empty forced past conjugation segment",
                 content,
-                '[',
+                TAG_VERB_OPEN,
             )?;
         }
         reject_if(
             parts.len() > 3,
             "Verb tag has too many forced past conjugation segments",
             content,
-            '[',
+            TAG_VERB_OPEN,
         )?;
         forced_past = Some(parts);
     }
@@ -1536,7 +1602,7 @@ fn split_tag<'a>(
     open_char: char,
     malformed_msg: &str,
 ) -> Result<(&'a str, Option<&'a str>), String> {
-    let mut parts = content.split(':');
+    let mut parts = content.split(TAG_SEPARATOR);
     let p1 = parts.next().unwrap_or_default();
     let p2 = parts.next();
     reject_if(parts.next().is_some(), malformed_msg, content, open_char)?;
@@ -1636,7 +1702,7 @@ fn is_indefinite_article(s: &str) -> bool {
 
 #[inline]
 fn should_capitalize_whole_tag(params: &EntityRefParams<'_>) -> bool {
-    params.flags.is_capitalized() || params.article.is_some_and(is_capitalized)
+    params.flags.is_capitalized() || params.flags.article_capitalized()
 }
 
 #[inline]
@@ -1738,7 +1804,7 @@ fn validate_property_segments(
     open_char: char,
 ) -> Result<(), String> {
     reject_if(
-        path.split('.').any(str::is_empty),
+        path.split(TAG_PROPERTY_SEP).any(str::is_empty),
         error_msg,
         content,
         open_char,
@@ -1757,7 +1823,7 @@ fn effective_viewer_id<'a>(ctx: &RenderContext<'a>, force_3rd_person: bool) -> &
 /// Parses possessive suffix `'s`, returning the stripped string and a boolean flag.
 #[inline]
 fn parse_possessive_suffix(s: &str) -> (&str, bool) {
-    if let Some(stripped) = s.strip_suffix("'s") {
+    if let Some(stripped) = s.strip_suffix(MOD_POSSESSIVE) {
         (stripped, true)
     } else {
         (s, false)
