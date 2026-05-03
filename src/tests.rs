@@ -5073,6 +5073,12 @@ mod tests {
             crate::grammar::number_to_ordinal_word(999),
             "nine hundred and ninety-ninth"
         );
+        assert_eq!(crate::grammar::number_to_ordinal_word(1000), "1000th");
+        assert_eq!(crate::grammar::number_to_ordinal_word(1001), "1001st");
+        assert_eq!(crate::grammar::number_to_ordinal_word(1002), "1002nd");
+        assert_eq!(crate::grammar::number_to_ordinal_word(1003), "1003rd");
+        assert_eq!(crate::grammar::number_to_ordinal_word(1011), "1011th");
+        assert_eq!(crate::grammar::number_to_ordinal_word(1021), "1021st");
     }
 
     #[test]

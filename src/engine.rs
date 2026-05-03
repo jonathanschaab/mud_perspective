@@ -1,6 +1,6 @@
 use crate::grammar::{conjugate_verb, resolve_article, resolve_pronoun};
 use crate::models::{NULL_VIEWER, RenderContext, TemplateEntity};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use unicode_segmentation::UnicodeSegmentation;
 
 /// Represents a parsed unit of a template string.
@@ -400,25 +400,45 @@ impl PerspectiveEngine {
     /// Returns a `String` error if the template references a key not provided in the `ctx`.
     #[tracing::instrument(level = "trace", skip_all, fields(viewer_id = %ctx.viewer_id))]
     pub fn render(template: &Template, ctx: &RenderContext) -> Result<String, String> {
-        let mut future_keys_set = HashSet::new();
-        if ctx.lookahead {
-            for token in &template.tokens {
-                let k = match token {
-                    Token::EntityRef { key, .. }
-                    | Token::PronounRef { key, .. }
-                    | Token::VerbRef {
-                        subject_key: Some(key),
-                        ..
-                    } => Some(key.as_str()),
-                    _ => None,
-                };
-                if let Some(key) = k {
-                    future_keys_set.insert(key);
+        let mut template_keys = Vec::new();
+        for token in &template.tokens {
+            let k = match token {
+                Token::EntityRef { key, .. }
+                | Token::PronounRef { key, .. }
+                | Token::VerbRef {
+                    subject_key: Some(key),
+                    ..
+                } => Some(key.as_str()),
+                _ => None,
+            };
+            if let Some(key) = k {
+                if !template_keys.contains(&key) {
+                    template_keys.push(key);
                 }
             }
         }
 
-        let future_keys: Vec<&str> = future_keys_set.into_iter().collect();
+        let future_keys = if ctx.lookahead {
+            template_keys.clone()
+        } else {
+            Vec::new()
+        };
+
+        // Pre-resolve all entities that could possibly be checked during this render call
+        // to avoid redundant string splitting and hash map lookups in the subsequent hot loops.
+        let mut pre_resolved = Vec::new();
+        for k in &template_keys {
+            if let Ok(ent) = Self::get_entity(ctx, k) {
+                pre_resolved.push((k.to_string(), ent));
+            }
+        }
+        for r in ctx.recent_entities.borrow().iter() {
+            if !template_keys.contains(&r.key.as_str()) {
+                if let Ok(ent) = Self::get_entity(ctx, &r.key) {
+                    pre_resolved.push((r.key.clone(), ent));
+                }
+            }
+        }
 
         // 1. Pre-allocate buffer to prevent continuous heap allocations
         let mut raw_output = String::with_capacity(template.estimated_length);
@@ -440,11 +460,12 @@ impl PerspectiveEngine {
                         ordinal: None,
                     },
                     &future_keys,
+                    &pre_resolved,
                 )?,
                 Token::PronounRef { .. } => {
-                    Self::render_pronoun_ref(ctx, &mut raw_output, token, &future_keys)?;
+                    Self::render_pronoun_ref(ctx, &mut raw_output, token, &future_keys, &pre_resolved)?;
                 }
-                Token::VerbRef { .. } => Self::render_verb_ref(ctx, &mut raw_output, token)?,
+                Token::VerbRef { .. } => Self::render_verb_ref(ctx, &mut raw_output, token, &pre_resolved)?,
                 Token::SentenceBreak => {
                     raw_output.push('\u{E000}');
                 }
@@ -484,11 +505,9 @@ impl PerspectiveEngine {
     }
 
     #[inline]
-    #[allow(clippy::too_many_arguments)]
     fn check_will_vacate(
-        ctx: &RenderContext,
         effective_viewer: &str,
-        keys_to_check: &[&str],
+        resolved_others: &[(&str, &dyn TemplateEntity)],
         other_key: &str,
         other_entity: &dyn TemplateEntity,
         name: &str,
@@ -499,10 +518,8 @@ impl PerspectiveEngine {
         {
             let mut other_short_collisions = 0;
             let mut other_long_collisions = 0;
-            for &eval_key in keys_to_check {
-                if eval_key != other_key
-                    && let Ok(eval_entity) = Self::get_entity(ctx, eval_key)
-                {
+            for &(eval_key, eval_entity) in resolved_others {
+                if eval_key != other_key {
                     let eval_short_name = eval_entity.display_name_for(effective_viewer);
                     if eval_short_name == other_name {
                         other_short_collisions += 1;
@@ -538,6 +555,7 @@ impl PerspectiveEngine {
         effective_viewer: &str,
         no_smart: bool,
         future_keys: &[&str],
+        pre_resolved: &[(String, &'a dyn TemplateEntity)],
     ) -> (std::borrow::Cow<'a, str>, Option<usize>) {
         let mut name = entity.display_name_for(effective_viewer);
         let mut name_collision = false;
@@ -547,26 +565,31 @@ impl PerspectiveEngine {
             let mut unresolved_short_collisions = 0;
 
             let recent_borrow = ctx.recent_entities.borrow();
-            let mut keys_set: HashSet<&str> =
-                recent_borrow.iter().map(|r| r.key.as_str()).collect();
-            for &fk in future_keys {
-                keys_set.insert(fk);
-            }
-            let keys_to_check: Vec<&str> = keys_set.into_iter().collect();
+            let mut resolved_others = Vec::with_capacity(recent_borrow.len() + future_keys.len());
 
-            for &other_key in &keys_to_check {
-                if other_key != key
-                    && let Ok(other_entity) = Self::get_entity(ctx, other_key)
-                {
+            for r in recent_borrow.iter() {
+                if let Some(&(_, ent)) = pre_resolved.iter().find(|(k, _)| k == &r.key) {
+                    resolved_others.push((r.key.as_str(), ent));
+                }
+            }
+            for &fk in future_keys {
+                if !recent_borrow.iter().any(|r| r.key == fk) {
+                    if let Some(&(_, ent)) = pre_resolved.iter().find(|(k, _)| k == fk) {
+                        resolved_others.push((fk, ent));
+                    }
+                }
+            }
+
+            for &(other_key, other_entity) in &resolved_others {
+                if other_key != key {
                     let other_name = other_entity.display_name_for(effective_viewer);
                     if other_name == name {
                         short_collisions += 1;
 
                         // Determine if this other entity will vacate the short name by using its own long name
                         if !Self::check_will_vacate(
-                            ctx,
                             effective_viewer,
-                            &keys_to_check,
+                            &resolved_others,
                             other_key,
                             other_entity,
                             name.as_ref(),
@@ -587,10 +610,8 @@ impl PerspectiveEngine {
                 let mut long_collisions = 0;
 
                 // Verify how many times the long name collides
-                for &other_key in &keys_to_check {
-                    if other_key != key
-                        && let Ok(other_entity) = Self::get_entity(ctx, other_key)
-                    {
+                for &(other_key, other_entity) in &resolved_others {
+                    if other_key != key {
                         let other_short = other_entity.display_name_for(effective_viewer);
                         let mut is_long_collision = other_short == long_name;
 
@@ -646,13 +667,17 @@ impl PerspectiveEngine {
         (name, ordinal)
     }
 
-    fn render_entity_ref(
-        ctx: &RenderContext,
+    fn render_entity_ref<'a>(
+        ctx: &'a RenderContext,
         raw_output: &mut String,
         params: &EntityRefParams<'_>,
         future_keys: &[&str],
+        pre_resolved: &[(String, &'a dyn TemplateEntity)],
     ) -> Result<(), String> {
-        let entity = Self::get_entity(ctx, params.key)?;
+        let entity = pre_resolved
+            .iter()
+            .find(|(k, _)| k == params.key)
+            .map_or_else(|| Self::get_entity(ctx, params.key), |(_, ent)| Ok(*ent))?;
         let already_seen = ctx
             .recent_entities
             .borrow()
@@ -668,6 +693,7 @@ impl PerspectiveEngine {
             effective_viewer,
             params.flags.no_smart(),
             future_keys,
+            pre_resolved,
         );
 
         let mut article_to_use = params.article;
@@ -923,17 +949,21 @@ impl PerspectiveEngine {
         "'s"
     }
 
-    fn render_pronoun_ref(
-        ctx: &RenderContext,
+    fn render_pronoun_ref<'a>(
+        ctx: &'a RenderContext,
         raw_output: &mut String,
         token: &Token,
         future_keys: &[&str],
+        pre_resolved: &[(String, &'a dyn TemplateEntity)],
     ) -> Result<(), String> {
         let Token::PronounRef { key, p_type, flags } = token else {
             return Ok(());
         };
 
-        let entity = Self::get_entity(ctx, key)?;
+        let entity = pre_resolved
+            .iter()
+            .find(|(k, _)| k == key)
+            .map_or_else(|| Self::get_entity(ctx, key), |(_, ent)| Ok(*ent))?;
         let effective_viewer = effective_viewer_id(ctx, flags.force_3rd_person());
 
         let is_viewer = entity.contains_viewer(effective_viewer);
@@ -1043,15 +1073,16 @@ impl PerspectiveEngine {
                 ),
                 ordinal: None,
             };
-            Self::render_entity_ref(ctx, raw_output, &fallback_params, future_keys)?;
+            Self::render_entity_ref(ctx, raw_output, &fallback_params, future_keys, pre_resolved)?;
         }
         Ok(())
     }
 
-    fn render_verb_ref(
-        ctx: &RenderContext,
+    fn render_verb_ref<'a>(
+        ctx: &'a RenderContext,
         raw_output: &mut String,
         token: &Token,
+        pre_resolved: &[(String, &'a dyn TemplateEntity)],
     ) -> Result<(), String> {
         let Token::VerbRef {
             subject_key,
@@ -1067,7 +1098,10 @@ impl PerspectiveEngine {
 
         // Explicitly bind the verb to its subject to solve passive voice / compound subjects
         let (is_viewer, mut is_plural) = if let Some(key) = subject_key {
-            let entity = Self::get_entity(ctx, key)?;
+            let entity = pre_resolved
+                .iter()
+                .find(|(k, _)| k == key)
+                .map_or_else(|| Self::get_entity(ctx, key), |(_, ent)| Ok(*ent))?;
             let effective_viewer = effective_viewer_id(ctx, flags.force_3rd_person());
             update_memory(&ctx.active_subject, key);
             update_memory(&ctx.last_mentioned, key);

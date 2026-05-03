@@ -425,7 +425,16 @@ pub fn number_to_ordinal_word(mut n: usize) -> String {
         return "zeroth".to_string();
     }
     if n >= 1000 {
-        return format!("{n}th");
+        let suffix = match n % 100 {
+            11 | 12 | 13 => "th",
+            _ => match n % 10 {
+                1 => "st",
+                2 => "nd",
+                3 => "rd",
+                _ => "th",
+            },
+        };
+        return format!("{n}{suffix}");
     }
 
     let ones = [
