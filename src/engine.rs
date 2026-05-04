@@ -284,7 +284,7 @@ impl Template {
                 let (forced_present, forced_past) = parse_forced_conjugations(forced, content)?;
                 (base_verb.trim(), forced_present, forced_past)
             } else {
-                (verb_part.trim(), None, None)
+                (verb_part, None, None)
             };
 
         let original_verb = actual_verb.to_string();
@@ -1872,16 +1872,15 @@ fn effective_viewer_id<'a>(ctx: &RenderContext<'a>, force_3rd_person: bool) -> &
 /// Parses possessive suffix `'s`, returning the stripped string and a boolean flag.
 #[inline]
 fn parse_possessive_suffix(s: &str) -> (&str, bool) {
-    let s_trimmed = s.trim_end();
-    if let Some(stripped) = s_trimmed.strip_suffix(MOD_POSSESSIVE) {
-        (stripped.trim_end(), true)
-    } else if let Some(stripped) = s_trimmed.strip_suffix("’s") {
-        (stripped.trim_end(), true)
-    } else if let Some(stripped) = s_trimmed.strip_suffix('\'') {
-        (stripped.trim_end(), true)
-    } else if let Some(stripped) = s_trimmed.strip_suffix('’') {
-        (stripped.trim_end(), true)
+    if let Some(stripped) = s.strip_suffix(MOD_POSSESSIVE) {
+        (stripped, true)
+    } else if let Some(stripped) = s.strip_suffix("’s") {
+        (stripped, true)
+    } else if let Some(stripped) = s.strip_suffix('\'') {
+        (stripped, true)
+    } else if let Some(stripped) = s.strip_suffix('’') {
+        (stripped, true)
     } else {
-        (s_trimmed, false)
+        (s, false)
     }
 }
