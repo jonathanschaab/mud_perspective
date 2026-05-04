@@ -6,6 +6,22 @@ use std::collections::HashSet;
 /// The unique sentinel string used by the engine to temporarily force the Director Stance.
 pub const NULL_VIEWER: &str = "\0__MUD_PERSPECTIVE_NULL_VIEWER__\0";
 
+static PRONOUNS: phf::Set<&'static str> = phf::phf_set! {
+    "he", "him", "his", "himself",
+    "she", "her", "hers", "herself",
+    "it", "its", "itself",
+    "they", "them", "their", "theirs", "themselves",
+    "you", "your", "yours", "yourself", "yourselves",
+    "i", "me", "my", "mine", "myself",
+    "we", "us", "our", "ours", "ourselves",
+};
+
+static VIEWER_PRONOUNS: phf::Set<&'static str> = phf::phf_set! {
+    "you", "your", "yours", "yourself", "yourselves",
+    "i", "me", "my", "mine", "myself",
+    "we", "us", "our", "ours", "ourselves",
+};
+
 /// Represents the grammatical gender of an entity for correct pronoun resolution.
 ///
 /// The `Plural` variant is critical for supporting both literal swarms (e.g., "a pack of wolves")
@@ -363,41 +379,7 @@ impl<'a> RenderContext<'a> {
         &self,
         base_desc: &str,
     ) -> Option<Vec<(String, &'a dyn TemplateEntity)>> {
-        let is_pronoun = matches!(
-            base_desc,
-            "he" | "him"
-                | "his"
-                | "himself"
-                | "she"
-                | "her"
-                | "hers"
-                | "herself"
-                | "it"
-                | "its"
-                | "itself"
-                | "they"
-                | "them"
-                | "their"
-                | "theirs"
-                | "themselves"
-                | "you"
-                | "your"
-                | "yours"
-                | "yourself"
-                | "yourselves"
-                | "i"
-                | "me"
-                | "my"
-                | "mine"
-                | "myself"
-                | "we"
-                | "us"
-                | "our"
-                | "ours"
-                | "ourselves"
-        );
-
-        if !is_pronoun {
+        if !PRONOUNS.contains(base_desc) {
             return None;
         }
 
@@ -410,24 +392,7 @@ impl<'a> RenderContext<'a> {
                     || recent.flags.contains(RecentEntityFlags::IS_VIEWER_FORCED);
 
                 let matches_pro = if is_viewer {
-                    matches!(
-                        base_desc,
-                        "you"
-                            | "your"
-                            | "yours"
-                            | "yourself"
-                            | "yourselves"
-                            | "i"
-                            | "me"
-                            | "my"
-                            | "mine"
-                            | "myself"
-                            | "we"
-                            | "us"
-                            | "our"
-                            | "ours"
-                            | "ourselves"
-                    )
+                    VIEWER_PRONOUNS.contains(base_desc)
                 } else {
                     match base_desc {
                         "he" | "him" | "his" | "himself" => gender == Gender::Male && !is_plural,
