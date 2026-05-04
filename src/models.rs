@@ -3,7 +3,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
-/// The highly unique sentinel string used by the engine to temporarily force the Director Stance.
+/// The unique sentinel string used by the engine to temporarily force the Director Stance.
 pub const NULL_VIEWER: &str = "\0__MUD_PERSPECTIVE_NULL_VIEWER__\0";
 
 /// Represents the grammatical gender of an entity for correct pronoun resolution.
@@ -54,7 +54,7 @@ pub enum Tense {
 /// like stealth, disguises, and recognition.
 ///
 /// **Note on Forced Perspectives:** When a template forces the Director Stance
-/// (e.g., `{+source}`), the engine temporarily passes a highly unique sentinel string
+/// (e.g., `{+source}`), the engine temporarily passes a unique sentinel string
 /// ([`NULL_VIEWER`]) as the `viewer_id` to bypass recognition.
 /// Ensure your actual entity IDs do not match this sentinel.
 pub trait TemplateEntity {
@@ -167,6 +167,9 @@ pub struct RenderContext<'a> {
     /// The number at which ordinal words ("third") switch to integer form ("3rd"). Defaults to 999.
     /// Set to 0 to always use integer form.
     pub ordinal_word_threshold: usize,
+    /// If true, disables the transliteration of Unicode characters (like `Ä`) to ASCII (`A`) during target resolution.
+    /// Defaults to false.
+    pub strict_diacritics: bool,
     /// The maximum number of entities to track for anaphora resolution before evicting the oldest.
     /// Defaults to 15. Set to 0 for unbounded growth.
     /// If all entities in memory are pinned, this limit will be temporarily exceeded to preserve narrative continuity.
@@ -260,19 +263,25 @@ impl<'a> TargetMatch<'a> {
     #[must_use]
     pub fn resolve_deep_entity(&self) -> Option<&'a dyn TemplateEntity> {
         if let Some(ref path) = self.path {
-            let mut current = self.entity;
-            for prop in path.split('.') {
-                if let Some(next) = current.get_property(prop) {
-                    current = next;
-                } else {
-                    return None;
-                }
-            }
-            Some(current)
+            resolve_entity_path(self.entity, path)
         } else {
             Some(self.entity)
         }
     }
+}
+
+fn resolve_entity_path<'a>(
+    mut current: &'a dyn TemplateEntity,
+    path: &str,
+) -> Option<&'a dyn TemplateEntity> {
+    for prop in path.split('.') {
+        if let Some(next) = current.get_property(prop) {
+            current = next;
+        } else {
+            return None;
+        }
+    }
+    Some(current)
 }
 
 impl<'a> RenderContext<'a> {
@@ -288,6 +297,7 @@ impl<'a> RenderContext<'a> {
             tense: Tense::Present,
             lookahead: false,
             ordinal_word_threshold: 999,
+            strict_diacritics: false,
             anaphora_limit: 15,
             entities: HashMap::new(),
             last_mentioned: RefCell::new(None),
@@ -320,17 +330,7 @@ impl<'a> RenderContext<'a> {
         for (key, entity) in matches {
             if seen.insert(key.clone()) {
                 let path_uncertain = if let Some(ref path) = sub_element_desc {
-                    let mut current_entity = entity;
-                    let mut exists = true;
-                    for prop in path.split('.') {
-                        if let Some(next) = current_entity.get_property(prop) {
-                            current_entity = next;
-                        } else {
-                            exists = false;
-                            break;
-                        }
-                    }
-                    !exists
+                    resolve_entity_path(entity, path).is_none()
                 } else {
                     false
                 };
@@ -478,51 +478,38 @@ impl<'a> RenderContext<'a> {
         entity: &dyn TemplateEntity,
         clean_desc: &str,
     ) -> bool {
-        let short_name = entity.display_name_for(self.viewer_id).to_lowercase();
-        let short_name_3rd = entity.display_name_for(NULL_VIEWER).to_lowercase();
-        let long_name = entity
-            .long_display_name_for(self.viewer_id)
-            .map(|n| n.to_lowercase());
+        let short_name = entity.display_name_for(self.viewer_id);
+        let short_name_3rd = entity.display_name_for(NULL_VIEWER);
+        let long_name = entity.long_display_name_for(self.viewer_id);
 
-        let clean_short = strip_articles(&short_name);
-        let clean_short_3rd = strip_articles(&short_name_3rd);
-
-        if clean_desc == clean_short || clean_desc == clean_short_3rd {
-            return true;
-        }
+        let mut names_to_check = vec![short_name.as_ref(), short_name_3rd.as_ref()];
         if let Some(ref ln) = long_name {
-            let clean_long = strip_articles(ln);
-            if clean_desc == clean_long {
+            names_to_check.push(ln.as_ref());
+        }
+
+        for name in &names_to_check {
+            if eq_ignore_case(clean_desc, strip_articles(name), self.strict_diacritics) {
                 return true;
             }
         }
 
         if let Some(aliases) = entity.aliases() {
             for alias in aliases {
-                let lower_alias = alias.to_lowercase();
-                let clean_alias = strip_articles(&lower_alias);
-                if clean_desc == clean_alias {
+                if eq_ignore_case(clean_desc, strip_articles(alias), self.strict_diacritics) {
                     return true;
                 }
             }
         }
 
-        if self.check_ordinals(&short_name, key, clean_desc, entity) {
-            return true;
-        }
-        if self.check_ordinals(&short_name_3rd, key, clean_desc, entity) {
-            return true;
-        }
-        if let Some(ref ln) = long_name
-            && self.check_ordinals(ln, key, clean_desc, entity)
-        {
-            return true;
+        for name in &names_to_check {
+            if self.check_ordinals(name, key, clean_desc, entity) {
+                return true;
+            }
         }
 
         false
     }
 
-    #[allow(clippy::similar_names)]
     fn check_ordinals(
         &self,
         name_to_check: &str,
@@ -541,91 +528,89 @@ impl<'a> RenderContext<'a> {
 
         let ord_word =
             crate::grammar::number_to_ordinal_word(ord, self.ordinal_word_threshold).to_lowercase();
-        let ord_num_th = format!("{ord}th");
-        let ord_num_1st = format!("{ord}st");
-        let ord_num_2nd = format!("{ord}nd");
-        let ord_num_3rd = format!("{ord}rd");
-        let ord_num_plain = format!("{ord}");
+        let ord_str = ord.to_string();
 
-        let matches_prefix = clean_desc.starts_with(&ord_word)
-            || clean_desc.starts_with(&ord_num_th)
-            || clean_desc.starts_with(&ord_num_1st)
-            || clean_desc.starts_with(&ord_num_2nd)
-            || clean_desc.starts_with(&ord_num_3rd)
-            || clean_desc.starts_with(&ord_num_plain);
+        let clean_name = strip_articles(name_to_check);
 
-        if matches_prefix {
-            let clean_name = strip_articles(name_to_check);
-
-            let ord_prefix_len = if clean_desc.starts_with(&ord_word) {
-                ord_word.len()
-            } else if clean_desc.starts_with(&ord_num_th) {
-                ord_num_th.len()
-            } else if clean_desc.starts_with(&ord_num_1st) {
-                ord_num_1st.len()
-            } else if clean_desc.starts_with(&ord_num_2nd) {
-                ord_num_2nd.len()
-            } else if clean_desc.starts_with(&ord_num_3rd) {
-                ord_num_3rd.len()
-            } else {
-                ord_num_plain.len()
-            };
-
-            let remainder = clean_desc[ord_prefix_len..].trim_start();
-
-            if remainder == clean_name {
+        let is_match = |remainder: &str| -> bool {
+            if eq_ignore_case(remainder, clean_name, self.strict_diacritics) {
                 return true;
             }
-            if let Some(collective) = entity.collective_noun() {
-                let coll_lower = collective.to_lowercase();
-                if remainder.starts_with(&coll_lower) && remainder.ends_with(clean_name) {
-                    return true;
-                }
+            if let Some(collective) = entity.collective_noun()
+                && starts_with_ignore_case(remainder, collective, self.strict_diacritics)
+                && ends_with_ignore_case(remainder, clean_name, self.strict_diacritics)
+            {
+                return true;
+            }
+            false
+        };
+
+        let check_prefix = |variant_len: usize| -> bool {
+            if clean_desc.len() > variant_len
+                && clean_desc.as_bytes().get(variant_len) == Some(&b' ')
+            {
+                let remainder = clean_desc[variant_len + 1..].trim_start();
+                is_match(remainder)
+            } else {
+                false
+            }
+        };
+
+        // 1. Prefix: Ordinal Word
+        if clean_desc.starts_with(&ord_word) && check_prefix(ord_word.len()) {
+            return true;
+        }
+
+        // 2. Prefix: Numeric Ordinal
+        if clean_desc.starts_with(&ord_str) {
+            let after_num = &clean_desc[ord_str.len()..];
+            let has_suffix = after_num.starts_with("th")
+                || after_num.starts_with("st")
+                || after_num.starts_with("nd")
+                || after_num.starts_with("rd");
+
+            if has_suffix && check_prefix(ord_str.len() + 2) {
+                return true;
+            }
+            if check_prefix(ord_str.len()) {
+                return true;
             }
         }
 
-        let postfix_word = format!(" {ord_word}");
-        let postfix_th = format!(" {ord_num_th}");
-        let postfix_1st = format!(" {ord_num_1st}");
-        let postfix_2nd = format!(" {ord_num_2nd}");
-        let postfix_3rd = format!(" {ord_num_3rd}");
-        let postfix_plain = format!(" {ord_num_plain}");
-
-        let matches_postfix = clean_desc.ends_with(&postfix_word)
-            || clean_desc.ends_with(&postfix_th)
-            || clean_desc.ends_with(&postfix_1st)
-            || clean_desc.ends_with(&postfix_2nd)
-            || clean_desc.ends_with(&postfix_3rd)
-            || clean_desc.ends_with(&postfix_plain);
-
-        if matches_postfix {
-            let clean_name = strip_articles(name_to_check);
-
-            let ord_postfix_len = if clean_desc.ends_with(&postfix_word) {
-                postfix_word.len()
-            } else if clean_desc.ends_with(&postfix_th) {
-                postfix_th.len()
-            } else if clean_desc.ends_with(&postfix_1st) {
-                postfix_1st.len()
-            } else if clean_desc.ends_with(&postfix_2nd) {
-                postfix_2nd.len()
-            } else if clean_desc.ends_with(&postfix_3rd) {
-                postfix_3rd.len()
+        let check_postfix = |variant_len: usize| -> bool {
+            if clean_desc.len() > variant_len
+                && clean_desc
+                    .as_bytes()
+                    .get(clean_desc.len() - variant_len - 1)
+                    == Some(&b' ')
+            {
+                let remainder = clean_desc[..clean_desc.len() - variant_len - 1].trim_end();
+                is_match(remainder)
             } else {
-                postfix_plain.len()
-            };
+                false
+            }
+        };
 
-            let remainder = clean_desc[..clean_desc.len() - ord_postfix_len].trim_end();
+        // 3. Postfix: Ordinal Word
+        if clean_desc.ends_with(&ord_word) && check_postfix(ord_word.len()) {
+            return true;
+        }
 
-            if remainder == clean_name {
+        // 4. Postfix: Numeric Ordinal
+        let has_suffix = clean_desc.ends_with("th")
+            || clean_desc.ends_with("st")
+            || clean_desc.ends_with("nd")
+            || clean_desc.ends_with("rd");
+
+        if has_suffix && clean_desc.len() >= 2 + ord_str.len() {
+            let num_end_idx = clean_desc.len() - 2;
+            if clean_desc[..num_end_idx].ends_with(&ord_str) && check_postfix(ord_str.len() + 2) {
                 return true;
             }
-            if let Some(collective) = entity.collective_noun() {
-                let coll_lower = collective.to_lowercase();
-                if remainder.starts_with(&coll_lower) && remainder.ends_with(clean_name) {
-                    return true;
-                }
-            }
+        }
+
+        if clean_desc.ends_with(&ord_str) && check_postfix(ord_str.len()) {
+            return true;
         }
 
         false
@@ -666,6 +651,15 @@ impl<'a> RenderContext<'a> {
     #[must_use]
     pub fn with_ordinal_word_threshold(mut self, threshold: usize) -> Self {
         self.ordinal_word_threshold = threshold;
+        self
+    }
+
+    /// Enables or disables strict diacritic matching for target resolution.
+    /// If `true`, users must input exact accents/diacritics to match entities.
+    /// If `false` (default), the engine transliterates Unicode to ASCII for fuzzy matching (e.g., "Ängry" matches "angry").
+    #[must_use]
+    pub fn with_strict_diacritics(mut self, strict: bool) -> Self {
+        self.strict_diacritics = strict;
         self
     }
 
@@ -915,7 +909,11 @@ fn strip_articles(mut s: &str) -> &str {
     while modified {
         modified = false;
         for prefix in &prefixes {
-            if s.starts_with(prefix) {
+            if s.len() >= prefix.len()
+                && s.as_bytes()
+                    .get(..prefix.len())
+                    .is_some_and(|b| b.eq_ignore_ascii_case(prefix.as_bytes()))
+            {
                 s = &s[prefix.len()..];
                 modified = true;
                 break;
@@ -925,51 +923,120 @@ fn strip_articles(mut s: &str) -> &str {
     s
 }
 
+#[inline]
+fn eq_ignore_case(lower_str: &str, mixed_str: &str, strict: bool) -> bool {
+    if lower_str.is_ascii() && mixed_str.is_ascii() {
+        lower_str.eq_ignore_ascii_case(mixed_str)
+    } else if strict {
+        lower_str
+            .chars()
+            .eq(mixed_str.chars().flat_map(char::to_lowercase))
+    } else {
+        deunicode::deunicode(lower_str).to_lowercase()
+            == deunicode::deunicode(mixed_str).to_lowercase()
+    }
+}
+
+#[inline]
+fn starts_with_ignore_case(lower_str: &str, mixed_prefix: &str, strict: bool) -> bool {
+    if lower_str.is_ascii() && mixed_prefix.is_ascii() {
+        lower_str.len() >= mixed_prefix.len()
+            && lower_str
+                .as_bytes()
+                .get(..mixed_prefix.len())
+                .is_some_and(|b| b.eq_ignore_ascii_case(mixed_prefix.as_bytes()))
+    } else if strict {
+        let mut s_iter = lower_str.chars();
+        for p in mixed_prefix.chars().flat_map(char::to_lowercase) {
+            if Some(p) != s_iter.next() {
+                return false;
+            }
+        }
+        true
+    } else {
+        deunicode::deunicode(lower_str)
+            .to_lowercase()
+            .starts_with(&deunicode::deunicode(mixed_prefix).to_lowercase())
+    }
+}
+
+#[inline]
+fn ends_with_ignore_case(lower_str: &str, mixed_suffix: &str, strict: bool) -> bool {
+    if lower_str.is_ascii() && mixed_suffix.is_ascii() {
+        lower_str.len() >= mixed_suffix.len()
+            && lower_str
+                .as_bytes()
+                .get(lower_str.len() - mixed_suffix.len()..)
+                .is_some_and(|b| b.eq_ignore_ascii_case(mixed_suffix.as_bytes()))
+    } else if strict {
+        let mut s_iter = lower_str.chars().rev();
+        for p in mixed_suffix
+            .chars()
+            .rev()
+            .flat_map(|c| c.to_lowercase().rev())
+        {
+            if Some(p) != s_iter.next() {
+                return false;
+            }
+        }
+        true
+    } else {
+        deunicode::deunicode(lower_str)
+            .to_lowercase()
+            .ends_with(&deunicode::deunicode(mixed_suffix).to_lowercase())
+    }
+}
+
 fn parse_target_description(desc: &str) -> (String, Option<String>) {
-    let lower = desc.to_lowercase();
+    let lower = desc.to_lowercase().replace('’', "'");
     let mut text = lower
         .trim()
-        .trim_end_matches(|c: char| c.is_ascii_punctuation());
+        .trim_end_matches(['.', '!', '?', ',', ';', ':']);
 
     let mut base = String::new();
-    let mut path_segments = Vec::new();
+    let mut path = String::new();
 
     let possessive_pronouns = ["his ", "her ", "its ", "their ", "your ", "my ", "our "];
     for prefix in &possessive_pronouns {
         if text.starts_with(prefix) {
-            base = prefix.trim().to_string();
+            base.push_str(prefix.trim());
             text = text[prefix.len()..].trim();
             break;
         }
     }
 
     while !text.is_empty() {
-        let (owner, advance) = if let Some(idx) = text.find("'s ") {
-            (text[..idx].to_string(), idx + 3)
+        let (owner, advance, add_s) = if let Some(idx) = text.find("'s ") {
+            (&text[..idx], idx + 3, false)
         } else if let Some(idx) = text.find("s' ") {
-            (format!("{}s", &text[..idx]), idx + 3)
+            (&text[..idx], idx + 3, true)
         } else if let Some(idx) = text.find("' ") {
-            (text[..idx].to_string(), idx + 2)
+            (&text[..idx], idx + 2, false)
         } else {
-            (text.to_string(), text.len())
+            (text, text.len(), false)
         };
 
         if base.is_empty() {
-            base = owner;
+            base.push_str(owner);
+            if add_s {
+                base.push('s');
+            }
         } else {
-            path_segments.push(owner);
+            if !path.is_empty() {
+                path.push('.');
+            }
+            path.push_str(owner);
+            if add_s {
+                path.push('s');
+            }
         }
 
         text = text.get(advance..).unwrap_or_default().trim();
     }
 
-    let path = if path_segments.is_empty() {
-        None
-    } else {
-        Some(path_segments.join("."))
-    };
+    let path_opt = if path.is_empty() { None } else { Some(path) };
 
-    (base, path)
+    (base, path_opt)
 }
 
 /// A type alias representing an evaluated group member and its resolved display name.

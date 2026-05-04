@@ -2,7 +2,7 @@ use crate::engine::Template;
 use moka::sync::Cache;
 use std::sync::Arc;
 
-/// A highly concurrent, thread-safe cache for compiled text templates.
+/// A concurrent, thread-safe cache for compiled text templates.
 ///
 /// Because MUDs process high volumes of text concurrently, this cache wraps the
 /// underlying owned ASTs in an `Arc`. This allows multiple network threads to safely

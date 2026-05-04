@@ -69,7 +69,7 @@ macro_rules! render_msg {
 
 /// Ergonomically registers multiple custom irregular verbs into the runtime dictionary at once.
 ///
-/// This macro is highly useful during server initialization for injecting a large
+/// This macro is useful during server initialization for injecting a large
 /// number of custom or lore-specific verbs. It silently overwrites any existing
 /// runtime entries for the provided base verbs.
 ///

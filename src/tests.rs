@@ -6865,6 +6865,12 @@ mod tests {
         assert_eq!(m_first.len(), 1);
         assert_eq!(m_first[0].key, "o1");
 
+        let m_bad_post = ctx.resolve_target("orc1");
+        assert_eq!(m_bad_post.len(), 0);
+
+        let m_bad_pre = ctx.resolve_target("firstorc");
+        assert_eq!(m_bad_pre.len(), 0);
+
         // 2. Postfix syntax for unambiguous items (defaults to 1)
         let m3 = ctx.resolve_target("goblin 1");
         assert_eq!(m3.len(), 1);
@@ -7022,5 +7028,347 @@ mod tests {
         // 6. Simulate Player Input: "attack it" (Ambiguous pronoun, both neutral goblins are in memory)
         let targets_pronoun = ctx.resolve_target("it");
         assert_eq!(targets_pronoun.len(), 2);
+    }
+
+    #[test]
+    fn test_resolve_target_unicode_optimizations() {
+        struct UnicodeMob {
+            name: &'static str,
+            aliases: &'static [&'static str],
+        }
+        impl TemplateEntity for UnicodeMob {
+            fn contains_viewer(&self, _: &str) -> bool {
+                false
+            }
+            fn gender(&self) -> Gender {
+                Gender::Neutral
+            }
+            fn is_plural(&self) -> bool {
+                false
+            }
+            fn is_proper_noun_for(&self, _: &str) -> bool {
+                false
+            }
+            fn display_name_for<'a>(&'a self, _: &str) -> Cow<'a, str> {
+                Cow::Borrowed(self.name)
+            }
+            fn aliases(&self) -> Option<&[&str]> {
+                Some(self.aliases)
+            }
+        }
+
+        let w1 = UnicodeMob {
+            name: "Ängry Wölf",
+            aliases: &["Grümpy Bëast"],
+        };
+        let w2 = UnicodeMob {
+            name: "Ängry Wölf",
+            aliases: &[],
+        }; // Identical name for ordinals testing
+        let o1 = UnicodeMob {
+            name: "Mÿstïc Ørc",
+            aliases: &[],
+        };
+
+        let ctx = RenderContext::new("viewer")
+            .with_entity("w1", &w1)
+            .with_entity("w2", &w2)
+            .with_entity("o1", &o1);
+
+        // Seed ordinals
+        let cache = TemplateCache::new(100);
+        let t = cache
+            .get_or_compile("{A:w1}, {a:w2}, and {a:o1} arrive.")
+            .unwrap();
+        PerspectiveEngine::render(&t, &ctx).unwrap();
+
+        // 1. Case-insensitive exact match downgrading to ASCII
+        let m1 = ctx.resolve_target("angry wolf");
+        assert_eq!(m1.len(), 2); // Matches both due to ordinals grouping
+
+        let m_orc = ctx.resolve_target("MYSTIC ORC"); // Fully uppercase ASCII string
+        assert_eq!(m_orc.len(), 1);
+        assert_eq!(m_orc[0].key, "o1");
+
+        // 2. Case-insensitive article stripping with ASCII
+        let m2 = ctx.resolve_target("The angry wolf");
+        assert_eq!(m2.len(), 2);
+
+        // 3. Aliases with ASCII and case difference
+        let m3 = ctx.resolve_target("grumpy beast");
+        assert_eq!(m3.len(), 1);
+        assert_eq!(m3[0].key, "w1");
+
+        // 4. Ordinals interacting directly with ASCII mapped to Unicode names
+        let m4 = ctx.resolve_target("first angry wolf");
+        assert_eq!(m4.len(), 1);
+        assert_eq!(m4[0].key, "w1");
+
+        let m5 = ctx.resolve_target("ANGRY WOLF 2"); // Postfix check with differing cases
+        assert_eq!(m5.len(), 1);
+        assert_eq!(m5[0].key, "w2");
+    }
+
+    #[test]
+    fn test_resolve_target_strict_diacritics() {
+        struct UnicodeMob {
+            name: &'static str,
+        }
+        impl TemplateEntity for UnicodeMob {
+            fn contains_viewer(&self, _: &str) -> bool {
+                false
+            }
+            fn gender(&self) -> Gender {
+                Gender::Neutral
+            }
+            fn is_plural(&self) -> bool {
+                false
+            }
+            fn is_proper_noun_for(&self, _: &str) -> bool {
+                false
+            }
+            fn display_name_for<'a>(&'a self, _: &str) -> Cow<'a, str> {
+                Cow::Borrowed(self.name)
+            }
+        }
+
+        let w1 = UnicodeMob {
+            name: "Ängry Wölf"
+        };
+
+        // Enable strict diacritic matching!
+        let ctx = RenderContext::new("viewer")
+            .with_entity("w1", &w1)
+            .with_strict_diacritics(true);
+
+        // 1. Exact match with correct diacritics still succeeds natively
+        assert_eq!(ctx.resolve_target("ängry wölf").len(), 1);
+
+        // 2. ASCII transliteration fails because strict mode is on!
+        assert_eq!(ctx.resolve_target("angry wolf").len(), 0);
+    }
+
+    #[test]
+    fn test_resolve_target_smart_quotes_and_spaces() {
+        struct Item {
+            name: &'static str,
+        }
+        impl TemplateEntity for Item {
+            fn contains_viewer(&self, _: &str) -> bool {
+                false
+            }
+            fn gender(&self) -> Gender {
+                Gender::Neutral
+            }
+            fn is_plural(&self) -> bool {
+                false
+            }
+            fn is_proper_noun_for(&self, _: &str) -> bool {
+                false
+            }
+            fn display_name_for<'a>(&'a self, _: &str) -> Cow<'a, str> {
+                Cow::Borrowed(self.name)
+            }
+        }
+
+        struct Actor {
+            name: String,
+            weapon: Item,
+        }
+        impl TemplateEntity for Actor {
+            fn contains_viewer(&self, viewer_id: &str) -> bool {
+                viewer_id == "char_1"
+            }
+            fn gender(&self) -> Gender {
+                Gender::Male
+            }
+            fn is_plural(&self) -> bool {
+                false
+            }
+            fn is_proper_noun_for(&self, _: &str) -> bool {
+                true
+            }
+            fn display_name_for<'a>(&'a self, _: &str) -> Cow<'a, str> {
+                Cow::Borrowed(&self.name)
+            }
+            fn get_property(&self, property_name: &str) -> Option<&dyn TemplateEntity> {
+                match property_name {
+                    "sword" => Some(&self.weapon),
+                    _ => None,
+                }
+            }
+        }
+
+        let player = Actor {
+            name: "Aldran".to_string(),
+            weapon: Item {
+                name: "rusty sword",
+            },
+        };
+        let robot = Actor {
+            name: "Robot 5".to_string(),
+            weapon: Item {
+                name: "laser sword",
+            },
+        };
+
+        let ctx = RenderContext::new("char_2")
+            .with_entity("aldran", &player)
+            .with_entity("robot", &robot);
+
+        // 1. Smart quotes
+        let m1 = ctx.resolve_target("Aldran’s sword");
+        assert_eq!(m1[0].path.as_deref(), Some("sword"));
+
+        // 2. Errant spaces before apostrophes should NOT match
+        let m2 = ctx.resolve_target("Aldran 's sword");
+        assert_eq!(m2.len(), 0);
+
+        // 3. Multiple spaces after apostrophes
+        let m3 = ctx.resolve_target("Aldran's   sword");
+        assert_eq!(m3[0].path.as_deref(), Some("sword"));
+
+        // 4. Names with numbers
+        let m4 = ctx.resolve_target("Robot 5's sword");
+        assert_eq!(m4[0].key, "robot");
+    }
+
+    #[test]
+    fn test_resolve_target_possessive_ending_in_s() {
+        struct Item {
+            name: &'static str,
+        }
+        impl TemplateEntity for Item {
+            fn contains_viewer(&self, _: &str) -> bool {
+                false
+            }
+            fn gender(&self) -> Gender {
+                Gender::Neutral
+            }
+            fn is_plural(&self) -> bool {
+                false
+            }
+            fn is_proper_noun_for(&self, _: &str) -> bool {
+                false
+            }
+            fn display_name_for<'a>(&'a self, _: &str) -> Cow<'a, str> {
+                Cow::Borrowed(self.name)
+            }
+        }
+
+        struct Actor {
+            name: String,
+            weapon: Item,
+        }
+        impl TemplateEntity for Actor {
+            fn contains_viewer(&self, _: &str) -> bool {
+                false
+            }
+            fn gender(&self) -> Gender {
+                Gender::Male
+            }
+            fn is_plural(&self) -> bool {
+                false
+            }
+            fn is_proper_noun_for(&self, _: &str) -> bool {
+                true
+            }
+            fn display_name_for<'a>(&'a self, _: &str) -> Cow<'a, str> {
+                Cow::Borrowed(&self.name)
+            }
+            fn get_property(&self, property_name: &str) -> Option<&dyn TemplateEntity> {
+                match property_name {
+                    "sword" | "claws" => Some(&self.weapon),
+                    _ => None,
+                }
+            }
+        }
+
+        let lucas = Actor {
+            name: "Lucas".to_string(),
+            weapon: Item {
+                name: "rusty sword",
+            },
+        };
+        let wolves = Actor {
+            name: "wolves".to_string(),
+            weapon: Item {
+                name: "sharp claws",
+            },
+        };
+
+        let ctx = RenderContext::new("viewer")
+            .with_entity("lucas", &lucas)
+            .with_entity("wolves", &wolves);
+
+        // 1. Singular name ending in 's' using trailing apostrophe
+        let m1 = ctx.resolve_target("Lucas' sword");
+        assert_eq!(m1.len(), 1);
+        assert_eq!(m1[0].key, "lucas");
+        assert_eq!(m1[0].path.as_deref(), Some("sword"));
+
+        // 2. Singular name ending in 's' using `'s`
+        let m2 = ctx.resolve_target("Lucas's sword");
+        assert_eq!(m2.len(), 1);
+        assert_eq!(m2[0].key, "lucas");
+        assert_eq!(m2[0].path.as_deref(), Some("sword"));
+
+        // 3. Plural noun ending in 's' using trailing apostrophe
+        let m3 = ctx.resolve_target("the wolves' claws");
+        assert_eq!(m3.len(), 1);
+        assert_eq!(m3[0].key, "wolves");
+        assert_eq!(m3[0].path.as_deref(), Some("claws"));
+
+        // 4. Incomplete plural possessive should NOT match the base entity
+        let m4 = ctx.resolve_target("the wolves'");
+        assert_eq!(m4.len(), 0);
+
+        // 5. Ensure trailing sentence punctuation is still safely stripped
+        let m5 = ctx.resolve_target("the wolves.");
+        assert_eq!(m5.len(), 1);
+
+        // 6. Incomplete singular possessives ending in 's' should NOT match the base entity
+        let m6 = ctx.resolve_target("Lucas'");
+        assert_eq!(m6.len(), 0);
+        assert_eq!(ctx.resolve_target("Lucas's").len(), 0);
+    }
+
+    #[test]
+    fn test_trailing_apostrophe_in_template_tag() {
+        let wolves = MockEntity {
+            id: "mob_1".to_string(),
+            name: "wolves".to_string(),
+            gender: Gender::Plural,
+            is_plural: true,
+            is_proper_noun: false,
+        };
+        let boss = MockEntity {
+            id: "mob_2".to_string(),
+            name: "boss".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+        let ctx = RenderContext::new("viewer")
+            .with_entity("wolves", &wolves)
+            .with_entity("boss", &boss);
+
+        // Builders might naturally write `{wolves'}` instead of `{wolves's}` to denote possession.
+        // The parser safely accepts trailing apostrophes and evaluates them as possessives!
+        let t1 = cache
+            .get_or_compile("You hear {the:wolves'} howls.")
+            .unwrap();
+        let t2 = cache.get_or_compile("You take {the:boss'} gold.").unwrap();
+
+        assert_eq!(
+            PerspectiveEngine::render(&t1, &ctx).unwrap(),
+            "You hear the wolves' howls."
+        );
+        assert_eq!(
+            PerspectiveEngine::render(&t2, &ctx).unwrap(),
+            "You take the boss's gold."
+        );
     }
 }
