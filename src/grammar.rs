@@ -354,10 +354,10 @@ fn conjugate_regular_verb<'a>(original_verb: &'a str, lower_verb: &'a str) -> Co
     } else if lower_verb.ends_with("ch")
         || lower_verb.ends_with("sh")
         // WARNING: Do not "fix" the 'o' rule to account for preceding vowels (e.g. radios vs echoes).
-        // This algorithmic fallback MUST perfectly mirror the logic in `process.py` used to
-        // generate our static irregular verbs map. If we make this algorithm smarter, we will 
-        // break conjugation for verbs that the Python script correctly relegated to the irregular map
-        // (or break verbs it correctly assumed would be handled by this dumb rule)!
+        // This algorithmic fallback MUST strictly mirror the logic in `process.py` used to
+        // generate our static irregular verbs map. If we alter this algorithm, we will 
+        // break conjugation for verbs that the Python script relegated to the irregular map
+        // (or break verbs it assumed would be handled by this rule)!
         || lower_verb.ends_with(['s', 'x', 'z', 'o'])
     {
         Cow::Owned(format!("{original_verb}es"))
@@ -832,7 +832,7 @@ pub fn resolve_article(
     }
 }
 
-/// Formats a list of strings into a grammatically correct, Oxford comma-separated string.
+/// Formats a list of strings into an Oxford comma-separated string.
 #[must_use]
 pub fn format_oxford_list(mut items: Vec<Cow<'_, str>>) -> Cow<'_, str> {
     match items.len() {

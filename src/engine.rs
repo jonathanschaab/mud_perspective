@@ -275,14 +275,14 @@ impl Template {
         let (actual_verb, forced_present, forced_past) =
             if let Some((base_verb, forced)) = verb_part.split_once(VERB_FORM_SEP) {
                 reject_if(
-                    base_verb.is_empty() || forced.is_empty(),
+                    base_verb.trim().is_empty() || forced.trim().is_empty(),
                     "Verb tag has an empty verb or forced conjugation segment",
                     content,
                     TAG_VERB_OPEN,
                 )?;
 
                 let (forced_present, forced_past) = parse_forced_conjugations(forced, content)?;
-                (base_verb, forced_present, forced_past)
+                (base_verb.trim(), forced_present, forced_past)
             } else {
                 (verb_part, None, None)
             };
@@ -1011,7 +1011,7 @@ impl PerspectiveEngine {
         #[cfg(any(feature = "mxp", feature = "msp", feature = "ansi"))]
         {
             // Fast-path: If no protocol triggers exist, use Rust's native reverse iterator.
-            // (SIMD pre-scan is highly optimized, and next_back() evaluates from the end).
+            // (SIMD pre-scan is optimized, and next_back() evaluates from the end).
             if !has_protocol_tags(input) {
                 return input.trim_end().chars().next_back();
             }
@@ -1499,6 +1499,7 @@ fn parse_stance_prefixes(mut s: &str) -> (&str, bool, bool, bool) {
     let mut no_smart = false;
     let mut force_singular = false;
     loop {
+        s = s.trim_start();
         if let Some(stripped) = s.strip_prefix(MOD_FORCE_3RD_PERSON) {
             force_3rd_person = true;
             s = stripped;
@@ -1575,7 +1576,10 @@ fn parse_forced_conjugations(
         };
 
     if !pres_str.is_empty() {
-        let parts: Vec<String> = pres_str.split(VERB_FORM_SEP).map(str::to_string).collect();
+        let parts: Vec<String> = pres_str
+            .split(VERB_FORM_SEP)
+            .map(|s| s.trim().to_string())
+            .collect();
         for part in &parts {
             reject_if(
                 part.is_empty(),
@@ -1602,7 +1606,7 @@ fn parse_forced_conjugations(
         )?;
         let parts: Vec<String> = past_overrides_str
             .split(VERB_FORM_SEP)
-            .map(str::to_string)
+            .map(|s| s.trim().to_string())
             .collect();
         for part in &parts {
             reject_if(
@@ -1631,8 +1635,8 @@ fn split_tag<'a>(
     malformed_msg: &str,
 ) -> Result<(&'a str, Option<&'a str>), String> {
     let mut parts = content.split(TAG_SEPARATOR);
-    let p1 = parts.next().unwrap_or_default();
-    let p2 = parts.next();
+    let p1 = parts.next().unwrap_or_default().trim();
+    let p2 = parts.next().map(str::trim);
     reject_if(parts.next().is_some(), malformed_msg, content, open_char)?;
     Ok((p1, p2))
 }
@@ -1817,7 +1821,7 @@ fn reject_if(
     }
 }
 
-/// Performs a highly optimized SIMD pre-scan to detect the presence of protocol triggers.
+/// Performs a SIMD pre-scan to detect the presence of protocol triggers.
 ///
 /// **Optimization Rationale:** By running this once before iterating over a string's characters,
 /// the engine can completely bypass the overhead of slicing and tag validation inside the hot loop
@@ -1869,6 +1873,12 @@ fn effective_viewer_id<'a>(ctx: &RenderContext<'a>, force_3rd_person: bool) -> &
 #[inline]
 fn parse_possessive_suffix(s: &str) -> (&str, bool) {
     if let Some(stripped) = s.strip_suffix(MOD_POSSESSIVE) {
+        (stripped, true)
+    } else if let Some(stripped) = s.strip_suffix("’s") {
+        (stripped, true)
+    } else if let Some(stripped) = s.strip_suffix('\'') {
+        (stripped, true)
+    } else if let Some(stripped) = s.strip_suffix('’') {
         (stripped, true)
     } else {
         (s, false)
