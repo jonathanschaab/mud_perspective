@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::collections::HashSet;
 
 /// The highly unique sentinel string used by the engine to temporarily force the Director Stance.
 pub const NULL_VIEWER: &str = "\0__MUD_PERSPECTIVE_NULL_VIEWER__\0";
@@ -135,6 +136,12 @@ pub trait TemplateEntity {
     fn get_property(&self, _property_name: &str) -> Option<&dyn TemplateEntity> {
         None
     }
+
+    /// Returns an optional list of alternative names or aliases the user can use to target this entity.
+    /// Used exclusively by `RenderContext::resolve_target`.
+    fn aliases(&self) -> Option<&[&str]> {
+        None
+    }
 }
 
 /// Tracks the assignment of ordinals for entities with colliding names.
@@ -223,6 +230,51 @@ pub struct AnaphoraState {
     pub ordinals: HashMap<String, OrdinalState>,
 }
 
+/// Represents a matched entity and an optional sub-element path requested by the user.
+#[derive(Clone)]
+pub struct TargetMatch<'a> {
+    /// The template key of the matched entity.
+    pub key: String,
+    /// A reference to the matched entity.
+    pub entity: &'a dyn TemplateEntity,
+    /// An optional path to a sub-element (e.g., "sword" in "Aldran's sword").
+    pub path: Option<String>,
+    /// True if a `path` is present but the entity's `get_property` could not confirm it exists.
+    pub path_uncertain: bool,
+}
+
+impl std::fmt::Debug for TargetMatch<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TargetMatch")
+            .field("key", &self.key)
+            .field("path", &self.path)
+            .field("path_uncertain", &self.path_uncertain)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<'a> TargetMatch<'a> {
+    /// Resolves and returns the deepest sub-element `TemplateEntity` requested by the path.
+    /// If no path was requested, this returns the base matched entity.
+    /// If the requested path is invalid, returns `None`.
+    #[must_use]
+    pub fn resolve_deep_entity(&self) -> Option<&'a dyn TemplateEntity> {
+        if let Some(ref path) = self.path {
+            let mut current = self.entity;
+            for prop in path.split('.') {
+                if let Some(next) = current.get_property(prop) {
+                    current = next;
+                } else {
+                    return None;
+                }
+            }
+            Some(current)
+        } else {
+            Some(self.entity)
+        }
+    }
+}
+
 impl<'a> RenderContext<'a> {
     /// Initializes a new, empty rendering context for the specified viewer.
     ///
@@ -243,6 +295,340 @@ impl<'a> RenderContext<'a> {
             recent_entities: RefCell::new(Vec::new()),
             ordinals: RefCell::new(HashMap::new()),
         }
+    }
+
+    /// Resolves a natural language description (e.g., "him", "the fourth wolf", "Aldran's sword")
+    /// to the corresponding entities in the current context.
+    ///
+    /// Returns a list of `TargetMatch` objects. If the description is ambiguous (e.g., "him" when
+    /// two males are present), the list will contain multiple matches, allowing the caller to ask
+    /// the user for clarification.
+    ///
+    /// If the description references a sub-element (e.g., "his sword"), the `path` field will be
+    /// populated with "sword". If the parent entity does not expose this property via `get_property`,
+    /// `path_uncertain` will be `true`, allowing the caller to decide whether to accept it.
+    #[must_use]
+    pub fn resolve_target(&self, description: &str) -> Vec<TargetMatch<'a>> {
+        let (base_desc, sub_element_desc) = parse_target_description(description);
+
+        let matches = self
+            .resolve_pronoun_targets(&base_desc)
+            .unwrap_or_else(|| self.resolve_name_targets(&base_desc));
+
+        let mut unique_matches = Vec::new();
+        let mut seen = HashSet::new();
+        for (key, entity) in matches {
+            if seen.insert(key.clone()) {
+                let path_uncertain = if let Some(ref path) = sub_element_desc {
+                    let mut current_entity = entity;
+                    let mut exists = true;
+                    for prop in path.split('.') {
+                        if let Some(next) = current_entity.get_property(prop) {
+                            current_entity = next;
+                        } else {
+                            exists = false;
+                            break;
+                        }
+                    }
+                    !exists
+                } else {
+                    false
+                };
+
+                unique_matches.push(TargetMatch {
+                    key,
+                    entity,
+                    path: sub_element_desc.clone(),
+                    path_uncertain,
+                });
+            }
+        }
+
+        unique_matches
+    }
+
+    /// Resolves a natural language description to the corresponding entities in the current context,
+    /// strictly filtering out any matches where the requested sub-element path cannot be confirmed.
+    ///
+    /// This is equivalent to calling `resolve_target` and retaining only the matches where `path_uncertain` is `false`.
+    #[must_use]
+    pub fn resolve_target_strict(&self, description: &str) -> Vec<TargetMatch<'a>> {
+        self.resolve_target(description)
+            .into_iter()
+            .filter(|m| !m.path_uncertain)
+            .collect()
+    }
+
+    fn resolve_pronoun_targets(
+        &self,
+        base_desc: &str,
+    ) -> Option<Vec<(String, &'a dyn TemplateEntity)>> {
+        let is_pronoun = matches!(
+            base_desc,
+            "he" | "him"
+                | "his"
+                | "himself"
+                | "she"
+                | "her"
+                | "hers"
+                | "herself"
+                | "it"
+                | "its"
+                | "itself"
+                | "they"
+                | "them"
+                | "their"
+                | "theirs"
+                | "themselves"
+                | "you"
+                | "your"
+                | "yours"
+                | "yourself"
+                | "yourselves"
+                | "i"
+                | "me"
+                | "my"
+                | "mine"
+                | "myself"
+                | "we"
+                | "us"
+                | "our"
+                | "ours"
+                | "ourselves"
+        );
+
+        if !is_pronoun {
+            return None;
+        }
+
+        let mut matches = Vec::new();
+        for recent in self.recent_entities.borrow().iter() {
+            if let Some(&entity) = self.entities.get(recent.key.as_str()) {
+                let is_plural = recent.flags.contains(RecentEntityFlags::IS_PLURAL);
+                let gender = recent.gender;
+                let is_viewer = recent.flags.contains(RecentEntityFlags::IS_VIEWER_NORMAL)
+                    || recent.flags.contains(RecentEntityFlags::IS_VIEWER_FORCED);
+
+                let matches_pro = if is_viewer {
+                    matches!(
+                        base_desc,
+                        "you"
+                            | "your"
+                            | "yours"
+                            | "yourself"
+                            | "yourselves"
+                            | "i"
+                            | "me"
+                            | "my"
+                            | "mine"
+                            | "myself"
+                            | "we"
+                            | "us"
+                            | "our"
+                            | "ours"
+                            | "ourselves"
+                    )
+                } else {
+                    match base_desc {
+                        "he" | "him" | "his" | "himself" => gender == Gender::Male && !is_plural,
+                        "she" | "her" | "hers" | "herself" => {
+                            gender == Gender::Female && !is_plural
+                        }
+                        "it" | "its" | "itself" => gender == Gender::Neutral && !is_plural,
+                        "they" | "them" | "their" | "theirs" | "themselves" => {
+                            gender == Gender::Plural || is_plural
+                        }
+                        _ => false,
+                    }
+                };
+
+                if matches_pro {
+                    matches.push((recent.key.clone(), entity));
+                }
+            }
+        }
+
+        Some(matches)
+    }
+
+    fn resolve_name_targets(&self, base_desc: &str) -> Vec<(String, &'a dyn TemplateEntity)> {
+        let clean_desc = strip_articles(base_desc);
+        let mut name_matches = Vec::new();
+        for recent in self.recent_entities.borrow().iter() {
+            if let Some(&entity) = self.entities.get(recent.key.as_str())
+                && self.entity_matches_name(&recent.key, entity, clean_desc)
+            {
+                name_matches.push((recent.key.clone(), entity));
+            }
+        }
+
+        if name_matches.is_empty() {
+            for (&key, &entity) in &self.entities {
+                if self.entity_matches_name(key, entity, clean_desc) {
+                    name_matches.push((key.to_string(), entity));
+                }
+            }
+        }
+        name_matches
+    }
+
+    fn entity_matches_name(
+        &self,
+        key: &str,
+        entity: &dyn TemplateEntity,
+        clean_desc: &str,
+    ) -> bool {
+        let short_name = entity.display_name_for(self.viewer_id).to_lowercase();
+        let short_name_3rd = entity.display_name_for(NULL_VIEWER).to_lowercase();
+        let long_name = entity
+            .long_display_name_for(self.viewer_id)
+            .map(|n| n.to_lowercase());
+
+        let clean_short = strip_articles(&short_name);
+        let clean_short_3rd = strip_articles(&short_name_3rd);
+
+        if clean_desc == clean_short || clean_desc == clean_short_3rd {
+            return true;
+        }
+        if let Some(ref ln) = long_name {
+            let clean_long = strip_articles(ln);
+            if clean_desc == clean_long {
+                return true;
+            }
+        }
+
+        if let Some(aliases) = entity.aliases() {
+            for alias in aliases {
+                let lower_alias = alias.to_lowercase();
+                let clean_alias = strip_articles(&lower_alias);
+                if clean_desc == clean_alias {
+                    return true;
+                }
+            }
+        }
+
+        if self.check_ordinals(&short_name, key, clean_desc, entity) {
+            return true;
+        }
+        if self.check_ordinals(&short_name_3rd, key, clean_desc, entity) {
+            return true;
+        }
+        if let Some(ref ln) = long_name
+            && self.check_ordinals(ln, key, clean_desc, entity)
+        {
+            return true;
+        }
+
+        false
+    }
+
+    #[allow(clippy::similar_names)]
+    fn check_ordinals(
+        &self,
+        name_to_check: &str,
+        key: &str,
+        clean_desc: &str,
+        entity: &dyn TemplateEntity,
+    ) -> bool {
+        let ord = if let Some(ord_state) = self.ordinals.borrow().get(name_to_check) {
+            ord_state.members.get(key).copied()
+        } else {
+            None
+        };
+
+        // If the entity has no ordinal assigned (e.g. it's the only one present), assume it is the first.
+        let ord = ord.unwrap_or(1);
+
+        let ord_word =
+            crate::grammar::number_to_ordinal_word(ord, self.ordinal_word_threshold).to_lowercase();
+        let ord_num_th = format!("{ord}th");
+        let ord_num_1st = format!("{ord}st");
+        let ord_num_2nd = format!("{ord}nd");
+        let ord_num_3rd = format!("{ord}rd");
+        let ord_num_plain = format!("{ord}");
+
+        let matches_prefix = clean_desc.starts_with(&ord_word)
+            || clean_desc.starts_with(&ord_num_th)
+            || clean_desc.starts_with(&ord_num_1st)
+            || clean_desc.starts_with(&ord_num_2nd)
+            || clean_desc.starts_with(&ord_num_3rd)
+            || clean_desc.starts_with(&ord_num_plain);
+
+        if matches_prefix {
+            let clean_name = strip_articles(name_to_check);
+
+            let ord_prefix_len = if clean_desc.starts_with(&ord_word) {
+                ord_word.len()
+            } else if clean_desc.starts_with(&ord_num_th) {
+                ord_num_th.len()
+            } else if clean_desc.starts_with(&ord_num_1st) {
+                ord_num_1st.len()
+            } else if clean_desc.starts_with(&ord_num_2nd) {
+                ord_num_2nd.len()
+            } else if clean_desc.starts_with(&ord_num_3rd) {
+                ord_num_3rd.len()
+            } else {
+                ord_num_plain.len()
+            };
+
+            let remainder = clean_desc[ord_prefix_len..].trim_start();
+
+            if remainder == clean_name {
+                return true;
+            }
+            if let Some(collective) = entity.collective_noun() {
+                let coll_lower = collective.to_lowercase();
+                if remainder.starts_with(&coll_lower) && remainder.ends_with(clean_name) {
+                    return true;
+                }
+            }
+        }
+
+        let postfix_word = format!(" {ord_word}");
+        let postfix_th = format!(" {ord_num_th}");
+        let postfix_1st = format!(" {ord_num_1st}");
+        let postfix_2nd = format!(" {ord_num_2nd}");
+        let postfix_3rd = format!(" {ord_num_3rd}");
+        let postfix_plain = format!(" {ord_num_plain}");
+
+        let matches_postfix = clean_desc.ends_with(&postfix_word)
+            || clean_desc.ends_with(&postfix_th)
+            || clean_desc.ends_with(&postfix_1st)
+            || clean_desc.ends_with(&postfix_2nd)
+            || clean_desc.ends_with(&postfix_3rd)
+            || clean_desc.ends_with(&postfix_plain);
+
+        if matches_postfix {
+            let clean_name = strip_articles(name_to_check);
+
+            let ord_postfix_len = if clean_desc.ends_with(&postfix_word) {
+                postfix_word.len()
+            } else if clean_desc.ends_with(&postfix_th) {
+                postfix_th.len()
+            } else if clean_desc.ends_with(&postfix_1st) {
+                postfix_1st.len()
+            } else if clean_desc.ends_with(&postfix_2nd) {
+                postfix_2nd.len()
+            } else if clean_desc.ends_with(&postfix_3rd) {
+                postfix_3rd.len()
+            } else {
+                postfix_plain.len()
+            };
+
+            let remainder = clean_desc[..clean_desc.len() - ord_postfix_len].trim_end();
+
+            if remainder == clean_name {
+                return true;
+            }
+            if let Some(collective) = entity.collective_noun() {
+                let coll_lower = collective.to_lowercase();
+                if remainder.starts_with(&coll_lower) && remainder.ends_with(clean_name) {
+                    return true;
+                }
+            }
+        }
+
+        false
     }
 
     /// Configures the viewer ID for the rendering context.
@@ -510,6 +896,82 @@ pub(crate) fn flatten_group<'c>(
     }
 }
 
+fn strip_articles(mut s: &str) -> &str {
+    let prefixes = [
+        "the ",
+        "a ",
+        "an ",
+        "some ",
+        "this ",
+        "that ",
+        "another ",
+        "other ",
+        "these ",
+        "those ",
+        "one of the ",
+        "one of ",
+    ];
+    let mut modified = true;
+    while modified {
+        modified = false;
+        for prefix in &prefixes {
+            if s.starts_with(prefix) {
+                s = &s[prefix.len()..];
+                modified = true;
+                break;
+            }
+        }
+    }
+    s
+}
+
+fn parse_target_description(desc: &str) -> (String, Option<String>) {
+    let lower = desc.to_lowercase();
+    let mut text = lower
+        .trim()
+        .trim_end_matches(|c: char| c.is_ascii_punctuation());
+
+    let mut base = String::new();
+    let mut path_segments = Vec::new();
+
+    let possessive_pronouns = ["his ", "her ", "its ", "their ", "your ", "my ", "our "];
+    for prefix in &possessive_pronouns {
+        if text.starts_with(prefix) {
+            base = prefix.trim().to_string();
+            text = text[prefix.len()..].trim();
+            break;
+        }
+    }
+
+    while !text.is_empty() {
+        let (owner, advance) = if let Some(idx) = text.find("'s ") {
+            (text[..idx].to_string(), idx + 3)
+        } else if let Some(idx) = text.find("s' ") {
+            (format!("{}s", &text[..idx]), idx + 3)
+        } else if let Some(idx) = text.find("' ") {
+            (text[..idx].to_string(), idx + 2)
+        } else {
+            (text.to_string(), text.len())
+        };
+
+        if base.is_empty() {
+            base = owner;
+        } else {
+            path_segments.push(owner);
+        }
+
+        text = text.get(advance..).unwrap_or_default().trim();
+    }
+
+    let path = if path_segments.is_empty() {
+        None
+    } else {
+        Some(path_segments.join("."))
+    };
+
+    (base, path)
+}
+
 /// A type alias representing an evaluated group member and its resolved display name.
 pub(crate) type EvaluatedMember<'a> = (&'a dyn TemplateEntity, Cow<'a, str>);
 
@@ -625,6 +1087,10 @@ impl TemplateEntity for GroupEntity<'_> {
     fn is_proper_noun_for(&self, viewer_id: &str) -> bool {
         self.single_leaf_member()
             .is_none_or(|m| m.is_proper_noun_for(viewer_id))
+    }
+
+    fn aliases(&self) -> Option<&[&str]> {
+        self.single_leaf_member().and_then(TemplateEntity::aliases)
     }
 }
 

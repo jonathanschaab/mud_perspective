@@ -313,6 +313,51 @@ let template = cache.get_or_compile(
 // "Bob kicks Aldran in the chest. Aldran stumbles backward, and Bob presses the advantage!"
 ```
 
+### **6. Target Resolution**
+
+The `RenderContext` now provides a built-in `resolve_target` API to map natural language player commands (like "attack him", "steal Aldran's sword", or "look at the second wolf") back to game entities using the context's active anaphora and ordinal memory.
+
+```rust
+use mud_perspective::models::RenderContext;
+
+let ctx = RenderContext::new("char_1")
+    .with_entity("goblin1", &goblin1)
+    .with_entity("goblin2", &goblin2);
+
+let matches = ctx.resolve_target("the first goblin's sword");
+for target_match in &matches {
+    println!("Matched key: {}, Path: {:?}", target_match.key, target_match.path);
+    if let Some(deep_entity) = target_match.resolve_deep_entity() {
+        // Use the resolved nested entity
+    }
+}
+```
+
+The `TargetMatch` struct contains the matched key, the base entity, the requested sub-element path, a `path_uncertain` boolean, and a `resolve_deep_entity()` helper method to easily fetch the nested item.
+
+* **Pronouns:** Evaluates against `recent_entities` (e.g., "him" matches the last male entity).
+* **Ordinals:** Maps words like "second" or postfixes like "wolf 2" to stable ordinals.
+* **Nested Properties:** Parses possessives like "Aldran's sword" into entity + path.
+* **Ambiguity:** Returns multiple matches if an input is vague (e.g., "goblin" might match several).
+
+#### TargetMatch & Strict Resolution
+
+The `path_uncertain` field is flagged as `true` if `get_property` fails to find the requested sub-element. Developers can use `ctx.resolve_target_strict("...")` to instantly filter out these invalid paths, ensuring only fully resolvable targets are returned.
+
+#### Entity Aliases
+
+Implement the new `aliases()` method on the `TemplateEntity` trait to return a list of alternative names. This allows the engine to automatically strip articles and match seamlessly.
+
+```rust
+impl TemplateEntity for Character {
+    // ... other methods ...
+
+    fn aliases(&self) -> Option<&[&str]> {
+        Some(&["boss", "dark lord"])
+    }
+}
+```
+
 ## **Cargo Features**
 
 By default, `mud_perspective` includes built-in support for parsing and safely skipping common MUD protocol tags. This ensures that the typography engine does not accidentally capitalize hidden metadata (e.g., changing `<color red>` to `<color Red>`) and that the AST compiler does not misinterpret braces or brackets hidden inside these tags.
