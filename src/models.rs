@@ -26,7 +26,7 @@ static VIEWER_PRONOUNS: phf::Set<&'static str> = phf::phf_set! {
 ///
 /// The `Plural` variant is critical for supporting both literal swarms (e.g., "a pack of wolves")
 /// and singular entities that utilize non-binary they/them pronouns.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
 pub enum Gender {
     /// Male grammatical gender (he/him).
     Male,
@@ -39,7 +39,7 @@ pub enum Gender {
 }
 
 /// The grammatical stance used to refer to the viewing entity.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize)]
 pub enum ActorStance {
     /// Refers to the viewer in the first person ("I", "me", "my").
     FirstPerson,
@@ -51,7 +51,7 @@ pub enum ActorStance {
 }
 
 /// The grammatical tense used to render the template.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize)]
 pub enum Tense {
     /// Renders verbs in the present tense (e.g., "walks").
     #[default]
@@ -1113,7 +1113,7 @@ impl TemplateEntity for GroupEntity<'_> {
             return names.pop().unwrap_or_default();
         }
 
-        crate::grammar::format_oxford_list(names)
+        crate::grammar::format_oxford_list(names, "and")
     }
 
     fn is_proper_noun_for(&self, viewer_id: &str) -> bool {

@@ -21,6 +21,8 @@
 
 /// Thread-safe caching for compiled templates.
 pub mod cache;
+/// Utilities for testing and debugging templates.
+pub mod debug;
 /// The core AST and template rendering engine.
 pub mod engine;
 /// Grammar rules and NLP helpers for English.

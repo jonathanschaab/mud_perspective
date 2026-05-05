@@ -21,6 +21,9 @@ const VERB_FORM_SEP: char = '|';
 const MOD_FORCE_3RD_PERSON: char = '+';
 const MOD_NO_SMART: char = '!';
 const MOD_FORCE_SINGULAR: char = '-';
+const MOD_PREFER_NOUN: char = '*';
+const MOD_ALLOW_AMBIGUOUS_YOU: char = '~';
+const MOD_EXTRACT_GROUP_MEMBER: char = '^';
 const MOD_POSSESSIVE: &str = "'s";
 
 const CTRL_SENTENCE_BREAK: &str = "SB";
@@ -37,15 +40,8 @@ pub enum Token {
         key: String,
         /// An optional article to precede the entity name (e.g., "a", "an", "the").
         article: Option<String>,
-        /// A packed bitflags struct containing all formatting modifiers.
-        flags: TagFlags,
-    },
-    /// e.g., {source:poss}
-    PronounRef {
-        /// The key of the entity in the `RenderContext`.
-        key: String,
-        /// The type of pronoun requested (e.g., `"subj"`, `"obj"`, `"poss"`, `"abs_poss"`, `"reflex"`).
-        p_type: String,
+        /// The optional type of pronoun requested (e.g., `"subj"`, `"obj"`, `"poss"`, `"abs_poss"`, `"reflex"`).
+        p_type: Option<String>,
         /// A packed bitflags struct containing all formatting modifiers.
         flags: TagFlags,
     },
@@ -143,7 +139,7 @@ impl Template {
                 let content = raw.get(i + 1..end_idx).unwrap_or_default();
 
                 let token = if is_entity {
-                    Self::parse_entity_or_pronoun(content)?
+                    Self::parse_entity(content)?
                 } else {
                     Self::parse_verb(content)?
                 };
@@ -164,7 +160,6 @@ impl Template {
         for token in &tokens {
             let k = match token {
                 Token::EntityRef { key, .. }
-                | Token::PronounRef { key, .. }
                 | Token::VerbRef {
                     subject_key: Some(key),
                     ..
@@ -185,68 +180,140 @@ impl Template {
         })
     }
 
-    fn parse_entity_or_pronoun(content: &str) -> Result<Token, String> {
-        let (p1, p2_opt) = split_tag(content, TAG_ENTITY_OPEN, "Malformed entity tag")?;
-
-        if let Some(p2) = p2_opt {
-            let (p1_str, force_article, no_smart_modifier, force_singular_1) =
-                parse_stance_prefixes(p1);
-
-            // 2-part case: {article:key}
-            if is_article(p1_str) {
-                let (p2_str, force_3rd_person, _, force_singular_2, is_possessive) =
-                    parse_entity_modifiers(p2);
-
-                if p2_str.is_empty() {
+    #[inline]
+    fn destructure_entity_tag<'a>(
+        parts: &'a [&'a str],
+        content: &str,
+    ) -> Result<(Option<&'a str>, &'a str, Option<&'a str>), String> {
+        match parts {
+            [p1, p2, p3] => {
+                let (p1_clean, _) = parse_stance_prefixes(p1);
+                if !p1_clean.is_empty() && !is_article(p1_clean) {
                     return Err(validation_error(
-                        "Entity tag has an article but an empty key",
+                        "Malformed entity tag",
                         content,
                         TAG_ENTITY_OPEN,
                     ));
                 }
-                let flags = TagFlags::new(
-                    is_capitalized(p2_str),
-                    force_article,
-                    force_3rd_person,
-                    is_possessive,
-                    no_smart_modifier,
-                    force_singular_1 || force_singular_2,
-                    is_indefinite_article(p1_str),
-                    is_capitalized(p1_str),
-                );
-                create_entity_ref(p2_str, Some(p1_str), flags, content)
-            } else {
-                // 2-part case: {key:pronoun}
-                create_pronoun_ref(p1, p2, content)
+                let article = if p1.is_empty() { None } else { Some(*p1) };
+                Ok((article, *p2, Some(*p3)))
             }
-        } else {
-            // 1-part case: {key}
-            let (p1_str, force_3rd_person, _, force_singular, is_possessive) =
-                parse_entity_modifiers(p1);
-
-            reject_if(
-                p1_str.is_empty(),
-                "Entity tag has an empty key",
-                content,
-                TAG_ENTITY_OPEN,
-            )?;
-            let flags = TagFlags::new(
-                is_capitalized(p1_str),
-                false,
-                force_3rd_person,
-                is_possessive,
-                false,
-                force_singular,
-                false,
-                false,
-            );
-            create_entity_ref(p1_str, None, flags, content)
+            [p1, p2] => {
+                let (p1_clean, _) = parse_stance_prefixes(p1);
+                if !p1_clean.is_empty() && is_article(p1_clean) {
+                    Ok((Some(*p1), *p2, None))
+                } else {
+                    Ok((None, *p1, Some(*p2)))
+                }
+            }
+            [p1] => Ok((None, *p1, None)),
+            _ => unreachable!(),
         }
     }
 
+    fn parse_entity(content: &str) -> Result<Token, String> {
+        let has_letters = content.chars().any(char::is_alphabetic);
+        let is_all_caps = has_letters
+            && content
+                .chars()
+                .filter(|c| c.is_alphabetic())
+                .all(char::is_uppercase);
+
+        let parts: Vec<&str> = content.split(TAG_SEPARATOR).map(str::trim).collect();
+        reject_if(
+            parts.is_empty() || parts.len() > 3,
+            "Malformed entity tag",
+            content,
+            TAG_ENTITY_OPEN,
+        )?;
+
+        let (mut raw_article, raw_key, mut raw_p_type) =
+            Self::destructure_entity_tag(&parts, content)?;
+
+        let mut flags = TagFlags::empty();
+
+        if let Some(art) = raw_article {
+            let (clean_art, mut art_flags) = parse_stance_prefixes(art);
+            if art_flags.contains(TagFlags::FORCE_3RD_PERSON) {
+                art_flags.insert(TagFlags::FORCE_ARTICLE);
+            }
+            flags |= art_flags;
+            flags.set(
+                TagFlags::ARTICLE_INDEFINITE,
+                is_indefinite_article(clean_art),
+            );
+            flags.set(TagFlags::ARTICLE_CAPITALIZED, is_capitalized(clean_art));
+            raw_article = Some(clean_art);
+        }
+
+        let (clean_key, key_flags) = parse_stance_prefixes(raw_key);
+        let (clean_key, is_possessive) = parse_possessive_suffix(clean_key);
+
+        if raw_article.is_some() && clean_key.is_empty() {
+            return Err(validation_error(
+                "Entity tag has an article but an empty key",
+                content,
+                TAG_ENTITY_OPEN,
+            ));
+        }
+        if raw_p_type.is_some() && clean_key.is_empty() {
+            return Err(validation_error(
+                "Pronoun tag has an empty key or type",
+                content,
+                TAG_ENTITY_OPEN,
+            ));
+        }
+        reject_if(
+            clean_key.is_empty(),
+            "Entity tag has an empty key",
+            content,
+            TAG_ENTITY_OPEN,
+        )?;
+        validate_property_segments(
+            clean_key,
+            "Entity tag has an empty property segment",
+            content,
+            TAG_ENTITY_OPEN,
+        )?;
+
+        flags |= key_flags;
+        flags.set(TagFlags::IS_POSSESSIVE, is_possessive);
+
+        flags.set(TagFlags::IS_CAPITALIZED, is_capitalized(clean_key));
+
+        if let Some(pt) = raw_p_type {
+            let (clean_pt, pt_flags) = parse_stance_prefixes(pt);
+            reject_if(
+                clean_pt.is_empty(),
+                "Pronoun tag has an empty key or type",
+                content,
+                TAG_ENTITY_OPEN,
+            )?;
+            flags |= pt_flags;
+            flags.set(TagFlags::PRONOUN_CAPITALIZED, is_capitalized(clean_pt));
+            raw_p_type = Some(clean_pt);
+        }
+
+        flags.set(TagFlags::ALL_CAPS, is_all_caps);
+
+        Ok(Token::EntityRef {
+            key: clean_key.to_lowercase(),
+            article: raw_article.map(ToString::to_string),
+            p_type: raw_p_type.map(str::to_lowercase),
+            flags,
+        })
+    }
+
     fn parse_verb(content: &str) -> Result<Token, String> {
+        let has_letters = content.chars().any(char::is_alphabetic);
+        let is_all_caps = has_letters
+            && content
+                .chars()
+                .filter(|c| c.is_alphabetic())
+                .all(char::is_uppercase);
+
         let (p1, p2_opt) = split_tag(content, TAG_VERB_OPEN, "Malformed verb tag")?;
-        let (p1_str, force_3rd_person, _, force_singular_1) = parse_stance_prefixes(p1);
+        let (p1_str, p1_flags) = parse_stance_prefixes(p1);
 
         let (subject_key, verb_part) = if let Some(p2) = p2_opt {
             reject_if(
@@ -318,16 +385,9 @@ impl Template {
             );
         }
 
-        let flags = TagFlags::new(
-            is_capitalized,
-            false,
-            force_3rd_person,
-            false,
-            false,
-            force_singular_1,
-            false,
-            false,
-        );
+        let mut flags = p1_flags;
+        flags.set(TagFlags::IS_CAPITALIZED, is_capitalized);
+        flags.set(TagFlags::ALL_CAPS, is_all_caps);
 
         Ok(Token::VerbRef {
             subject_key,
@@ -343,7 +403,7 @@ impl Template {
 bitflags::bitflags! {
     /// A bitflags struct to pack multiple boolean formatting flags efficiently.
     #[derive(Clone, Copy, Debug)]
-    pub struct TagFlags: u8 {
+    pub struct TagFlags: u16 {
         /// A flag indicating if the entity key was capitalized (e.g. {Source}).
         const IS_CAPITALIZED = 1 << 0;
         /// A flag indicating if the builder explicitly forced the article to render (e.g. {+the:source}).
@@ -360,6 +420,16 @@ bitflags::bitflags! {
         const ARTICLE_INDEFINITE = 1 << 6;
         /// A flag indicating if the article provided was capitalized (e.g. {A:source}).
         const ARTICLE_CAPITALIZED = 1 << 7;
+        /// A flag indicating the builder used the Safe Override (*) to prefer nouns over pronouns.
+        const PREFER_NOUN = 1 << 8;
+        /// A flag indicating the builder used the Safe Override (~) to allow the ambiguous plural "you" fallback.
+        const ALLOW_AMBIGUOUS_YOU = 1 << 9;
+        /// A flag indicating the builder used the Safe Override (^) to extract an unspecified member from a group.
+        const EXTRACT_GROUP_MEMBER = 1 << 10;
+        /// A flag indicating the pronoun requested was capitalized.
+        const PRONOUN_CAPITALIZED = 1 << 11;
+        /// A flag indicating the entire tag was written in uppercase, activating ALL CAPS mode.
+        const ALL_CAPS = 1 << 12;
     }
 }
 
@@ -378,6 +448,11 @@ impl TagFlags {
         force_singular: bool,
         article_indefinite: bool,
         article_capitalized: bool,
+        prefer_noun: bool,
+        allow_ambiguous_you: bool,
+        extract_group_member: bool,
+        pronoun_capitalized: bool,
+        all_caps: bool,
     ) -> Self {
         let mut flags = Self::empty();
         flags.set(Self::IS_CAPITALIZED, is_capitalized);
@@ -388,6 +463,11 @@ impl TagFlags {
         flags.set(Self::FORCE_SINGULAR, force_singular);
         flags.set(Self::ARTICLE_INDEFINITE, article_indefinite);
         flags.set(Self::ARTICLE_CAPITALIZED, article_capitalized);
+        flags.set(Self::PREFER_NOUN, prefer_noun);
+        flags.set(Self::ALLOW_AMBIGUOUS_YOU, allow_ambiguous_you);
+        flags.set(Self::EXTRACT_GROUP_MEMBER, extract_group_member);
+        flags.set(Self::PRONOUN_CAPITALIZED, pronoun_capitalized);
+        flags.set(Self::ALL_CAPS, all_caps);
         flags
     }
 
@@ -446,14 +526,52 @@ impl TagFlags {
     pub const fn article_capitalized(self) -> bool {
         self.contains(Self::ARTICLE_CAPITALIZED)
     }
+
+    /// Returns `true` if the safe noun override flag is set.
+    #[inline]
+    #[must_use]
+    pub const fn prefer_noun(self) -> bool {
+        self.contains(Self::PREFER_NOUN)
+    }
+
+    /// Returns `true` if the ambiguous plural you override flag is set.
+    #[inline]
+    #[must_use]
+    pub const fn allow_ambiguous_you(self) -> bool {
+        self.contains(Self::ALLOW_AMBIGUOUS_YOU)
+    }
+
+    /// Returns `true` if the extract group member override flag is set.
+    #[inline]
+    #[must_use]
+    pub const fn extract_group_member(self) -> bool {
+        self.contains(Self::EXTRACT_GROUP_MEMBER)
+    }
 }
 
 /// Parameters extracted from a token or fallback logic to render an entity.
 struct EntityRefParams<'a> {
     key: &'a str,
     article: Option<&'a str>,
+    p_type: Option<&'a str>,
     flags: TagFlags,
     ordinal: Option<usize>,
+}
+
+bitflags::bitflags! {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    struct GroupMemberFlags: u8 {
+        const AFTER_POSSESSIVE       = 1 << 0;
+        const FIRST_VISIBLE_ITEM     = 1 << 1;
+        const DISTRIBUTE_POSSESSIVES = 1 << 2;
+        const IS_REFLEXIVE           = 1 << 3;
+    }
+}
+
+/// Configuration for formatting a group member.
+struct GroupMemberFormatConfig<'a> {
+    flags: GroupMemberFlags,
+    article_to_use: Option<&'a str>,
 }
 
 /// The core processor responsible for evaluating compiled templates against contexts.
@@ -500,40 +618,48 @@ impl PerspectiveEngine {
         let mut raw_output = String::with_capacity(template.estimated_length);
 
         for token in &template.tokens {
+            let start_len = raw_output.len();
+            let mut all_caps = false;
+
             match token {
                 Token::Literal(text) => raw_output.push_str(text),
                 Token::EntityRef {
                     key,
                     article,
+                    p_type,
                     flags,
-                } => Self::render_entity_ref(
-                    ctx,
-                    &mut raw_output,
-                    &EntityRefParams {
-                        key,
-                        article: article.as_deref(),
-                        flags: *flags,
-                        ordinal: None,
-                    },
-                    &future_keys,
-                    &pre_resolved,
-                )?,
-                Token::PronounRef { .. } => {
-                    Self::render_pronoun_ref(
+                } => {
+                    all_caps = flags.contains(TagFlags::ALL_CAPS);
+                    Self::render_entity_ref(
                         ctx,
                         &mut raw_output,
-                        token,
+                        &EntityRefParams {
+                            key,
+                            article: article.as_deref(),
+                            p_type: p_type.as_deref(),
+                            flags: *flags,
+                            ordinal: None,
+                        },
                         &future_keys,
                         &pre_resolved,
                     )?;
                 }
                 Token::VerbRef { .. } => {
+                    if let Token::VerbRef { flags, .. } = token {
+                        all_caps = flags.contains(TagFlags::ALL_CAPS);
+                    }
                     Self::render_verb_ref(ctx, &mut raw_output, token, &pre_resolved)?;
                 }
                 Token::SentenceBreak => {
                     raw_output.push(SENTENCE_BREAK_SENTINEL);
                 }
                 Token::NoSentenceBreak => raw_output.push(NO_SENTENCE_BREAK_SENTINEL),
+            }
+
+            if all_caps && raw_output.len() > start_len {
+                let upper = raw_output[start_len..].to_uppercase();
+                raw_output.truncate(start_len);
+                raw_output.push_str(&upper);
             }
         }
 
@@ -775,14 +901,215 @@ impl PerspectiveEngine {
             .get(params.key)
             .copied()
             .map_or_else(|| Self::get_entity(ctx, params.key), Ok)?;
+
+        let effective_viewer = effective_viewer_id(ctx, params.flags.force_3rd_person());
+
+        let mut article_to_use = params.article;
+        let mut active_flags = params.flags;
+        let mut actual_p_type = params.p_type;
+
+        if Self::try_render_pronoun(
+            ctx,
+            raw_output,
+            params,
+            entity,
+            effective_viewer,
+            pre_resolved,
+            &mut article_to_use,
+            &mut active_flags,
+            &mut actual_p_type,
+        )? {
+            return Ok(());
+        }
+
+        Self::render_resolved_entity(
+            ctx,
+            raw_output,
+            params,
+            entity,
+            effective_viewer,
+            article_to_use,
+            actual_p_type,
+            active_flags,
+            future_keys,
+            pre_resolved,
+        );
+
+        Ok(())
+    }
+
+    #[inline]
+    fn determine_group_singular_gender(members: &[&dyn TemplateEntity]) -> crate::models::Gender {
+        let mut flat = Vec::new();
+        crate::models::flatten_group(members, &mut flat, 0);
+        let mut shared = None;
+        for m in flat {
+            let g = m.gender();
+            let singular_g = if g == crate::models::Gender::Plural {
+                crate::models::Gender::Neutral
+            } else {
+                g
+            };
+            if let Some(s) = shared {
+                if s != singular_g {
+                    return crate::models::Gender::Neutral;
+                }
+            } else {
+                shared = Some(singular_g);
+            }
+        }
+        shared.unwrap_or(crate::models::Gender::Neutral)
+    }
+
+    #[inline]
+    #[allow(clippy::too_many_arguments)]
+    fn try_render_pronoun<'a>(
+        ctx: &'a RenderContext,
+        raw_output: &mut String,
+        params: &EntityRefParams<'_>,
+        entity: &'a dyn TemplateEntity,
+        effective_viewer: &str,
+        pre_resolved: &HashMap<&str, &'a dyn TemplateEntity>,
+        article_to_use: &mut Option<&'a str>,
+        active_flags: &mut TagFlags,
+        actual_p_type: &mut Option<&'a str>,
+    ) -> Result<bool, String> {
+        let Some(p_type) = params.p_type else {
+            return Ok(false);
+        };
+
+        let mut is_plural = entity.is_plural();
+        let mut effective_gender = entity.gender();
+        let is_group = entity.group_members().is_some();
+        let extract_member = params.flags.extract_group_member() && is_group;
+
+        if params.flags.force_singular() || extract_member {
+            is_plural = false;
+            if let Some(members) = entity.group_members() {
+                effective_gender = Self::determine_group_singular_gender(members);
+            } else if effective_gender == crate::models::Gender::Plural {
+                effective_gender = crate::models::Gender::Neutral;
+            }
+        }
+
+        let is_viewer = entity.contains_viewer(effective_viewer) && !extract_member;
+        let is_active_subject =
+            Self::check_is_active_subject(ctx, entity, params.key, pre_resolved);
+
+        if is_active_subject && p_type == "obj" {
+            *actual_p_type = Some("reflex");
+        }
+
         let already_seen = ctx
             .recent_entities
             .borrow()
             .iter()
             .any(|r| r.key == params.key);
+        let is_reflexive = *actual_p_type == Some("reflex");
 
-        let effective_viewer = effective_viewer_id(ctx, params.flags.force_3rd_person());
+        // "You" is ambiguous for a group in the 2nd person.
+        // 1st person plural is "We" (unambiguous). 3rd person is "They" (unambiguous).
+        let ambiguous_plural_you = is_viewer
+            && is_group
+            && ctx.stance == crate::models::ActorStance::SecondPerson
+            && !is_reflexive
+            && !active_flags.allow_ambiguous_you();
 
+        let mut can_use_pronoun = (!ambiguous_plural_you && (is_active_subject || is_viewer))
+            || is_reflexive
+            || active_flags.no_smart();
+
+        if active_flags.prefer_noun() && (!is_viewer || is_group) && !is_reflexive {
+            can_use_pronoun = false;
+        }
+
+        if !can_use_pronoun
+            && already_seen
+            && !active_flags.prefer_noun()
+            && !Self::is_pronoun_ambiguous(
+                ctx,
+                params.key,
+                effective_gender,
+                is_plural,
+                params.flags,
+            )
+        {
+            can_use_pronoun = true;
+        }
+
+        if can_use_pronoun {
+            if !already_seen {
+                update_memory(&ctx.last_mentioned, params.key);
+                track_recent_entity(ctx, params.key, entity);
+            }
+            let pronoun = resolve_pronoun(
+                effective_gender,
+                actual_p_type.expect("p_type is guaranteed to be Some in this block"),
+                is_viewer,
+                is_plural,
+                ctx.stance,
+            )?;
+            let cap_pronoun = active_flags.contains(TagFlags::PRONOUN_CAPITALIZED)
+                || active_flags.is_capitalized()
+                || active_flags.article_capitalized();
+            push_capitalized_if(raw_output, pronoun, cap_pronoun);
+            return Ok(true);
+        }
+
+        if *actual_p_type == Some("poss") || *actual_p_type == Some("abs_poss") {
+            active_flags.set(TagFlags::IS_POSSESSIVE, true);
+        }
+
+        if active_flags.contains(TagFlags::PRONOUN_CAPITALIZED) {
+            active_flags.set(TagFlags::ARTICLE_CAPITALIZED, true);
+        }
+
+        if article_to_use.is_none() {
+            let is_cap = active_flags.article_capitalized();
+            let fallback_article = if params.flags.force_singular() && entity.is_plural() {
+                if is_cap { "One of the" } else { "one of the" }
+            } else {
+                if is_cap { "A" } else { "a" }
+            };
+            *article_to_use = Some(fallback_article);
+            active_flags.set(
+                TagFlags::ARTICLE_INDEFINITE,
+                !params.flags.force_singular() || !entity.is_plural(),
+            );
+            active_flags.set(TagFlags::ARTICLE_CAPITALIZED, is_cap); // the fallback inherits the pronoun's requested capitalization
+            active_flags.set(TagFlags::IS_CAPITALIZED, false); // We don't want to force-capitalize common nouns ("A Goblin")
+        }
+
+        Ok(false)
+    }
+
+    #[inline]
+    fn is_after_possessive(output: &str) -> bool {
+        let s = output.trim_end();
+        if s.ends_with("'s") || s.ends_with('\'') || s.ends_with('’') {
+            return true;
+        }
+        let last_word = s.rsplit(|c: char| !c.is_alphabetic()).next().unwrap_or("");
+        matches!(
+            last_word.to_ascii_lowercase().as_str(),
+            "my" | "your" | "his" | "her" | "its" | "our" | "their" | "whose"
+        )
+    }
+
+    #[inline]
+    #[allow(clippy::too_many_arguments)]
+    fn render_resolved_entity<'a>(
+        ctx: &'a RenderContext,
+        raw_output: &mut String,
+        params: &EntityRefParams<'_>,
+        entity: &'a dyn TemplateEntity,
+        effective_viewer: &str,
+        mut article_to_use: Option<&'a str>,
+        actual_p_type: Option<&'a str>,
+        active_flags: TagFlags,
+        future_keys: &[&str],
+        pre_resolved: &HashMap<&str, &'a dyn TemplateEntity>,
+    ) {
         let (name, ordinal) = Self::resolve_display_name(
             ctx,
             entity,
@@ -793,12 +1120,16 @@ impl PerspectiveEngine {
             pre_resolved,
         );
 
-        let mut article_to_use = params.article;
+        let already_seen = ctx
+            .recent_entities
+            .borrow()
+            .iter()
+            .any(|r| r.key == params.key);
 
-        if !params.flags.no_smart() && params.article.is_some() && params.flags.article_indefinite()
+        if !active_flags.no_smart() && article_to_use.is_some() && active_flags.article_indefinite()
         {
             if already_seen {
-                article_to_use = Some(if params.flags.article_capitalized() {
+                article_to_use = Some(if active_flags.article_capitalized() {
                     "The"
                 } else {
                     "the"
@@ -806,7 +1137,7 @@ impl PerspectiveEngine {
             } else if let Some(ord) = ordinal
                 && ord == 2
             {
-                article_to_use = Some(if params.flags.article_capitalized() {
+                article_to_use = Some(if active_flags.article_capitalized() {
                     "Another"
                 } else {
                     "another"
@@ -817,10 +1148,13 @@ impl PerspectiveEngine {
         update_memory(&ctx.last_mentioned, params.key);
         track_recent_entity(ctx, params.key, entity);
 
+        let after_possessive = Self::is_after_possessive(raw_output);
+
         let active_params = EntityRefParams {
             key: params.key,
             article: article_to_use,
-            flags: params.flags,
+            p_type: actual_p_type,
+            flags: active_flags,
             ordinal,
         };
         let cap_whole = should_capitalize_whole_tag(&active_params);
@@ -835,36 +1169,80 @@ impl PerspectiveEngine {
                 effective_viewer,
                 &active_params,
                 cap_whole,
+                after_possessive,
+                pre_resolved,
             );
-            return Ok(());
+            return;
         }
 
-        let is_plural = entity.is_plural() && !active_params.flags.force_singular();
+        let is_plural = entity.is_plural()
+            && !active_params.flags.force_singular()
+            && !active_flags.extract_group_member();
 
         // --- Handle Single Entity Viewers ---
-        if entity.contains_viewer(effective_viewer) {
+        if entity.contains_viewer(effective_viewer) && !active_flags.extract_group_member() {
             raw_output.push_str(viewer_name(
                 ctx.stance,
-                is_plural,
-                active_params.flags.is_possessive(),
+                is_plural, // This is already `false` if `force_singular` was requested
+                active_flags.is_possessive(),
                 cap_whole,
+                actual_p_type == Some("obj"),
             ));
-            return Ok(());
+            return;
         }
 
         // --- Single Entity Fallback ---
+        Self::render_single_entity(
+            ctx,
+            raw_output,
+            entity,
+            effective_viewer,
+            name,
+            &active_params,
+            cap_whole,
+            after_possessive,
+            is_plural,
+        );
+    }
+
+    #[inline]
+    #[allow(clippy::too_many_arguments)]
+    fn render_single_entity<'a>(
+        ctx: &'a RenderContext,
+        raw_output: &mut String,
+        entity: &'a dyn TemplateEntity,
+        effective_viewer: &str,
+        name: std::borrow::Cow<'a, str>,
+        active_params: &EntityRefParams<'_>,
+        cap_whole: bool,
+        after_possessive: bool,
+        is_plural: bool,
+    ) {
         let mut article_printed = false;
+
+        let mut article_flags = crate::grammar::ArticleFlags::empty();
+        article_flags.set(
+            crate::grammar::ArticleFlags::IS_PROPER_NOUN,
+            entity.is_proper_noun_for(effective_viewer),
+        );
+        article_flags.set(crate::grammar::ArticleFlags::IS_PLURAL, is_plural);
+        article_flags.set(
+            crate::grammar::ArticleFlags::FORCE_ARTICLE,
+            active_params.flags.force_article(),
+        );
+        article_flags.set(
+            crate::grammar::ArticleFlags::AFTER_POSSESSIVE,
+            after_possessive,
+        );
 
         if let Some(resolved_art) = active_params.article.as_ref().and_then(|art| {
             resolve_article(
                 art,
                 &name,
-                entity.is_proper_noun_for(effective_viewer),
-                is_plural,
-                active_params.flags.force_article(),
                 active_params.ordinal,
                 entity.collective_noun(),
                 ctx.ordinal_word_threshold,
+                article_flags,
             )
         }) {
             raw_output.push_str(resolved_art.as_ref());
@@ -873,6 +1251,8 @@ impl PerspectiveEngine {
 
         let should_cap_noun = if article_printed {
             active_params.flags.is_capitalized()
+        } else if after_possessive && !active_params.flags.force_article() {
+            false
         } else {
             cap_whole
         };
@@ -885,17 +1265,20 @@ impl PerspectiveEngine {
         if active_params.flags.is_possessive() {
             raw_output.push_str(Self::get_possessive_suffix(name_str, entity.is_plural()));
         }
-        Ok(())
     }
 
-    fn render_group_entity(
-        ctx: &RenderContext,
+    #[inline]
+    #[allow(clippy::too_many_arguments)]
+    fn render_group_entity<'a>(
+        ctx: &'a RenderContext,
         raw_output: &mut String,
-        entity: &dyn TemplateEntity,
-        members: &[&dyn TemplateEntity],
+        entity: &'a dyn TemplateEntity,
+        members: &[&'a dyn TemplateEntity],
         effective_viewer: &str,
         params: &EntityRefParams<'_>,
         cap_whole: bool,
+        after_possessive: bool,
+        pre_resolved: &HashMap<&str, &'a dyn TemplateEntity>,
     ) {
         let (viewer_entity, visible) = crate::models::partition_group(members, effective_viewer);
 
@@ -904,36 +1287,38 @@ impl PerspectiveEngine {
             return;
         }
 
+        let active_subject_entity = ctx
+            .active_subject
+            .borrow()
+            .as_deref()
+            .and_then(|active_key| {
+                pre_resolved
+                    .get(active_key)
+                    .copied()
+                    .map_or_else(|| Self::get_entity(ctx, active_key).ok(), Some)
+            });
+
+        let viewer_is_active_subject =
+            active_subject_entity.is_some_and(|active| active.contains_viewer(effective_viewer));
+        let is_objective = params.p_type == Some("obj");
+
         let mut ends_with_possessive_pronoun = false;
         let mut decomposed_we = false;
         let mut formatted_names = Vec::with_capacity(total_visible + 1);
-        if let Some(viewer) = viewer_entity {
-            if ctx.stance == crate::models::ActorStance::SecondPerson {
-                if params.flags.is_possessive() {
-                    formatted_names.push(std::borrow::Cow::Borrowed("your"));
-                    if visible.is_empty() {
-                        ends_with_possessive_pronoun = true;
-                    }
-                } else {
-                    formatted_names.push(std::borrow::Cow::Borrowed("you"));
-                }
-            } else if ctx.stance == crate::models::ActorStance::FirstPerson && viewer.is_plural() {
-                if visible.is_empty() {
-                    if params.flags.is_possessive() {
-                        formatted_names.push(std::borrow::Cow::Borrowed("our"));
-                        ends_with_possessive_pronoun = true;
-                    } else {
-                        formatted_names.push(std::borrow::Cow::Borrowed("we"));
-                    }
-                } else {
-                    decomposed_we = true;
-                    if params.flags.is_possessive() {
-                        formatted_names.push(std::borrow::Cow::Borrowed("your"));
-                    } else {
-                        formatted_names.push(std::borrow::Cow::Borrowed("you"));
-                    }
-                }
-            }
+
+        if let Some(viewer) = viewer_entity
+            && let Some(prefix) = Self::format_group_viewer_prefix(
+                ctx,
+                viewer,
+                params,
+                visible.is_empty(),
+                viewer_is_active_subject,
+                is_objective,
+                &mut ends_with_possessive_pronoun,
+                &mut decomposed_we,
+            )
+        {
+            formatted_names.push(prefix);
         }
 
         let will_append_my = viewer_entity.is_some_and(|viewer| {
@@ -952,45 +1337,54 @@ impl PerspectiveEngine {
                 lower_article_storage.as_deref()
             };
 
-            let mut final_name = if let Some(resolved_art) =
-                article_to_use.as_ref().and_then(|art| {
-                    resolve_article(
-                        art,
-                        &name,
-                        member.is_proper_noun_for(effective_viewer),
-                        member.is_plural(),
-                        params.flags.force_article(),
-                        params.ordinal,
-                        entity.collective_noun(),
-                        ctx.ordinal_word_threshold,
-                    )
-                }) {
-                std::borrow::Cow::Owned(format!("{}{name}", resolved_art.as_ref()))
-            } else {
-                name
+            let member_is_active_subj =
+                active_subject_entity.is_some_and(|active| std::ptr::eq(active, member));
+
+            let mut flags = GroupMemberFlags::empty();
+            flags.set(GroupMemberFlags::AFTER_POSSESSIVE, after_possessive);
+            flags.set(GroupMemberFlags::FIRST_VISIBLE_ITEM, first_visible_item);
+            flags.set(
+                GroupMemberFlags::DISTRIBUTE_POSSESSIVES,
+                distribute_possessives,
+            );
+            flags.set(
+                GroupMemberFlags::IS_REFLEXIVE,
+                is_objective && member_is_active_subj,
+            );
+
+            let config = GroupMemberFormatConfig {
+                flags,
+                article_to_use,
             };
 
-            if distribute_possessives {
-                let suffix = Self::get_possessive_suffix(&final_name, member.is_plural());
-                let mut owned = final_name.into_owned();
-                owned.push_str(suffix);
-                final_name = std::borrow::Cow::Owned(owned);
-            }
-
-            formatted_names.push(final_name);
+            formatted_names.push(Self::format_group_member(
+                ctx,
+                entity,
+                member,
+                name,
+                effective_viewer,
+                params,
+                &config,
+            ));
             first_visible_item = false;
         }
 
         if will_append_my {
-            if params.flags.is_possessive() {
-                formatted_names.push(std::borrow::Cow::Borrowed("my"));
-                ends_with_possessive_pronoun = true;
-            } else {
-                formatted_names.push(std::borrow::Cow::Borrowed("I"));
-            }
+            let suffix = Self::format_group_viewer_suffix(
+                params.flags.is_possessive(),
+                viewer_is_active_subject,
+                is_objective,
+                &mut ends_with_possessive_pronoun,
+            );
+            formatted_names.push(suffix);
         }
 
-        let list_str = crate::grammar::format_oxford_list(formatted_names);
+        let conjunction = if params.flags.extract_group_member() {
+            "or"
+        } else {
+            "and"
+        };
+        let list_str = crate::grammar::format_oxford_list(formatted_names, conjunction);
 
         let mut final_str = list_str.into_owned();
         if params.flags.is_possessive() && !ends_with_possessive_pronoun && !distribute_possessives
@@ -999,6 +1393,197 @@ impl PerspectiveEngine {
         }
 
         push_capitalized_if(raw_output, &final_str, cap_whole);
+    }
+
+    #[inline]
+    #[allow(clippy::too_many_arguments)]
+    fn format_group_viewer_prefix(
+        ctx: &RenderContext,
+        viewer: &dyn TemplateEntity,
+        params: &EntityRefParams<'_>,
+        visible_is_empty: bool,
+        viewer_is_active_subject: bool,
+        is_objective: bool,
+        ends_with_possessive_pronoun: &mut bool,
+        decomposed_we: &mut bool,
+    ) -> Option<std::borrow::Cow<'static, str>> {
+        if ctx.stance == crate::models::ActorStance::SecondPerson {
+            if params.flags.is_possessive() {
+                if visible_is_empty {
+                    *ends_with_possessive_pronoun = true;
+                }
+                return Some(std::borrow::Cow::Borrowed("your"));
+            } else if is_objective && viewer_is_active_subject {
+                let reflex = resolve_pronoun(
+                    crate::models::Gender::Neutral,
+                    "reflex",
+                    true,
+                    viewer.is_plural(),
+                    ctx.stance,
+                )
+                .unwrap_or("yourself");
+                return Some(std::borrow::Cow::Borrowed(reflex));
+            }
+            return Some(std::borrow::Cow::Borrowed("you"));
+        } else if ctx.stance == crate::models::ActorStance::FirstPerson && viewer.is_plural() {
+            if visible_is_empty {
+                if params.flags.is_possessive() {
+                    *ends_with_possessive_pronoun = true;
+                    return Some(std::borrow::Cow::Borrowed("our"));
+                } else if is_objective {
+                    if viewer_is_active_subject {
+                        let reflex = resolve_pronoun(
+                            crate::models::Gender::Neutral,
+                            "reflex",
+                            true,
+                            true,
+                            ctx.stance,
+                        )
+                        .unwrap_or("ourselves");
+                        return Some(std::borrow::Cow::Borrowed(reflex));
+                    }
+                    return Some(std::borrow::Cow::Borrowed("us"));
+                }
+                return Some(std::borrow::Cow::Borrowed("we"));
+            }
+
+            *decomposed_we = true;
+            if params.flags.is_possessive() {
+                return Some(std::borrow::Cow::Borrowed("your"));
+            } else if is_objective && viewer_is_active_subject {
+                let reflex = resolve_pronoun(
+                    crate::models::Gender::Neutral,
+                    "reflex",
+                    true,
+                    false,
+                    crate::models::ActorStance::SecondPerson,
+                )
+                .unwrap_or("yourself");
+                return Some(std::borrow::Cow::Borrowed(reflex));
+            }
+            return Some(std::borrow::Cow::Borrowed("you"));
+        }
+        None
+    }
+
+    #[inline]
+    fn format_group_viewer_suffix(
+        is_possessive: bool,
+        viewer_is_active_subject: bool,
+        is_objective: bool,
+        ends_with_possessive_pronoun: &mut bool,
+    ) -> std::borrow::Cow<'static, str> {
+        if is_possessive {
+            *ends_with_possessive_pronoun = true;
+            std::borrow::Cow::Borrowed("my")
+        } else if is_objective {
+            if viewer_is_active_subject {
+                let reflex = resolve_pronoun(
+                    crate::models::Gender::Neutral,
+                    "reflex",
+                    true,
+                    false,
+                    crate::models::ActorStance::FirstPerson,
+                )
+                .unwrap_or("myself");
+                std::borrow::Cow::Borrowed(reflex)
+            } else {
+                std::borrow::Cow::Borrowed("me")
+            }
+        } else {
+            std::borrow::Cow::Borrowed("I")
+        }
+    }
+
+    #[inline]
+    #[allow(clippy::too_many_arguments)]
+    fn format_group_member<'a>(
+        ctx: &RenderContext,
+        entity: &dyn TemplateEntity,
+        member: &'a dyn TemplateEntity,
+        name: std::borrow::Cow<'a, str>,
+        effective_viewer: &str,
+        params: &EntityRefParams<'_>,
+        config: &GroupMemberFormatConfig<'_>,
+    ) -> std::borrow::Cow<'a, str> {
+        let first_visible_item = config.flags.contains(GroupMemberFlags::FIRST_VISIBLE_ITEM);
+
+        if config.flags.contains(GroupMemberFlags::IS_REFLEXIVE) {
+            let reflex = resolve_pronoun(
+                member.gender(),
+                "reflex",
+                false,
+                member.is_plural(),
+                ctx.stance,
+            )
+            .unwrap_or("itself");
+            let mut final_name = std::borrow::Cow::Owned(
+                if params.flags.is_capitalized()
+                    || (params.flags.article_capitalized() && first_visible_item)
+                {
+                    crate::grammar::capitalize_first(reflex)
+                } else {
+                    reflex.to_string()
+                },
+            );
+
+            if config
+                .flags
+                .contains(GroupMemberFlags::DISTRIBUTE_POSSESSIVES)
+            {
+                let suffix = Self::get_possessive_suffix(&final_name, member.is_plural());
+                let mut owned = final_name.into_owned();
+                owned.push_str(suffix);
+                final_name = std::borrow::Cow::Owned(owned);
+            }
+            return final_name;
+        }
+
+        let mut article_flags = crate::grammar::ArticleFlags::empty();
+        article_flags.set(
+            crate::grammar::ArticleFlags::IS_PROPER_NOUN,
+            member.is_proper_noun_for(effective_viewer),
+        );
+        article_flags.set(crate::grammar::ArticleFlags::IS_PLURAL, member.is_plural());
+        article_flags.set(
+            crate::grammar::ArticleFlags::FORCE_ARTICLE,
+            params.flags.force_article(),
+        );
+        article_flags.set(
+            crate::grammar::ArticleFlags::AFTER_POSSESSIVE,
+            config.flags.contains(GroupMemberFlags::AFTER_POSSESSIVE) && first_visible_item,
+        );
+        article_flags.set(
+            crate::grammar::ArticleFlags::IS_CAPITALIZED,
+            params.flags.article_capitalized() && first_visible_item,
+        );
+
+        let mut final_name = if let Some(resolved_art) = config.article_to_use.and_then(|art| {
+            resolve_article(
+                art,
+                &name,
+                params.ordinal,
+                entity.collective_noun(),
+                ctx.ordinal_word_threshold,
+                article_flags,
+            )
+        }) {
+            std::borrow::Cow::Owned(format!("{}{name}", resolved_art.as_ref()))
+        } else {
+            name
+        };
+
+        if config
+            .flags
+            .contains(GroupMemberFlags::DISTRIBUTE_POSSESSIVES)
+        {
+            let suffix = Self::get_possessive_suffix(&final_name, member.is_plural());
+            let mut owned = final_name.into_owned();
+            owned.push_str(suffix);
+            final_name = std::borrow::Cow::Owned(owned);
+        }
+
+        final_name
     }
 
     #[inline]
@@ -1043,136 +1628,61 @@ impl PerspectiveEngine {
         MOD_POSSESSIVE
     }
 
-    fn render_pronoun_ref<'a>(
-        ctx: &'a RenderContext,
-        raw_output: &mut String,
-        token: &Token,
-        future_keys: &[&str],
-        pre_resolved: &HashMap<&str, &'a dyn TemplateEntity>,
-    ) -> Result<(), String> {
-        let Token::PronounRef { key, p_type, flags } = token else {
-            return Ok(());
-        };
-
-        let entity = pre_resolved
-            .get(key.as_str())
-            .copied()
-            .map_or_else(|| Self::get_entity(ctx, key), Ok)?;
-        let effective_viewer = effective_viewer_id(ctx, flags.force_3rd_person());
-
-        let is_viewer = entity.contains_viewer(effective_viewer);
-        let mut is_plural = entity.is_plural();
-        let mut effective_gender = entity.gender();
-
-        if flags.force_singular() {
-            is_plural = false;
-            if effective_gender == crate::models::Gender::Plural {
-                effective_gender = crate::models::Gender::Neutral;
-            }
+    #[inline]
+    fn check_is_active_subject(
+        ctx: &RenderContext,
+        entity: &dyn TemplateEntity,
+        key: &str,
+        pre_resolved: &HashMap<&str, &dyn TemplateEntity>,
+    ) -> bool {
+        if ctx.active_subject.borrow().as_deref() == Some(key) {
+            return true;
         }
-
-        let is_active_subject = ctx.active_subject.borrow().as_deref() == Some(key.as_str());
-
-        // Check if this entity has been introduced to the narrative context yet.
-        let already_seen = ctx.recent_entities.borrow().iter().any(|r| r.key == *key);
-
-        let is_reflexive = p_type == "reflex";
-
-        // 1. Unambiguous Contexts:
-        // - Active Subject: English speakers naturally bind pronouns to the subject.
-        // - Viewer: "you" is never ambiguous with 3rd-person pronouns.
-        // - Reflexive: "himself" unequivocally binds to the current actor/subject.
-        let mut can_use_pronoun =
-            is_active_subject || is_viewer || is_reflexive || flags.no_smart();
-
-        // 2. Disambiguation Check:
-        // If the entity is a general object/target, we must ensure no other recently
-        // mentioned entities share the same pronoun, which would confuse the reader.
-        if !can_use_pronoun && already_seen {
-            let mut ambiguous = false;
-            for other in ctx.recent_entities.borrow().iter() {
-                if other.key != *key {
-                    let other_is_viewer = if flags.force_3rd_person()
-                        || ctx.stance == crate::models::ActorStance::ThirdPerson
-                    {
-                        other
-                            .flags
-                            .contains(crate::models::RecentEntityFlags::IS_VIEWER_FORCED)
-                    } else {
-                        other
-                            .flags
-                            .contains(crate::models::RecentEntityFlags::IS_VIEWER_NORMAL)
-                    };
-
-                    // If another character isn't the viewer ("you") but shares the exact
-                    // same gender and plurality, a pronoun like "he" or "they" is ambiguous.
-                    if !other_is_viewer
-                        && effective_gender == other.gender
-                        && is_plural
-                            == other
-                                .flags
-                                .contains(crate::models::RecentEntityFlags::IS_PLURAL)
-                    {
-                        ambiguous = true;
-                        break;
-                    }
-                }
-            }
-
-            // If no collisions were found in the recent memory, it's safe to use the pronoun.
-            if !ambiguous {
-                can_use_pronoun = true;
-            }
+        if let Some(active_key) = ctx.active_subject.borrow().as_deref()
+            && let Ok(active_entity) = pre_resolved
+                .get(active_key)
+                .copied()
+                .map_or_else(|| Self::get_entity(ctx, active_key), Ok)
+        {
+            return std::ptr::eq(entity, active_entity);
         }
+        false
+    }
 
-        if can_use_pronoun {
-            if !already_seen {
-                update_memory(&ctx.last_mentioned, key);
-                track_recent_entity(ctx, key, entity);
-            }
-
-            let pronoun =
-                resolve_pronoun(effective_gender, p_type, is_viewer, is_plural, ctx.stance)?;
-            push_capitalized_if(raw_output, pronoun, flags.is_capitalized());
-        } else {
-            // Smart Anaphora Resolution: The entity hasn't been introduced yet, or a pronoun would be ambiguous!
-            // Evaluate it as if the builder had written `{a:key}` instead. This allows the engine
-            // to naturally upgrade it to `{the:key}` if it is a unique subsequent mention!
-            let is_possessive = p_type == "poss" || p_type == "abs_poss";
-
-            let fallback_article = if flags.force_singular() && entity.is_plural() {
-                if flags.is_capitalized() {
-                    "One of the"
+    #[inline]
+    fn is_pronoun_ambiguous(
+        ctx: &RenderContext,
+        key: &str,
+        effective_gender: crate::models::Gender,
+        is_plural: bool,
+        flags: TagFlags,
+    ) -> bool {
+        for other in ctx.recent_entities.borrow().iter() {
+            if other.key != key {
+                let other_is_viewer = if flags.force_3rd_person()
+                    || ctx.stance == crate::models::ActorStance::ThirdPerson
+                {
+                    other
+                        .flags
+                        .contains(crate::models::RecentEntityFlags::IS_VIEWER_FORCED)
                 } else {
-                    "one of the"
-                }
-            } else {
-                if flags.is_capitalized() { "A" } else { "a" }
-            };
+                    other
+                        .flags
+                        .contains(crate::models::RecentEntityFlags::IS_VIEWER_NORMAL)
+                };
 
-            let is_indefinite = !flags.force_singular() || !entity.is_plural();
-            let fallback_params = EntityRefParams {
-                key,
-                article: Some(fallback_article),
-                // We set `is_capitalized: false` here because the capitalization requested by the pronoun
-                // (e.g. `{target:Subj}`) applies to the *first word* of the substitution (the article "A").
-                // We do not want to force-capitalize common nouns (yielding "A Goblin" instead of "A goblin").
-                // Proper nouns (like "Aldran") naturally return capitalized strings and are unaffected.
-                flags: TagFlags::new(
-                    false,
-                    false,
-                    flags.force_3rd_person(),
-                    is_possessive,
-                    false,
-                    flags.force_singular(),
-                    is_indefinite,
-                    flags.is_capitalized(),
-                ),
-                ordinal: None,
-            };
-            Self::render_entity_ref(ctx, raw_output, &fallback_params, future_keys, pre_resolved)?;
+                if !other_is_viewer
+                    && effective_gender == other.gender
+                    && is_plural
+                        == other
+                            .flags
+                            .contains(crate::models::RecentEntityFlags::IS_PLURAL)
+                {
+                    return true;
+                }
+            }
         }
-        Ok(())
+        false
     }
 
     fn render_verb_ref<'a>(
@@ -1194,7 +1704,7 @@ impl PerspectiveEngine {
         };
 
         // Explicitly bind the verb to its subject to solve passive voice / compound subjects
-        let (is_viewer, mut is_plural) = if let Some(key) = subject_key {
+        let (mut is_viewer, mut is_plural, is_group) = if let Some(key) = subject_key {
             let entity = pre_resolved
                 .get(key.as_str())
                 .copied()
@@ -1203,14 +1713,21 @@ impl PerspectiveEngine {
             update_memory(&ctx.active_subject, key);
             update_memory(&ctx.last_mentioned, key);
             track_recent_entity(ctx, key, entity);
-            (entity.contains_viewer(effective_viewer), entity.is_plural())
+            (
+                entity.contains_viewer(effective_viewer),
+                entity.is_plural(),
+                entity.group_members().is_some(),
+            )
         } else {
-            // Safe default to 3rd-person singular if no subject is bound
-            (false, false)
+            (false, false, false)
         };
 
-        if flags.force_singular() {
+        let extract_member = flags.extract_group_member() && is_group;
+        if flags.force_singular() || extract_member {
             is_plural = false;
+        }
+        if extract_member {
+            is_viewer = false;
         }
 
         let forced_conjugation = match ctx.tense {
@@ -1494,71 +2011,36 @@ fn validation_error(message: &str, content: &str, open_char: char) -> String {
 /// Parses prefix modifiers (like `+`) used to force perspectives, returning the
 /// stripped string alongside the boolean flags for `force_3rd_person`/`force_article`, `no_smart`, and `force_singular`.
 #[inline]
-fn parse_stance_prefixes(mut s: &str) -> (&str, bool, bool, bool) {
-    let mut force_3rd_person = false;
-    let mut no_smart = false;
-    let mut force_singular = false;
+fn parse_stance_prefixes(mut s: &str) -> (&str, TagFlags) {
+    let mut flags = TagFlags::empty();
     loop {
         s = s.trim_start();
         if let Some(stripped) = s.strip_prefix(MOD_FORCE_3RD_PERSON) {
-            force_3rd_person = true;
+            flags.insert(TagFlags::FORCE_3RD_PERSON);
             s = stripped;
         } else if let Some(stripped) = s.strip_prefix(MOD_NO_SMART) {
-            no_smart = true;
+            flags.insert(TagFlags::NO_SMART);
             s = stripped;
         } else if let Some(stripped) = s.strip_prefix(MOD_FORCE_SINGULAR) {
-            force_singular = true;
+            flags.insert(TagFlags::FORCE_SINGULAR);
+            s = stripped;
+        } else if let Some(stripped) = s.strip_prefix(MOD_PREFER_NOUN) {
+            flags.insert(TagFlags::PREFER_NOUN);
+            s = stripped;
+        } else if let Some(stripped) = s.strip_prefix(MOD_ALLOW_AMBIGUOUS_YOU) {
+            flags.insert(TagFlags::ALLOW_AMBIGUOUS_YOU);
+            s = stripped;
+        } else if let Some(stripped) = s.strip_prefix(MOD_EXTRACT_GROUP_MEMBER) {
+            flags.insert(TagFlags::EXTRACT_GROUP_MEMBER);
             s = stripped;
         } else {
             break;
         }
     }
-    (s, force_3rd_person, no_smart, force_singular)
-}
-
-#[inline]
-fn parse_entity_modifiers(s: &str) -> (&str, bool, bool, bool, bool) {
-    let (s, force_3rd_person, no_smart, force_singular) = parse_stance_prefixes(s);
-    let (s, is_possessive) = parse_possessive_suffix(s);
-    (s, force_3rd_person, no_smart, force_singular, is_possessive)
+    (s, flags)
 }
 
 type ParsedForcedConjugations = (Option<Vec<String>>, Option<Vec<String>>);
-
-#[inline]
-fn create_pronoun_ref(p1: &str, p2: &str, content: &str) -> Result<Token, String> {
-    let (p1_str, force_3rd_person, no_smart_entity, force_singular_1, _) =
-        parse_entity_modifiers(p1);
-    let (p2_str, _, force_pronoun, force_singular_2) = parse_stance_prefixes(p2);
-
-    reject_if(
-        p1_str.is_empty() || p2_str.is_empty(),
-        "Pronoun tag has an empty key or type",
-        content,
-        TAG_ENTITY_OPEN,
-    )?;
-    validate_property_segments(
-        p1_str,
-        "Pronoun tag has an empty property segment",
-        content,
-        TAG_ENTITY_OPEN,
-    )?;
-    let flags = TagFlags::new(
-        is_capitalized(p2_str),
-        false,
-        force_3rd_person,
-        false,
-        force_pronoun || no_smart_entity,
-        force_singular_1 || force_singular_2,
-        false,
-        false,
-    );
-    Ok(Token::PronounRef {
-        key: p1_str.to_lowercase(),
-        p_type: p2_str.to_lowercase(),
-        flags,
-    })
-}
 
 #[inline]
 fn parse_forced_conjugations(
@@ -1755,43 +2237,30 @@ fn should_capitalize_whole_tag(params: &EntityRefParams<'_>) -> bool {
 }
 
 #[inline]
-fn create_entity_ref(
-    key: &str,
-    article: Option<&str>,
-    flags: TagFlags,
-    content: &str,
-) -> Result<Token, String> {
-    validate_property_segments(
-        key,
-        "Entity tag has an empty property segment",
-        content,
-        '{',
-    )?;
-    Ok(Token::EntityRef {
-        key: key.to_lowercase(),
-        article: article.map(ToString::to_string),
-        flags,
-    })
-}
-
-#[inline]
+#[allow(clippy::fn_params_excessive_bools)]
 const fn viewer_name(
     stance: crate::models::ActorStance,
     is_plural: bool,
     is_possessive: bool,
     is_capitalized: bool,
+    is_obj: bool,
 ) -> &'static str {
     match stance {
-        crate::models::ActorStance::FirstPerson => match (is_plural, is_possessive, is_capitalized)
-        {
-            (false, true, true) => "My",
-            (false, true, false) => "my",
-            (false, false, _) => "I",
-            (true, true, true) => "Our",
-            (true, true, false) => "our",
-            (true, false, true) => "We",
-            (true, false, false) => "we",
-        },
+        crate::models::ActorStance::FirstPerson => {
+            match (is_plural, is_possessive, is_capitalized, is_obj) {
+                (false, true, true, _) => "My",
+                (false, true, false, _) => "my",
+                (false, false, true, true) => "Me",
+                (false, false, false, true) => "me",
+                (false, false, _, false) => "I",
+                (true, true, true, _) => "Our",
+                (true, true, false, _) => "our",
+                (true, false, true, true) => "Us",
+                (true, false, false, true) => "us",
+                (true, false, true, false) => "We",
+                (true, false, false, false) => "we",
+            }
+        }
         crate::models::ActorStance::SecondPerson => match (is_possessive, is_capitalized) {
             (true, true) => "Your",
             (true, false) => "your",
@@ -1874,7 +2343,11 @@ fn effective_viewer_id<'a>(ctx: &RenderContext<'a>, force_3rd_person: bool) -> &
 fn parse_possessive_suffix(s: &str) -> (&str, bool) {
     if let Some(stripped) = s.strip_suffix(MOD_POSSESSIVE) {
         (stripped, true)
+    } else if let Some(stripped) = s.strip_suffix("'S") {
+        (stripped, true)
     } else if let Some(stripped) = s.strip_suffix("’s") {
+        (stripped, true)
+    } else if let Some(stripped) = s.strip_suffix("’S") {
         (stripped, true)
     } else if let Some(stripped) = s.strip_suffix('\'') {
         (stripped, true)
