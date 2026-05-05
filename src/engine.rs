@@ -1089,11 +1089,43 @@ impl PerspectiveEngine {
 
     #[inline]
     fn is_after_possessive(output: &str) -> bool {
-        let s = output.trim_end();
-        if s.ends_with("'s") || s.ends_with('\'') || s.ends_with('’') {
+        #[cfg(not(any(feature = "mxp", feature = "msp", feature = "ansi")))]
+        {
+            Self::check_possessive_str(output)
+        }
+
+        #[cfg(any(feature = "mxp", feature = "msp", feature = "ansi"))]
+        {
+            if !has_protocol_tags(output) {
+                return Self::check_possessive_str(output);
+            }
+
+            let mut stripped = String::with_capacity(output.len());
+            let mut chars = output.char_indices().peekable();
+
+            while let Some(&(i, c)) = chars.peek() {
+                let remainder = output.get(i..).unwrap_or_default();
+                if skip_protocol_tags(&mut chars, remainder, i).is_some() {
+                    continue;
+                }
+                stripped.push(c);
+                chars.next();
+            }
+
+            Self::check_possessive_str(&stripped)
+        }
+    }
+
+    #[inline]
+    fn check_possessive_str(s: &str) -> bool {
+        let trimmed = s.trim_end();
+        if trimmed.ends_with("'s") || trimmed.ends_with('\'') || trimmed.ends_with('’') {
             return true;
         }
-        let last_word = s.rsplit(|c: char| !c.is_alphabetic()).next().unwrap_or("");
+        let last_word = trimmed
+            .rsplit(|c: char| !c.is_alphabetic())
+            .next()
+            .unwrap_or("");
         matches!(
             last_word.to_ascii_lowercase().as_str(),
             "my" | "your" | "his" | "her" | "its" | "our" | "their" | "whose"
@@ -1342,7 +1374,7 @@ impl PerspectiveEngine {
             };
 
             let member_is_active_subj =
-                active_subject_entity.is_some_and(|active| std::ptr::eq(active, member));
+                active_subject_entity.is_some_and(|active| std::ptr::addr_eq(active, member));
 
             let mut flags = GroupMemberFlags::empty();
             flags.set(GroupMemberFlags::AFTER_POSSESSIVE, after_possessive);
@@ -1648,7 +1680,21 @@ impl PerspectiveEngine {
                 .copied()
                 .map_or_else(|| Self::get_entity(ctx, active_key), Ok)
         {
-            return std::ptr::eq(entity, active_entity);
+            // Prevent false positives when a sub-property is located at memory offset 0
+            // of its parent struct, which causes their data pointers to be identical.
+            if key.starts_with(active_key)
+                && key.len() > active_key.len()
+                && key.as_bytes().get(active_key.len()) == Some(&b'.')
+            {
+                return false;
+            }
+            if active_key.starts_with(key)
+                && active_key.len() > key.len()
+                && active_key.as_bytes().get(key.len()) == Some(&b'.')
+            {
+                return false;
+            }
+            return std::ptr::addr_eq(entity, active_entity);
         }
         false
     }

@@ -10633,4 +10633,117 @@ mod tests {
         let output_forced = render_msg!("char_3", &template_forced, "party" => &party).unwrap();
         assert_eq!(output_forced, "The Aldran and the Bob arrive.");
     }
+
+    #[test]
+    #[cfg(feature = "ansi")]
+    fn test_is_after_possessive_skips_ansi() {
+        let goblin = MockEntity {
+            id: "mob_1".to_string(),
+            name: "goblin".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+        let ctx = RenderContext::new("char_1").with_entity("target", &goblin);
+
+        // Possessive pronoun followed by ANSI tag before the noun tag
+        let template_1 = cache
+            .get_or_compile("It is your \x1b[31m{the:target:obj}\x1b[0m!")
+            .expect("Failed to compile template");
+
+        // Article "the" should be suppressed by "your", despite the ANSI tag in between
+        assert_eq!(
+            PerspectiveEngine::render(&template_1, &ctx).expect("Failed to render template"),
+            "It is your \x1b[31mgoblin\x1b[0m!"
+        );
+
+        ctx.clear_anaphora();
+
+        // Possessive suffix followed by ANSI tag before the noun tag
+        let template_2 = cache
+            .get_or_compile("Aldran's \x1b[32m{the:target:obj}\x1b[0m.")
+            .expect("Failed to compile template");
+
+        assert_eq!(
+            PerspectiveEngine::render(&template_2, &ctx).expect("Failed to render template"),
+            "Aldran's \x1b[32mgoblin\x1b[0m."
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "mxp")]
+    fn test_is_after_possessive_skips_mxp() {
+        let goblin = MockEntity {
+            id: "mob_1".to_string(),
+            name: "goblin".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+        let ctx = RenderContext::new("char_1").with_entity("target", &goblin);
+
+        let template_1 = cache
+            .get_or_compile("It is your <SEND href=\"look\">{the:target:obj}</SEND>!")
+            .expect("Failed to compile template");
+
+        assert_eq!(
+            PerspectiveEngine::render(&template_1, &ctx).expect("Failed to render template"),
+            "It is your <SEND href=\"look\">goblin</SEND>!"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "msp")]
+    fn test_is_after_possessive_skips_msp() {
+        let goblin = MockEntity {
+            id: "mob_1".to_string(),
+            name: "goblin".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+        let ctx = RenderContext::new("char_1").with_entity("target", &goblin);
+
+        let template_1 = cache
+            .get_or_compile("It is your !!SOUND(roar.wav){the:target:obj}!")
+            .expect("Failed to compile template");
+
+        assert_eq!(
+            PerspectiveEngine::render(&template_1, &ctx).expect("Failed to render template"),
+            "It is your !!SOUND(roar.wav)goblin!"
+        );
+    }
+
+    #[test]
+    #[cfg(all(feature = "ansi", feature = "mxp"))]
+    fn test_is_after_possessive_skips_mixed_tags() {
+        let goblin = MockEntity {
+            id: "mob_1".to_string(),
+            name: "goblin".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+        let ctx = RenderContext::new("char_1").with_entity("target", &goblin);
+
+        // Combines both ANSI sequence and MXP element between possessive and entity
+        let template_1 = cache
+            .get_or_compile(
+                "It is your \x1b[31m<SEND href=\"look\">{the:target:obj}</SEND>\x1b[0m!",
+            )
+            .expect("Failed to compile template");
+
+        assert_eq!(
+            PerspectiveEngine::render(&template_1, &ctx).expect("Failed to render template"),
+            "It is your \x1b[31m<SEND href=\"look\">goblin</SEND>\x1b[0m!"
+        );
+    }
 }
