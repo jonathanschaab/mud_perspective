@@ -1527,14 +1527,14 @@ mod tests {
             .expect("Failed to compile template");
         let out4 = PerspectiveEngine::render(&t4, &ctx).expect("Failed to render template");
         // Because the slime (Neutral) was just introduced, the pronoun for the target (goblin, also Neutral)
-        // is now ambiguous. The engine must safely expand it back to "The goblin" to prevent confusion.
+        // is now ambiguous. The engine must expand it back to "The goblin" to prevent confusion.
         assert_eq!(
             out4,
             "The goblin enters. The slime blinks. The goblin screams."
         );
 
         // 5. Reflexive pronouns explicitly bypass Anaphora resolution.
-        // Possessive pronouns fallback intelligently to possessive nouns!
+        // Possessive pronouns fall back to possessive nouns!
         ctx.clear_anaphora();
         let t5 = cache
             .get_or_compile(
@@ -4273,7 +4273,7 @@ mod tests {
             .with_entity("source", &player)
             .with_tense(crate::models::Tense::Past);
 
-        // In the present tense, both flawlessly evaluate to "lies"
+        // In the present tense, both evaluate to "lies"
         assert_eq!(
             PerspectiveEngine::render(&t_lay, &ctx_pres).expect("Failed to render template"),
             "Aldran lies down."
@@ -8365,7 +8365,7 @@ mod tests {
 
     // --- UNIFIED TAG EQUIVALENT TESTS ---
     // The following tests replicate the core behavior of the engine using ONLY unified tags
-    // ({article:key:case}), proving that the unified syntax flawlessly replaces both standard
+    // ({article:key:case}), demonstrating that the unified syntax replaces both standard
     // noun tags ({key}) and pronoun tags ({key:case}).
 
     #[test]

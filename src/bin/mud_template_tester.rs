@@ -276,7 +276,9 @@ fn main() {
 
         loop {
             print!("> ");
-            stdout.flush().unwrap_or_default();
+            if let Err(e) = stdout.flush() {
+                eprintln!("Error flushing stdout: {}", e);
+            }
 
             let mut input = String::new();
             if stdin.read_line(&mut input).is_err() {
@@ -468,7 +470,9 @@ fn main() {
                 if !persistent_bindings.contains_key(key) {
                     loop {
                         print!("Assign subset for tag '{{{}}}' [actors]: ", key);
-                        stdout.flush().unwrap_or_default();
+                    if let Err(e) = stdout.flush() {
+                        eprintln!("Error flushing stdout: {}", e);
+                    }
                         let mut input = String::new();
                         if stdin.read_line(&mut input).is_err() {
                             break;

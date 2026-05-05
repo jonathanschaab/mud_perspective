@@ -225,11 +225,11 @@ The library provides a built-in `GroupEntity` to represent dynamic groups of cha
 Furthermore, the engine implements grammatical rules for mixed-person groups:
 * **Pronoun Decompounding:** If a group evaluates in the First Person alongside other entities, it decomposes and orders the pronouns (e.g., `"You, the goblin, and I"`). 
 * **Possessive Distribution:** It dynamically distributes joint possessive suffixes across the list if a possessive pronoun is involved (e.g., `"your, the goblin's, and my gold"`). 
-* **Objective Collapsing:** Mixed-group objective pronouns intelligently collapse into `"us"`. 
-* **Reflexive Overrides:** If a singular entity acts upon a group containing itself, the engine smartly injects reflexive pronouns natively into the list (e.g., `"I slash the goblin and myself"`).
+* **Objective Collapsing:** Mixed-group objective pronouns collapse into `"us"`. 
+* **Reflexive Overrides:** If a singular entity acts upon a group containing itself, the engine injects reflexive pronouns natively into the list (e.g., `"I slash the goblin and myself"`).
 * **Nested & Empty Groups:** Group entities can safely contain other `GroupEntity` instances. The engine automatically flattens them into a single cohesive list and completely ignores any empty groups.
 
-You can use the `^` modifier to extract an unspecified member from a group (e.g., `{^party:Subj}`). The engine will intelligently evaluate shared genders across the group or fall back to "It", and seamlessly formats the Oxford list using the "or" conjunction (e.g., `"You or Bob arrives"`). Additionally, you can use the `~` modifier (e.g., `{~party:Subj}`) to force the engine to permit an ambiguous "You" to refer to the whole party instead of triggering the engine's ambiguity safeguards.
+You can use the `^` modifier to extract an unspecified member from a group (e.g., `{^party:Subj}`). The engine will evaluate shared genders across the group or fall back to "It", and format the Oxford list using the "or" conjunction (e.g., `"You or Bob arrives"`). Additionally, you can use the `~` modifier (e.g., `{~party:Subj}`) to force the engine to permit an ambiguous "You" to refer to the whole party instead of triggering the engine's ambiguity safeguards.
 
 ```rust
 use mud_perspective::models::GroupEntity;
@@ -244,7 +244,7 @@ let template = cache.get_or_compile("{source} [source:open] the door.")?;
 
 ### **4. Syntax Reference**
 
-* **Entity Tags:** The engine uses a flexible, three-part tag syntax: `{article:key:case}` (e.g., `{the:source.weapon:obj}`). It attempts to evaluate the pronoun case first (outputting "him" or "you"). If the engine detects ambiguity or it's the first mention, it gracefully falls back to the noun using your explicitly provided article (outputting "the sword"). Because the `article` and `case` segments are optional, a single tag scales seamlessly from simple noun insertions to complex, context-aware pronouns:
+* **Entity Tags:** The engine uses a flexible, three-part tag syntax: `{article:key:case}` (e.g., `{the:source.weapon:obj}`). It attempts to evaluate the pronoun case first (outputting "him" or "you"). If the engine detects ambiguity or it's the first mention, it falls back to the noun using your explicitly provided article (outputting "the sword"). Because the `article` and `case` segments are optional, a single tag scales from simple noun insertions to complex, context-aware pronouns:
   * `{key}`: Inserts the entity's display name.
   * `{key:case}`: Appends a pronoun case, defaulting to an indefinite article ("a") if the engine forces a noun fallback.
   * `{article:key}`: Prepends a specific article directly to the noun.
@@ -292,8 +292,8 @@ To fix this, annotate the verb as an auxiliary helper: `[source:do(aux)]`.
 
 The engine features an Anaphora Resolution system. It allows you to write templates almost entirely with Entity Tags containing pronoun cases (e.g., `{target:Subj} [target:look] at {target:reflex}.`), and dynamically decides when to introduce the full name ("The goblin looks at itself.") and when to use pronouns ("It looks at itself.").
 
-* **How it Triggers:** Whenever the engine encounters a pronoun request on an Entity Tag, it checks the context's memory. If the entity hasn't been introduced yet, it will seamlessly fall back to using the fully formatted noun and inject the requested article. If a possessive pronoun is requested, the engine is smart enough to parse an `'s` added to the key and gracefully append it during the fallback (e.g., `{the:goblin's:poss}` natively evaluates to `"its"`, but dynamically falls back to `"the goblin's"`).
-  * *Standalone Verb Tracking:* Even if an entity is only introduced via a verb tag (e.g., `Bob [bob:attack]`), the engine intercepts the key and seamlessly injects the entity into the anaphora memory so that subsequent pronouns resolve accurately.
+* **How it Triggers:** Whenever the engine encounters a pronoun request on an Entity Tag, it checks the context's memory. If the entity hasn't been introduced yet, it will fall back to using the fully formatted noun and inject the requested article. If a possessive pronoun is requested, the engine parses an `'s` added to the key and appends it during the fallback (e.g., `{the:goblin's:poss}` natively evaluates to `"its"`, but dynamically falls back to `"the goblin's"`).
+  * *Standalone Verb Tracking:* Even if an entity is only introduced via a verb tag (e.g., `Bob [bob:attack]`), the engine intercepts the key and injects the entity into the anaphora memory so that subsequent pronouns resolve accurately.
 * **Ambiguity Detection:** In plain terms, the engine behaves like a reader. If a pronoun is requested for an entity that isn't the active subject, the engine evaluates the "cast" of recently mentioned characters. If any other recently mentioned character shares the exact same grammatical gender and plurality (e.g., two male characters in the same sentence), the engine recognizes that outputting "He" would confuse the reader. It falls back to the full name to ensure clarity.
 * **Auto-Reflexive Upgrades:** If a template uses a standard object pronoun (e.g., `{target:obj}`) and the target happens to be the same entity as the active subject, the engine automatically upgrades the pronoun to its reflexive form (e.g., "himself", "itself", "myself"). This means you don't need to write separate templates for self-inflicted actions!
 * **Cross-Context Memory:** The anaphora memory lives inside the `RenderContext`. 
@@ -310,7 +310,7 @@ The engine features an Anaphora Resolution system. It allows you to write templa
 
 #### **Long Display Names & Collision Preemption**
 
-When two entities share the exact same short name (e.g., two entities named "wolf"), the engine automatically checks if either provides a `long_display_name_for` (e.g., "large wolf" or "dire wolf"). If one does, the engine dynamically upgrades the description to gracefully disambiguate them before resorting to numbered ordinals (preventing "the first wolf and the second wolf"). 
+When two entities share the exact same short name (e.g., two entities named "wolf"), the engine automatically checks if either provides a `long_display_name_for` (e.g., "large wolf" or "dire wolf"). If one does, the engine dynamically upgrades the description to disambiguate them before resorting to numbered ordinals (preventing "the first wolf and the second wolf"). 
 
 If you enable the Omniscient Lookahead feature (`ctx.with_lookahead(true)`), the engine will preemptively use the long name on the very first mention. This prevents narrative "pop-in" where an entity is initially introduced as "a wolf" but suddenly upgrades to "the large wolf" sentences later when the second wolf arrives.
 
@@ -324,7 +324,7 @@ If you use a noun tag in the object position of a sentence and that entity evalu
 Instead of writing: `{source} [source:hit] {target}.`
 You should write: `{source} [source:hit] {target:obj}.`
 
-*Why does this work for NPCs?* If the target is an NPC, you might expect `{target:obj}` to output "Aldran hits him." However, because of the Anaphora Resolution system, if it's the *first* time the NPC has been mentioned, the engine intercepts the pronoun and intelligently falls back to the full noun with an indefinite article (e.g., "Aldran hits a goblin."). If it's the viewer, it automatically bypasses the fallback and correctly outputs "Aldran hits me."
+*Why does this work for NPCs?* If the target is an NPC, you might expect `{target:obj}` to output "Aldran hits him." However, because of the Anaphora Resolution system, if it's the *first* time the NPC has been mentioned, the engine intercepts the pronoun and falls back to the full noun with an indefinite article (e.g., "Aldran hits a goblin."). If it's the viewer, it automatically bypasses the fallback and correctly outputs "Aldran hits me."
 
 #### **Example: Multi-Sentence Combat Log**
 
