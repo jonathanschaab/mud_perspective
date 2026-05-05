@@ -10401,4 +10401,236 @@ mod tests {
             "IT falls."
         );
     }
+
+    #[test]
+    #[cfg(feature = "ansi")]
+    fn test_all_caps_skips_ansi() {
+        let goblin = MockEntity {
+            id: "mob_1".to_string(),
+            name: "\x1b[31mgoblin\x1b[0m".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+
+        let t1 = cache
+            .get_or_compile("{*THE:SOURCE:SUBJ} [SOURCE:ATTACK]!")
+            .expect("Failed to compile template");
+        let ctx = RenderContext::new("char_2").with_entity("source", &goblin);
+
+        assert_eq!(
+            PerspectiveEngine::render(&t1, &ctx).expect("Failed to render template"),
+            "THE \x1b[31mGOBLIN\x1b[0m ATTACKS!"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "mxp")]
+    fn test_all_caps_skips_mxp() {
+        let goblin = MockEntity {
+            id: "mob_1".to_string(),
+            name: r#"<SEND HREF="look at goblin">goblin</SEND>"#.to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+
+        let t1 = cache
+            .get_or_compile("{*THE:SOURCE:SUBJ} [SOURCE:ATTACK]!")
+            .expect("Failed to compile template");
+        let ctx = RenderContext::new("char_2").with_entity("source", &goblin);
+
+        assert_eq!(
+            PerspectiveEngine::render(&t1, &ctx).expect("Failed to render template"),
+            r#"THE <SEND HREF="look at goblin">GOBLIN</SEND> ATTACKS!"#
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "msp")]
+    fn test_all_caps_skips_msp() {
+        let goblin = MockEntity {
+            id: "mob_1".to_string(),
+            name: "!!SOUND(roar.wav)goblin".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+
+        let cache = TemplateCache::new(100);
+
+        let t1 = cache
+            .get_or_compile("{*THE:SOURCE:SUBJ} [SOURCE:ATTACK]!")
+            .expect("Failed to compile template");
+        let ctx = RenderContext::new("char_2").with_entity("source", &goblin);
+
+        assert_eq!(
+            PerspectiveEngine::render(&t1, &ctx).expect("Failed to render template"),
+            "THE !!SOUND(roar.wav)GOBLIN ATTACKS!"
+        );
+    }
+
+    #[test]
+    fn test_distributed_group_article_suppression_after_possessive() {
+        let aldran = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+        let goblin = MockEntity {
+            id: "mob_1".to_string(),
+            name: "goblin".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+        let wolf = MockEntity {
+            id: "mob_2".to_string(),
+            name: "wolf".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+
+        let party = GroupEntity::new(vec![&goblin, &wolf]);
+        let cache = TemplateCache::new(100);
+
+        let template = cache
+            .get_or_compile("{*A:source's} {the:party:obj}.")
+            .expect("Failed to compile template");
+
+        let output = render_msg!("char_2", &template, "source" => &aldran, "party" => &party)
+            .expect("Failed to render template");
+
+        // The possessive "Aldran's" should suppress the article for BOTH the goblin and the wolf.
+        assert_eq!(output, "Aldran's goblin and wolf.");
+    }
+
+    #[test]
+    fn test_reflexive_group_capitalization() {
+        let bob = MockEntity {
+            id: "char_2".to_string(),
+            name: "Bob".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+        let charlie = MockEntity {
+            id: "char_3".to_string(),
+            name: "Charlie".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+
+        let party = GroupEntity::new(vec![&charlie, &bob]);
+        let cache = TemplateCache::new(100);
+
+        let template = cache
+            .get_or_compile("{Bob:subj} [bob:defend] {The:Party:obj}.")
+            .expect("Failed to compile template");
+        let ctx = RenderContext::new("char_1")
+            .with_entity("bob", &bob)
+            .with_entity("party", &party);
+
+        // Because Charlie is the `first_visible_item` in the party vector, he absorbs the
+        // capitalization flags from `{The:Party:obj}`. Bob is the second item, so his
+        // reflexive pronoun "himself" remains lowercase. If the vector order was reversed,
+        // the output would be "Bob defends Himself and Charlie."
+        assert_eq!(
+            PerspectiveEngine::render(&template, &ctx).expect("Failed to render template"),
+            "Bob defends Charlie and himself."
+        );
+    }
+
+    #[test]
+    fn test_reflexive_first_member_common_noun() {
+        let wolf = MockEntity {
+            id: "mob_1".to_string(),
+            name: "wolf".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+        let goblin = MockEntity {
+            id: "mob_2".to_string(),
+            name: "goblin".to_string(),
+            gender: Gender::Neutral,
+            is_plural: false,
+            is_proper_noun: false,
+        };
+
+        let party = GroupEntity::new(vec![&wolf, &goblin]);
+        let cache = TemplateCache::new(100);
+
+        // 1. The wolf is the active subject, and it is the FIRST member of the party.
+        // It gets reflexively replaced ("Itself") and absorbs the capitalization from {The:party:obj}.
+        // The goblin is the second member, so its article remains lowercase ("the goblin").
+        let template = cache
+            .get_or_compile("{*The:wolf:subj} [wolf:defend] {The:party:obj}.")
+            .expect("Failed to compile template");
+
+        let ctx1 = RenderContext::new("char_1")
+            .with_entity("wolf", &wolf)
+            .with_entity("party", &party);
+
+        assert_eq!(
+            PerspectiveEngine::render(&template, &ctx1).expect("Failed to render template"),
+            "The wolf defends Itself and the goblin."
+        );
+
+        // 2. Reverse the group order so the goblin is first.
+        let party_reversed = GroupEntity::new(vec![&goblin, &wolf]);
+        let ctx2 = RenderContext::new("char_1")
+            .with_entity("wolf", &wolf)
+            .with_entity("party", &party_reversed);
+
+        // Now the goblin is the first member, so its article absorbs the capitalization ("The goblin").
+        // The wolf is the second member, so its reflexive pronoun is lowercase ("itself").
+        assert_eq!(
+            PerspectiveEngine::render(&template, &ctx2).expect("Failed to render template"),
+            "The wolf defends The goblin and itself."
+        );
+    }
+
+    #[test]
+    fn test_force_article_distributes_to_group_members() {
+        let aldran = MockEntity {
+            id: "char_1".to_string(),
+            name: "Aldran".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+        let bob = MockEntity {
+            id: "char_2".to_string(),
+            name: "Bob".to_string(),
+            gender: Gender::Male,
+            is_plural: false,
+            is_proper_noun: true,
+        };
+
+        let party = GroupEntity::new(vec![&aldran, &bob]);
+        let cache = TemplateCache::new(100);
+
+        // Without +the, proper nouns naturally suppress the article.
+        let template_normal = cache
+            .get_or_compile("{*The:party:subj} [party:arrive].")
+            .expect("Failed to compile template");
+        let output_normal = render_msg!("char_3", &template_normal, "party" => &party).unwrap();
+        assert_eq!(output_normal, "Aldran and Bob arrive.");
+
+        // With +the, the article is forced on ALL proper nouns in the group list.
+        let template_forced = cache
+            .get_or_compile("{*+The:party:subj} [party:arrive].")
+            .expect("Failed to compile template");
+        let output_forced = render_msg!("char_3", &template_forced, "party" => &party).unwrap();
+        assert_eq!(output_forced, "The Aldran and the Bob arrive.");
+    }
 }

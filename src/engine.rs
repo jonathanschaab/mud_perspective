@@ -661,7 +661,7 @@ impl PerspectiveEngine {
             }
 
             if all_caps && raw_output.len() > start_len {
-                let upper = raw_output[start_len..].to_uppercase();
+                let upper = Self::apply_all_caps(&raw_output[start_len..]);
                 raw_output.truncate(start_len);
                 raw_output.push_str(&upper);
             }
@@ -1522,8 +1522,8 @@ impl PerspectiveEngine {
             )
             .unwrap_or("itself");
             let mut final_name = std::borrow::Cow::Owned(
-                if params.flags.is_capitalized()
-                    || (params.flags.article_capitalized() && first_visible_item)
+                if (params.flags.is_capitalized() || params.flags.article_capitalized())
+                    && first_visible_item
                 {
                     crate::grammar::capitalize_first(reflex)
                 } else {
@@ -1555,7 +1555,7 @@ impl PerspectiveEngine {
         );
         article_flags.set(
             crate::grammar::ArticleFlags::AFTER_POSSESSIVE,
-            config.flags.contains(GroupMemberFlags::AFTER_POSSESSIVE) && first_visible_item,
+            config.flags.contains(GroupMemberFlags::AFTER_POSSESSIVE),
         );
         article_flags.set(
             crate::grammar::ArticleFlags::IS_CAPITALIZED,
@@ -1886,6 +1886,41 @@ impl PerspectiveEngine {
         }
 
         output
+    }
+
+    /// Uppercases the string while preserving the casing of protocol tags.
+    fn apply_all_caps(input: &str) -> String {
+        #[cfg(not(any(feature = "mxp", feature = "msp", feature = "ansi")))]
+        {
+            input.to_uppercase()
+        }
+
+        #[cfg(any(feature = "mxp", feature = "msp", feature = "ansi"))]
+        {
+            if !has_protocol_tags(input) {
+                return input.to_uppercase();
+            }
+
+            let mut output = String::with_capacity(input.len());
+            let mut chars = input.char_indices().peekable();
+
+            while let Some(&(i, c)) = chars.peek() {
+                let remainder = input.get(i..).unwrap_or_default();
+                if let Some(end_offset) = skip_protocol_tags(&mut chars, remainder, i) {
+                    if let Some(skipped) = remainder.get(..=end_offset) {
+                        output.push_str(skipped);
+                    }
+                    continue;
+                }
+
+                chars.next();
+                for uc in c.to_uppercase() {
+                    output.push(uc);
+                }
+            }
+
+            output
+        }
     }
 }
 
