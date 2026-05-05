@@ -187,8 +187,8 @@ pub fn test_template_with_standard_entities<S: std::hash::BuildHasher>(
     }
 
     let group = GroupEntity::new(vec![
-        *actors.first().expect("Missing viewer entity"),
-        *actors.get(2).expect("Missing mob entity"),
+        *actors.first().ok_or("Missing viewer entity")?,
+        *actors.get(2).ok_or("Missing mob entity")?,
     ]);
     actors.push(&group);
 

@@ -9,6 +9,8 @@
     clippy::must_use_candidate,
     clippy::doc_markdown,
     clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::unreachable,
     clippy::indexing_slicing
 )]
 #![allow(

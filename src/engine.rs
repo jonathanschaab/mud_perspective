@@ -207,7 +207,11 @@ impl Template {
                 }
             }
             [p1] => Ok((None, *p1, None)),
-            _ => unreachable!(),
+            _ => Err(validation_error(
+                "Malformed entity tag",
+                content,
+                TAG_ENTITY_OPEN,
+            )),
         }
     }
 
@@ -1044,7 +1048,7 @@ impl PerspectiveEngine {
             }
             let pronoun = resolve_pronoun(
                 effective_gender,
-                actual_p_type.expect("p_type is guaranteed to be Some in this block"),
+                actual_p_type.as_deref().unwrap_or(p_type),
                 is_viewer,
                 is_plural,
                 ctx.stance,
