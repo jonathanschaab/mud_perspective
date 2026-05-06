@@ -620,6 +620,7 @@ impl PerspectiveEngine {
 
         // 1. Pre-allocate buffer to prevent continuous heap allocations
         let mut raw_output = String::with_capacity(template.estimated_length);
+        let mut caps_buffer = String::new();
 
         for token in &template.tokens {
             let start_len = raw_output.len();
@@ -661,9 +662,10 @@ impl PerspectiveEngine {
             }
 
             if all_caps && raw_output.len() > start_len {
-                let upper = Self::apply_all_caps(&raw_output[start_len..]);
+                caps_buffer.clear();
+                Self::apply_all_caps(&raw_output[start_len..], &mut caps_buffer);
                 raw_output.truncate(start_len);
-                raw_output.push_str(&upper);
+                raw_output.push_str(&caps_buffer);
             }
         }
 
@@ -868,30 +870,47 @@ impl PerspectiveEngine {
         let mut ordinal = None;
 
         if !no_smart {
-            let mut ordinals = ctx.ordinals.borrow_mut();
-            let state =
-                ordinals
-                    .entry(name.to_string())
-                    .or_insert_with(|| crate::models::OrdinalState {
-                        next_ordinal: 1,
-                        members: HashMap::new(),
-                    });
+            ordinal = Self::assign_ordinal(ctx, name.as_ref(), key, name_collision);
+        }
 
+        (name, ordinal)
+    }
+
+    #[inline]
+    fn assign_ordinal(
+        ctx: &RenderContext,
+        name: &str,
+        key: &str,
+        name_collision: bool,
+    ) -> Option<usize> {
+        let mut ordinals = ctx.ordinals.borrow_mut();
+        if !ordinals.contains_key(name) {
+            ordinals.insert(
+                name.to_string(),
+                crate::models::OrdinalState {
+                    next_ordinal: 1,
+                    members: HashMap::new(),
+                },
+            );
+        }
+
+        if let Some(state) = ordinals.get_mut(name) {
             if name_collision {
-                let ord = *state.members.entry(key.to_string()).or_insert_with(|| {
+                if !state.members.contains_key(key) {
                     let o = state.next_ordinal;
                     state.next_ordinal += 1;
-                    o
-                });
-                ordinal = Some(ord);
+                    state.members.insert(key.to_string(), o);
+                }
+                if let Some(&ord) = state.members.get(key) {
+                    return Some(ord);
+                }
             } else {
                 state.members.clear();
                 state.members.insert(key.to_string(), 1);
                 state.next_ordinal = 2;
             }
         }
-
-        (name, ordinal)
+        None
     }
 
     fn render_entity_ref<'a>(
@@ -1553,15 +1572,14 @@ impl PerspectiveEngine {
                 ctx.stance,
             )
             .unwrap_or("itself");
-            let mut final_name = std::borrow::Cow::Owned(
-                if (params.flags.is_capitalized() || params.flags.article_capitalized())
-                    && first_visible_item
-                {
-                    crate::grammar::capitalize_first(reflex)
-                } else {
-                    reflex.to_string()
-                },
-            );
+            let mut final_name = if (params.flags.is_capitalized()
+                || params.flags.article_capitalized())
+                && first_visible_item
+            {
+                std::borrow::Cow::Owned(crate::grammar::capitalize_first(reflex))
+            } else {
+                std::borrow::Cow::Borrowed(reflex)
+            };
 
             if config
                 .flags
@@ -1935,19 +1953,23 @@ impl PerspectiveEngine {
     }
 
     /// Uppercases the string while preserving the casing of protocol tags.
-    fn apply_all_caps(input: &str) -> String {
+    fn apply_all_caps(input: &str, output: &mut String) {
         #[cfg(not(any(feature = "mxp", feature = "msp", feature = "ansi")))]
         {
-            input.to_uppercase()
+            for c in input.chars() {
+                output.extend(c.to_uppercase());
+            }
         }
 
         #[cfg(any(feature = "mxp", feature = "msp", feature = "ansi"))]
         {
             if !has_protocol_tags(input) {
-                return input.to_uppercase();
+                for c in input.chars() {
+                    output.extend(c.to_uppercase());
+                }
+                return;
             }
 
-            let mut output = String::with_capacity(input.len());
             let mut chars = input.char_indices().peekable();
 
             while let Some(&(i, c)) = chars.peek() {
@@ -1960,12 +1982,8 @@ impl PerspectiveEngine {
                 }
 
                 chars.next();
-                for uc in c.to_uppercase() {
-                    output.push(uc);
-                }
+                output.extend(c.to_uppercase());
             }
-
-            output
         }
     }
 }
@@ -2218,7 +2236,11 @@ fn update_memory(memory: &std::cell::RefCell<Option<String>>, key: &str) {
 #[inline]
 fn push_capitalized_if(output: &mut String, text: &str, should_capitalize: bool) {
     if should_capitalize && text.chars().next().is_some_and(char::is_lowercase) {
-        output.push_str(&crate::grammar::capitalize_first(text));
+        let mut c = text.chars();
+        if let Some(f) = c.next() {
+            output.extend(f.to_uppercase());
+            output.push_str(c.as_str());
+        }
     } else {
         output.push_str(text);
     }

@@ -184,17 +184,21 @@ fn main() {
             process::exit(1);
         });
 
-        serde_json::from_str::<EntitiesPayload>(&entities_text).unwrap_or_else(|_| {
-            let entities =
-                serde_json::from_str::<Vec<DebugEntity>>(&entities_text).unwrap_or_else(|e| {
-                    eprintln!("Error parsing entities JSON:\n{}", e);
-                    process::exit(1);
-                });
-            EntitiesPayload {
-                subsets: std::collections::HashMap::new(),
-                entities,
+        match serde_json::from_str::<EntitiesPayload>(&entities_text) {
+            Ok(payload) => payload,
+            Err(err_payload) => {
+                match serde_json::from_str::<Vec<DebugEntity>>(&entities_text) {
+                    Ok(entities) => EntitiesPayload {
+                        subsets: std::collections::HashMap::new(),
+                        entities,
+                    },
+                    Err(err_vec) => {
+                        eprintln!("Error parsing entities JSON. Attempted two formats:\n1. As `EntitiesPayload` (with subsets): {}\n2. As a flat `Vec<DebugEntity>`: {}", err_payload, err_vec);
+                        process::exit(1);
+                    }
+                }
             }
-        })
+        }
     });
 
     let specific_context = context_path.map(|path| {
@@ -203,10 +207,13 @@ fn main() {
             process::exit(1);
         });
 
-        serde_json::from_str::<TestContextDef>(&context_text).unwrap_or_else(|e| {
-            eprintln!("Error parsing context JSON:\n{}", e);
-            process::exit(1);
-        })
+        match serde_json::from_str::<TestContextDef>(&context_text) {
+            Ok(context) => context,
+            Err(e) => {
+                eprintln!("Error parsing context JSON from '{}':\n{}", path, e);
+                process::exit(1);
+            }
+        }
     });
 
     if interactive && custom_payload.is_none() {
@@ -470,9 +477,9 @@ fn main() {
                 if !persistent_bindings.contains_key(key) {
                     loop {
                         print!("Assign subset for tag '{{{}}}' [actors]: ", key);
-                    if let Err(e) = stdout.flush() {
-                        eprintln!("Error flushing stdout: {}", e);
-                    }
+                        if let Err(e) = stdout.flush() {
+                            eprintln!("Error flushing stdout: {}", e);
+                        }
                         let mut input = String::new();
                         if stdin.read_line(&mut input).is_err() {
                             break;
