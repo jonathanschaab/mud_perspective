@@ -31,6 +31,10 @@ pub mod engine;
 pub mod grammar;
 /// Core data structures and traits for perspective rendering.
 pub mod models;
+/// Parsing engine and AST representation for templates.
+pub mod parser;
+/// String post-processing and MUD protocol tag management.
+pub mod typography;
 
 /// Renders a perspective-aware message ergonomically by abstracting the context initialization.
 ///
