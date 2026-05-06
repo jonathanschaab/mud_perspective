@@ -19,16 +19,20 @@ fn test_template_caching() {
     let raw_text = "The {*a:source:subj} [source:attack]!";
 
     // First call - CACHE MISS. The engine compiles the AST.
-    let template_1 = cache.get_or_compile(raw_text).unwrap();
+    let template_1 = cache
+        .get_or_compile(raw_text)
+        .expect("Failed to compile template");
 
     // Second call - CACHE HIT. The engine instantly returns the pre-compiled AST.
-    let template_2 = cache.get_or_compile(raw_text).unwrap();
+    let template_2 = cache
+        .get_or_compile(raw_text)
+        .expect("Failed to compile template");
 
     let ctx = RenderContext::new("char_1").with_entity("source", &player);
 
-    // Both pointers work perfectly with your existing renderer!
-    let output_1 = PerspectiveEngine::render(&template_1, &ctx).unwrap();
-    let output_2 = PerspectiveEngine::render(&template_2, &ctx).unwrap();
+    // Both pointers work with your existing renderer!
+    let output_1 = PerspectiveEngine::render(&template_1, &ctx).expect("Failed to render template");
+    let output_2 = PerspectiveEngine::render(&template_2, &ctx).expect("Failed to render template");
 
     assert_eq!(output_1, "The you attack!");
     assert_eq!(output_2, "The you attack!");

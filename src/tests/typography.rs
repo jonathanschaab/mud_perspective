@@ -187,9 +187,10 @@ fn test_unterminated_ansi_fallback() {
     // The {the:source} tag is parsed successfully rather than being swallowed.
     let template = cache
         .get_or_compile("\x1b]8;;unterminated {*the:source:subj} [source:attack].")
-        .unwrap();
+        .expect("Failed to compile template");
 
-    let output = render_msg!("char_2", &template, "source" => &goblin).unwrap();
+    let output =
+        render_msg!("char_2", &template, "source" => &goblin).expect("Failed to render template");
     // The 'u' in 'unterminated' is capitalized by the post-processor because
     // the sequence was treated as literal text.
     assert_eq!(output, "\x1b]8;;Unterminated the goblin attacks.");
@@ -197,7 +198,8 @@ fn test_unterminated_ansi_fallback() {
     // 2. Unterminated CSI sequence
     // Falls back to literal text, but the `[` immediately triggers the verb tag parser.
     // Since there's no `]`, it safely fails with a syntax error instead of skipping the string.
-    let err = crate::engine::Template::compile("\x1b[31").unwrap_err();
+    let err =
+        crate::engine::Template::compile("\x1b[31").expect_err("Expected compilation to fail");
     assert_eq!(err, "Unclosed verb tag starting at index 1");
 }
 
@@ -295,26 +297,27 @@ fn test_quoted_text_capitalization() {
     // The typography engine correctly skips the `"` and capitalizes the first letter.
     let template1 = cache
         .get_or_compile("\"{*the:source:subj} [source:be] a fool!\"")
-        .unwrap();
-    let output1 = render_msg!("char_2", &template1, "source" => &goblin).unwrap();
+        .expect("Failed to compile template");
+    let output1 =
+        render_msg!("char_2", &template1, "source" => &goblin).expect("Failed to render template");
     assert_eq!(output1, "\"The goblin is a fool!\"");
 
     // Scenario 2: Quote in the middle of a sentence with a proper noun
     // Proper nouns are returned already capitalized by `display_name_for`.
     let template2 = cache
         .get_or_compile("{*the:source:subj} [source:say], \"{*A:target:subj} [target:be] a fool!\"")
-        .unwrap();
-    let output2 =
-        render_msg!("char_2", &template2, "source" => &goblin, "target" => &player).unwrap();
+        .expect("Failed to compile template");
+    let output2 = render_msg!("char_2", &template2, "source" => &goblin, "target" => &player)
+        .expect("Failed to render template");
     assert_eq!(output2, "The goblin says, \"Aldran is a fool!\"");
 
     // Scenario 3: Quote in the middle of a sentence with a common noun (Capitalized Article)
     // By using {The:source}, we force the engine to capitalize the article regardless of the segmenter.
     let template3 = cache
         .get_or_compile("{*A:target:subj} [target:say], \"{*The:source:subj} [source:be] a fool!\"")
-        .unwrap();
-    let output3 =
-        render_msg!("char_2", &template3, "source" => &goblin, "target" => &player).unwrap();
+        .expect("Failed to compile template");
+    let output3 = render_msg!("char_2", &template3, "source" => &goblin, "target" => &player)
+        .expect("Failed to render template");
     assert_eq!(output3, "Aldran says, \"The goblin is a fool!\"");
 
     // Scenario 4: Indefinite article capitalization
@@ -322,9 +325,9 @@ fn test_quoted_text_capitalization() {
         .get_or_compile(
             "{*A:target:subj} [target:yell], \"{*A:source:subj} [source:be] approaching!\"",
         )
-        .unwrap();
-    let output4 =
-        render_msg!("char_2", &template4, "source" => &goblin, "target" => &player).unwrap();
+        .expect("Failed to compile template");
+    let output4 = render_msg!("char_2", &template4, "source" => &goblin, "target" => &player)
+        .expect("Failed to render template");
     assert_eq!(output4, "Aldran yells, \"A goblin is approaching!\"");
 }
 
@@ -344,18 +347,19 @@ fn test_mid_sentence_capitalization_overrides() {
     // The segmenter will capitalize "you", and `{Source}` overrides the disguise's lowercase.
     let template1 = cache
         .get_or_compile("you point at {*the:Source:obj}.")
-        .unwrap();
-    let out1 = render_msg!("stranger_1", &template1, "source" => &disguised).unwrap();
+        .expect("Failed to compile template");
+    let out1 = render_msg!("stranger_1", &template1, "source" => &disguised)
+        .expect("Failed to render template");
     assert_eq!(out1, "You point at the Tall man.");
 
     // 2. Force capitalizing a pronoun mid-sentence
     let template2 = cache
         .get_or_compile("you watch as {a:source:Subj} [source:fall].")
-        .unwrap();
+        .expect("Failed to compile template");
     let ctx2 = RenderContext::new("stranger_1")
         .with_entity("source", &disguised)
         .with_last_mentioned("source"); // Seed the context so it prints the pronoun!
-    let out2 = PerspectiveEngine::render(&template2, &ctx2).unwrap();
+    let out2 = PerspectiveEngine::render(&template2, &ctx2).expect("Failed to render template");
     assert_eq!(out2, "You watch as He falls.");
 
     // 3. Verbs already support this organically
@@ -363,8 +367,9 @@ fn test_mid_sentence_capitalization_overrides() {
     // where a conjugated verb is grammatically correct mid-sentence.
     let template3 = cache
         .get_or_compile("they say {*the:source:subj} [source:Smile] often.")
-        .unwrap();
-    let out3 = render_msg!("stranger_1", &template3, "source" => &disguised).unwrap();
+        .expect("Failed to compile template");
+    let out3 = render_msg!("stranger_1", &template3, "source" => &disguised)
+        .expect("Failed to render template");
     assert_eq!(out3, "They say the tall man Smiles often.");
 }
 
@@ -757,13 +762,15 @@ fn test_force_article_distributes_to_group_members() {
     let template_normal = cache
         .get_or_compile("{*The:party:subj} [party:arrive].")
         .expect("Failed to compile template");
-    let output_normal = render_msg!("char_3", &template_normal, "party" => &party).unwrap();
+    let output_normal = render_msg!("char_3", &template_normal, "party" => &party)
+        .expect("Failed to render template");
     assert_eq!(output_normal, "Aldran and Bob arrive.");
 
     // With +the, the article is forced on ALL proper nouns in the group list.
     let template_forced = cache
         .get_or_compile("{*+The:party:subj} [party:arrive].")
         .expect("Failed to compile template");
-    let output_forced = render_msg!("char_3", &template_forced, "party" => &party).unwrap();
+    let output_forced = render_msg!("char_3", &template_forced, "party" => &party)
+        .expect("Failed to render template");
     assert_eq!(output_forced, "The Aldran and the Bob arrive.");
 }

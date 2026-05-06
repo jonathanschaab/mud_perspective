@@ -166,7 +166,7 @@ fn test_reflexive_group_object() {
     let cache = TemplateCache::new(100);
     let template = cache
         .get_or_compile("{A:player:subj} [player:slash] {*the:party:obj}.")
-        .unwrap();
+        .expect("Failed to compile template");
 
     // 1. First Person
     let ctx_first = RenderContext::new("char_1")
@@ -174,7 +174,7 @@ fn test_reflexive_group_object() {
         .with_entity("player", &player)
         .with_entity("party", &party);
     assert_eq!(
-        PerspectiveEngine::render(&template, &ctx_first).unwrap(),
+        PerspectiveEngine::render(&template, &ctx_first).expect("Failed to render template"),
         "I slash the goblin and myself."
     );
 
@@ -184,7 +184,7 @@ fn test_reflexive_group_object() {
         .with_entity("player", &player)
         .with_entity("party", &party);
     assert_eq!(
-        PerspectiveEngine::render(&template, &ctx_second).unwrap(),
+        PerspectiveEngine::render(&template, &ctx_second).expect("Failed to render template"),
         "You slash yourself and the goblin."
     );
 
@@ -194,7 +194,7 @@ fn test_reflexive_group_object() {
         .with_entity("player", &player)
         .with_entity("party", &party);
     assert_eq!(
-        PerspectiveEngine::render(&template, &ctx_third).unwrap(),
+        PerspectiveEngine::render(&template, &ctx_third).expect("Failed to render template"),
         "Aldran slashes himself and the goblin."
     );
 }
@@ -243,12 +243,13 @@ fn test_nested_and_empty_group_entities() {
     let cache = TemplateCache::new(100);
     let template = cache
         .get_or_compile("{*the:source:subj} [source:prepare].")
-        .unwrap();
+        .expect("Failed to compile template");
 
     // 1. Director Stance (bystander sees everyone)
     // Expects empty group to be completely ignored.
     // Nested group is flattened so it prints as a single cohesive list.
-    let out_director = render_msg!("stranger_1", &template, "source" => &top_group).unwrap();
+    let out_director = render_msg!("stranger_1", &template, "source" => &top_group)
+        .expect("Failed to render template");
     assert_eq!(
         out_director,
         "The tall man, Bob, Charlie, and Dave prepare."
@@ -256,7 +257,8 @@ fn test_nested_and_empty_group_entities() {
 
     // 2. Actor Stance (Player is the viewer)
     // Expects "You" to be pulled to the front of the flattened list cleanly.
-    let out_actor = render_msg!("char_1", &template, "source" => &top_group).unwrap();
+    let out_actor = render_msg!("char_1", &template, "source" => &top_group)
+        .expect("Failed to render template");
     assert_eq!(out_actor, "You, Bob, Charlie, and Dave prepare.");
 }
 
@@ -280,16 +282,18 @@ fn test_single_member_group_grammar() {
     // Because Aldran is singular, the verb "open" must conjugate to "opens"
     let template_verb = cache
         .get_or_compile("{*A:source:subj} [source:open] the door.")
-        .unwrap();
-    let out_verb = render_msg!("char_2", &template_verb, "source" => &solo_group).unwrap();
+        .expect("Failed to compile template");
+    let out_verb = render_msg!("char_2", &template_verb, "source" => &solo_group)
+        .expect("Failed to render template");
     assert_eq!(out_verb, "Aldran opens the door.");
 
     // 2. Pronoun Resolution
     // Because Aldran is male, the pronoun must be "his" instead of "their"
     let template_pronoun = cache
         .get_or_compile("{*A:source:subj} [source:open] {a:source:poss} door.")
-        .unwrap();
-    let out_pronoun = render_msg!("char_2", &template_pronoun, "source" => &solo_group).unwrap();
+        .expect("Failed to compile template");
+    let out_pronoun = render_msg!("char_2", &template_pronoun, "source" => &solo_group)
+        .expect("Failed to render template");
     assert_eq!(out_pronoun, "Aldran opens his door.");
 
     // 3. Articles for common noun wrapped in a group
@@ -847,16 +851,20 @@ fn test_explicit_capitalization_after_possessive_in_groups() {
         .with_entity("weapons", &weapons);
 
     // 1. Uncapitalized explicit noun after possessive
-    let t_normal = cache.get_or_compile("{player's weapons}.").unwrap();
+    let t_normal = cache
+        .get_or_compile("{player's weapons}.")
+        .expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t_normal, &ctx).unwrap(),
+        PerspectiveEngine::render(&t_normal, &ctx).expect("Failed to render template"),
         "Aldran's sword and shield."
     );
 
     // 2. Explicitly capitalized noun {Weapons} after possessive
-    let t_cap = cache.get_or_compile("{player's} {Weapons}.").unwrap();
+    let t_cap = cache
+        .get_or_compile("{player's} {Weapons}.")
+        .expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t_cap, &ctx).unwrap(),
+        PerspectiveEngine::render(&t_cap, &ctx).expect("Failed to render template"),
         "Aldran's Sword and shield."
     );
 }
@@ -884,18 +892,18 @@ fn test_group_entity_forced_3rd_person() {
 
     let t1 = cache
         .get_or_compile("{*A:party:subj} [party:arrive].")
-        .unwrap();
+        .expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t1, &ctx).unwrap(),
+        PerspectiveEngine::render(&t1, &ctx).expect("Failed to render template"),
         "You and Bob arrive."
     );
 
     // With the `+` modifier, the viewer check naturally resolves the entire group evaluation into Director Stance!
     let t2 = cache
         .get_or_compile("{*A:+party:subj} [+party:arrive].")
-        .unwrap();
+        .expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t2, &ctx).unwrap(),
+        PerspectiveEngine::render(&t2, &ctx).expect("Failed to render template"),
         "Aldran and Bob arrive."
     );
 }

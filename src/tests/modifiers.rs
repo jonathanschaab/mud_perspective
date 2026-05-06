@@ -27,18 +27,21 @@ fn test_force_director_stance() {
         .get_or_compile(
             "{a:+source:subj} [+source:attack] {the:target:obj} with {the:+source:poss} sword.",
         )
-        .unwrap();
+        .expect("Failed to compile template");
 
     // The player is the viewer, so normally this would render "You attack the goblin with your sword."
     // Because of the `+` prefix on the keys, it forces 3rd person logic even for the viewer!
     let out_forced =
-        render_msg!("char_1", &template_forced, "source" => &player, "target" => &goblin).unwrap();
+        render_msg!("char_1", &template_forced, "source" => &player, "target" => &goblin)
+            .expect("Failed to render template");
     assert_eq!(out_forced, "Aldran attacks the goblin with his sword.");
 
     // Can even force an article onto a forced-3rd-person proper noun (e.g. {+the:source})
-    let template_double_force = cache.get_or_compile("{+The:source:subj} is here.").unwrap();
-    let out_double_force =
-        render_msg!("char_1", &template_double_force, "source" => &player).unwrap();
+    let template_double_force = cache
+        .get_or_compile("{+The:source:subj} is here.")
+        .expect("Failed to compile template");
+    let out_double_force = render_msg!("char_1", &template_double_force, "source" => &player)
+        .expect("Failed to render template");
     assert_eq!(out_double_force, "The Aldran is here.");
 }
 
@@ -140,21 +143,23 @@ fn test_singular_override_tenses_and_stances() {
     let ctx_actor_1st_past = ctx_actor_1st.clone().with_tense(crate::models::Tense::Past);
 
     assert_eq!(
-        PerspectiveEngine::render(&template, &ctx_actor_1st).unwrap(),
+        PerspectiveEngine::render(&template, &ctx_actor_1st).expect("Failed to render template"),
         "I charge."
     );
 
     assert_eq!(
-        PerspectiveEngine::render(&template, &ctx_actor_1st_past).unwrap(),
+        PerspectiveEngine::render(&template, &ctx_actor_1st_past)
+            .expect("Failed to render template"),
         "I charged."
     );
 
     // Prove that without the override, it behaves as a standard plural first-person group ("We")
     let t_no_override = cache
         .get_or_compile("{a:orcs:Subj} [orcs:charge].")
-        .unwrap();
+        .expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t_no_override, &ctx_actor_1st).unwrap(),
+        PerspectiveEngine::render(&t_no_override, &ctx_actor_1st)
+            .expect("Failed to render template"),
         "We charge."
     );
 }
@@ -226,16 +231,16 @@ fn test_singular_override_forced_conjugation_and_lookahead() {
 
     // We use forced conjugation for a complex verb like "be" and "have".
     // The `-` prefix should correctly route the forced conjugation to the 3rd person singular slot.
-    let t = cache.get_or_compile("{One of the:-orcs:Subj} [-orcs:be|am|are|is] here. {a:-orcs:Subj} [-orcs:have|have|have|has] arrived!").unwrap();
+    let t = cache.get_or_compile("{One of the:-orcs:Subj} [-orcs:be|am|are|is] here. {a:-orcs:Subj} [-orcs:have|have|have|has] arrived!").expect("Failed to compile template");
 
     assert_eq!(
-        PerspectiveEngine::render(&t, &ctx).unwrap(),
+        PerspectiveEngine::render(&t, &ctx).expect("Failed to render template"),
         "One of the orcs is here. It has arrived!"
     );
 
     // Ensure that shifting to the future tense safely bypasses all overrides and relies on "will"
     assert_eq!(
-        PerspectiveEngine::render(&t, &ctx_future).unwrap(),
+        PerspectiveEngine::render(&t, &ctx_future).expect("Failed to render template"),
         "One of the orcs will be here. It will have arrived!"
     );
 }
@@ -534,18 +539,18 @@ fn test_drop_possessive_override() {
     // 1. With override on proper noun -> Drops possessive entirely
     let t1 = cache
         .get_or_compile("{*A:source:subj} [source:wield] {source's @excalibur}.")
-        .unwrap();
+        .expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t1, &ctx).unwrap(),
+        PerspectiveEngine::render(&t1, &ctx).expect("Failed to render template"),
         "Aldran wields Excalibur."
     );
 
     // 2. With override on common noun -> Ignored, renders standard possessive
     let t2 = cache
         .get_or_compile("{*A:source:subj} [source:wield] {source's @sword}.")
-        .unwrap();
+        .expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t2, &ctx).unwrap(),
+        PerspectiveEngine::render(&t2, &ctx).expect("Failed to render template"),
         "Aldran wields his sword."
     );
 
@@ -554,7 +559,7 @@ fn test_drop_possessive_override() {
         .with_entity("source", &player)
         .with_entity("excalibur", &excalibur);
     assert_eq!(
-        PerspectiveEngine::render(&t1, &ctx_second).unwrap(),
+        PerspectiveEngine::render(&t1, &ctx_second).expect("Failed to render template"),
         "You wield Excalibur."
     );
 
@@ -564,16 +569,16 @@ fn test_drop_possessive_override() {
         .with_entity("source", &player)
         .with_entity("excalibur", &excalibur);
     assert_eq!(
-        PerspectiveEngine::render(&t1, &ctx_first).unwrap(),
+        PerspectiveEngine::render(&t1, &ctx_first).expect("Failed to render template"),
         "I wield Excalibur."
     );
 
     // 5. With adjectives -> Drops possessive and adjectives entirely
     let t3 = cache
         .get_or_compile("{*A:source:subj} [source:wield] {source's gleaming @excalibur}.")
-        .unwrap();
+        .expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t3, &ctx).unwrap(),
+        PerspectiveEngine::render(&t3, &ctx).expect("Failed to render template"),
         "Aldran wields Excalibur."
     );
 }
@@ -608,9 +613,9 @@ fn test_singular_override_with_unified_possessives() {
     // Both are plural, so they collide! The engine naturally falls back to the full nouns.
     let t1 = cache
         .get_or_compile("{wolves:Subj} [wolves:drop] {wolves's swords:obj}.")
-        .unwrap();
+        .expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t1, &ctx).unwrap(),
+        PerspectiveEngine::render(&t1, &ctx).expect("Failed to render template"),
         "The wolves drop their swords."
     );
 
@@ -618,9 +623,9 @@ fn test_singular_override_with_unified_possessives() {
     // Owner is Neutral, target is Plural. No collision!
     let t2 = cache
         .get_or_compile("{-wolves:Subj} [-wolves:drop] {-wolves's swords:obj}.")
-        .unwrap();
+        .expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t2, &ctx).unwrap(),
+        PerspectiveEngine::render(&t2, &ctx).expect("Failed to render template"),
         "It drops its swords."
     );
 
@@ -629,9 +634,9 @@ fn test_singular_override_with_unified_possessives() {
     // The engine confidently renders the pronoun and drops the owner.
     let t3 = cache
         .get_or_compile("{-wolves:Subj} [-wolves:drop] {-wolves's -swords:obj}.")
-        .unwrap();
+        .expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t3, &ctx).unwrap(),
+        PerspectiveEngine::render(&t3, &ctx).expect("Failed to render template"),
         "It drops it."
     );
 
@@ -640,9 +645,9 @@ fn test_singular_override_with_unified_possessives() {
     // collision with the plural wolves and output the "them" pronoun anyway!
     let t4 = cache
         .get_or_compile("{-wolves:Subj} [-wolves:drop] {-wolves's !swords:obj}.")
-        .unwrap();
+        .expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t4, &ctx).unwrap(),
+        PerspectiveEngine::render(&t4, &ctx).expect("Failed to render template"),
         "It drops them."
     );
 }
@@ -683,9 +688,9 @@ fn test_extract_group_member_with_unified_possessives() {
         .with_entity("sword", &sword);
     let t1 = cache
         .get_or_compile("{^party:Subj} [^party:drop] {^party's sword:obj}.")
-        .unwrap();
+        .expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t1, &ctx_director).unwrap(),
+        PerspectiveEngine::render(&t1, &ctx_director).expect("Failed to render template"),
         "Aldran or Bob drops his sword."
     );
 
@@ -694,7 +699,7 @@ fn test_extract_group_member_with_unified_possessives() {
         .with_entity("party", &party)
         .with_entity("sword", &sword);
     assert_eq!(
-        PerspectiveEngine::render(&t1, &ctx_actor).unwrap(),
+        PerspectiveEngine::render(&t1, &ctx_actor).expect("Failed to render template"),
         "You or Bob drops his sword."
     );
 
@@ -702,9 +707,9 @@ fn test_extract_group_member_with_unified_possessives() {
     let ctx_anaphora = ctx_actor.with_last_mentioned("party");
     let t2 = cache
         .get_or_compile("{a:^party:Subj} [^party:drop] {^party's sword:obj}.")
-        .unwrap();
+        .expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t2, &ctx_anaphora).unwrap(),
+        PerspectiveEngine::render(&t2, &ctx_anaphora).expect("Failed to render template"),
         "He drops it."
     );
 }
@@ -733,9 +738,9 @@ fn test_all_caps_with_unified_possessives_adjectives() {
 
     let t1 = cache
         .get_or_compile("{THE:SOURCE'S GLOWING TARGET} [target:glow].")
-        .unwrap();
+        .expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t1, &ctx).unwrap(),
+        PerspectiveEngine::render(&t1, &ctx).expect("Failed to render template"),
         "ALDRAN'S GLOWING SWORD glows."
     );
 }

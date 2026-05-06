@@ -27,19 +27,19 @@ fn test_generic_unified_tag() {
     // We explicitly specify the fallback article to be "the" instead of the default "a"!
     let template = cache
         .get_or_compile("{The:target:obj} [target:approach].")
-        .unwrap();
+        .expect("Failed to compile template");
 
     // 1. Unseen NPC -> It's the object, but hasn't been seen, so it falls back to a noun.
     let ctx1 = RenderContext::new("char_1").with_entity("target", &goblin);
     assert_eq!(
-        PerspectiveEngine::render(&template, &ctx1).unwrap(),
+        PerspectiveEngine::render(&template, &ctx1).expect("Failed to render template"),
         "The goblin approaches."
     );
 
     // 2. Active Viewer -> Safely bypasses the fallback and outputs the pronoun.
     let ctx2 = RenderContext::new("char_1").with_entity("target", &player);
     assert_eq!(
-        PerspectiveEngine::render(&template, &ctx2).unwrap(),
+        PerspectiveEngine::render(&template, &ctx2).expect("Failed to render template"),
         "You approach."
     );
 }
@@ -61,17 +61,17 @@ fn test_actor_vs_director_stance_unified() {
     let cache = TemplateCache::new(100);
     let template = cache
         .get_or_compile("{a:source:subj} [source:be] looking around for {the:source:poss} sword.")
-        .unwrap();
+        .expect("Failed to compile template");
 
     let ctx_actor = RenderContext::new("char_1").with_entity("source", &aldran);
     assert_eq!(
-        PerspectiveEngine::render(&template, &ctx_actor).unwrap(),
+        PerspectiveEngine::render(&template, &ctx_actor).expect("Failed to render template"),
         "You are looking around for your sword."
     );
 
     let ctx_director = RenderContext::new("char_2").with_entity("source", &aldran);
     assert_eq!(
-        PerspectiveEngine::render(&template, &ctx_director).unwrap(),
+        PerspectiveEngine::render(&template, &ctx_director).expect("Failed to render template"),
         "Aldran is looking around for his sword."
     );
 }
@@ -88,11 +88,11 @@ fn test_epistemological_masking_and_articles_unified() {
     let cache = TemplateCache::new(100);
     let template = cache
         .get_or_compile("{A:source:subj} [source:approach].")
-        .unwrap();
+        .expect("Failed to compile template");
 
     let ctx_stranger = RenderContext::new("stranger_1").with_entity("source", &aldran);
     assert_eq!(
-        PerspectiveEngine::render(&template, &ctx_stranger).unwrap(),
+        PerspectiveEngine::render(&template, &ctx_stranger).expect("Failed to render template"),
         "A tall man approaches."
     );
 }
@@ -132,33 +132,33 @@ fn test_article_suppression_unified() {
 
     let t1 = cache
         .get_or_compile("{The:source:subj} [source:be] here.")
-        .unwrap();
+        .expect("Failed to compile template");
     assert_eq!(
-        render_msg!("char_2", &t1, "source" => &goblin).unwrap(),
+        render_msg!("char_2", &t1, "source" => &goblin).expect("Failed to render template"),
         "The goblin is here."
     );
     assert_eq!(
-        render_msg!("char_2", &t1, "source" => &aldran).unwrap(),
+        render_msg!("char_2", &t1, "source" => &aldran).expect("Failed to render template"),
         "Aldran is here."
     );
     assert_eq!(
-        render_msg!("char_1", &t1, "source" => &aldran).unwrap(),
+        render_msg!("char_1", &t1, "source" => &aldran).expect("Failed to render template"),
         "You are here."
     );
 
     let t2 = cache
         .get_or_compile("{A:source:subj} [source:assemble]!")
-        .unwrap();
+        .expect("Failed to compile template");
     assert_eq!(
-        render_msg!("char_2", &t2, "source" => &avengers).unwrap(),
+        render_msg!("char_2", &t2, "source" => &avengers).expect("Failed to render template"),
         "The Avengers assemble!"
     );
 
     let t3 = cache
         .get_or_compile("{A:source:subj} [source:howl].")
-        .unwrap();
+        .expect("Failed to compile template");
     assert_eq!(
-        render_msg!("char_2", &t3, "source" => &wolves).unwrap(),
+        render_msg!("char_2", &t3, "source" => &wolves).expect("Failed to render template"),
         "Some wolves howl."
     );
 }
@@ -176,26 +176,30 @@ fn test_disguised_plural_proper_nouns_unified() {
 
     let template_a = cache
         .get_or_compile("{A:source:subj} [source:arrive].")
-        .unwrap();
+        .expect("Failed to compile template");
     let template_the = cache
         .get_or_compile("{The:source:subj} [source:arrive].")
-        .unwrap();
+        .expect("Failed to compile template");
 
     assert_eq!(
-        render_msg!("char_2", &template_a, "source" => &avengers).unwrap(),
+        render_msg!("char_2", &template_a, "source" => &avengers)
+            .expect("Failed to render template"),
         "The Avengers arrive."
     );
     assert_eq!(
-        render_msg!("char_2", &template_the, "source" => &avengers).unwrap(),
+        render_msg!("char_2", &template_the, "source" => &avengers)
+            .expect("Failed to render template"),
         "The Avengers arrive."
     );
 
     assert_eq!(
-        render_msg!("stranger_1", &template_a, "source" => &avengers).unwrap(),
+        render_msg!("stranger_1", &template_a, "source" => &avengers)
+            .expect("Failed to render template"),
         "Some masked heroes arrive."
     );
     assert_eq!(
-        render_msg!("stranger_1", &template_the, "source" => &avengers).unwrap(),
+        render_msg!("stranger_1", &template_the, "source" => &avengers)
+            .expect("Failed to render template"),
         "The masked heroes arrive."
     );
 }
@@ -220,13 +224,13 @@ fn test_plurality_and_verb_binding_unified() {
 
     let template = cache
         .get_or_compile("{The:target:subj} [target:watch] as {the:source:subj} [source:attack]!")
-        .unwrap();
+        .expect("Failed to compile template");
     let ctx = RenderContext::new("char_2")
         .with_entity("source", &wolves)
         .with_entity("target", &player);
 
     assert_eq!(
-        PerspectiveEngine::render(&template, &ctx).unwrap(),
+        PerspectiveEngine::render(&template, &ctx).expect("Failed to render template"),
         "Aldran watches as the pack of wolves attack!"
     );
 }
@@ -273,29 +277,31 @@ fn test_group_entity_perspectives_unified() {
 
     let t_action = cache
         .get_or_compile("{A:source:subj} [source:open] the door.")
-        .unwrap();
+        .expect("Failed to compile template");
     assert_eq!(
-        render_msg!("char_1", &t_action, "source" => &party).unwrap(),
+        render_msg!("char_1", &t_action, "source" => &party).expect("Failed to render template"),
         "You and Bob open the door."
     );
     assert_eq!(
-        render_msg!("char_3", &t_action, "source" => &party).unwrap(),
+        render_msg!("char_3", &t_action, "source" => &party).expect("Failed to render template"),
         "Aldran and Bob open the door."
     );
     assert_eq!(
-        render_msg!("mob_1", &t_action, "source" => &big_party).unwrap(),
+        render_msg!("mob_1", &t_action, "source" => &big_party).expect("Failed to render template"),
         "Aldran, Bob, and Charlie open the door."
     );
 
     let t_pronoun = cache
         .get_or_compile("{The:source:subj} [source:attack] {a:target:obj}!")
-        .unwrap();
+        .expect("Failed to compile template");
     assert_eq!(
-        render_msg!("char_1", &t_pronoun, "source" => &enemy, "target" => &party).unwrap(),
+        render_msg!("char_1", &t_pronoun, "source" => &enemy, "target" => &party)
+            .expect("Failed to render template"),
         "The Goblin attacks you and Bob!"
     );
     assert_eq!(
-        render_msg!("char_3", &t_pronoun, "source" => &enemy, "target" => &party).unwrap(),
+        render_msg!("char_3", &t_pronoun, "source" => &enemy, "target" => &party)
+            .expect("Failed to render template"),
         "The Goblin attacks Aldran and Bob!"
     );
 }
@@ -320,13 +326,15 @@ fn test_modal_verbs_perspectives_unified() {
 
     let t_must = cache
         .get_or_compile("{A:source:subj} [source:must] flee from {the:target:obj}!")
-        .unwrap();
+        .expect("Failed to compile template");
     assert_eq!(
-        render_msg!("char_1", &t_must, "source" => &player, "target" => &goblin).unwrap(),
+        render_msg!("char_1", &t_must, "source" => &player, "target" => &goblin)
+            .expect("Failed to render template"),
         "You must flee from the Goblin!"
     );
     assert_eq!(
-        render_msg!("char_3", &t_must, "source" => &player, "target" => &goblin).unwrap(),
+        render_msg!("char_3", &t_must, "source" => &player, "target" => &goblin)
+            .expect("Failed to render template"),
         "Aldran must flee from the Goblin!"
     );
 }
@@ -353,9 +361,10 @@ fn test_force_director_stance_unified() {
         .get_or_compile(
             "{a:+source:subj} [+source:attack] {the:target:obj} with {the:+source:poss} sword.",
         )
-        .unwrap();
+        .expect("Failed to compile template");
     assert_eq!(
-        render_msg!("char_1", &t_forced, "source" => &player, "target" => &goblin).unwrap(),
+        render_msg!("char_1", &t_forced, "source" => &player, "target" => &goblin)
+            .expect("Failed to render template"),
         "Aldran attacks the goblin with his sword."
     );
 }
@@ -384,25 +393,28 @@ fn test_anaphora_resolution_unified() {
 
     let t1 = cache
         .get_or_compile("{a:target:Subj} [target:look] around.")
-        .unwrap();
+        .expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t1, &ctx).unwrap(),
+        PerspectiveEngine::render(&t1, &ctx).expect("Failed to render template"),
         "A goblin looks around."
     );
 
     let t2 = cache
         .get_or_compile("{A:target:Subj} [target:attack]!")
-        .unwrap();
-    assert_eq!(PerspectiveEngine::render(&t2, &ctx).unwrap(), "It attacks!");
+        .expect("Failed to compile template");
+    assert_eq!(
+        PerspectiveEngine::render(&t2, &ctx).expect("Failed to render template"),
+        "It attacks!"
+    );
 
     ctx.clear_anaphora();
     let t4 = cache
         .get_or_compile(
             "{*The:target:subj} enters. {*The:other:subj} blinks. {a:target:Subj} [target:scream].",
         )
-        .unwrap();
+        .expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t4, &ctx).unwrap(),
+        PerspectiveEngine::render(&t4, &ctx).expect("Failed to render template"),
         "The goblin enters. The slime blinks. The goblin screams."
     );
 }
@@ -441,18 +453,18 @@ fn test_anaphora_ambiguity_resolution_unified() {
         .get_or_compile(
             "{*The:goblin:subj} [goblin:hit] {*a:aldran:obj}. {a:aldran:Subj} [aldran:smile].",
         )
-        .unwrap();
+        .expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t1, &ctx).unwrap(),
+        PerspectiveEngine::render(&t1, &ctx).expect("Failed to render template"),
         "The goblin hits Aldran. He smiles."
     );
 
     ctx.clear_anaphora();
     let t2 = cache
         .get_or_compile("{*A:bob:subj} [bob:hit] {*a:aldran:obj}. {a:aldran:Subj} [aldran:smile].")
-        .unwrap();
+        .expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t2, &ctx).unwrap(),
+        PerspectiveEngine::render(&t2, &ctx).expect("Failed to render template"),
         "Bob hits Aldran. Aldran smiles."
     );
 }
@@ -480,13 +492,13 @@ fn test_definite_description_upgrade_unified() {
         .get_or_compile(
             "{A:source:subj} and {a:other:subj} walk in. {A:source:subj} [source:howl].",
         )
-        .unwrap();
+        .expect("Failed to compile template");
     let ctx = RenderContext::new("char_1")
         .with_entity("source", &wolf1)
         .with_entity("other", &slime);
 
     assert_eq!(
-        PerspectiveEngine::render(&template, &ctx).unwrap(),
+        PerspectiveEngine::render(&template, &ctx).expect("Failed to render template"),
         "A wolf and a slime walk in. The wolf howls."
     );
 }
@@ -509,13 +521,13 @@ fn test_definite_description_upgrade_collision_unified() {
     };
     let cache = TemplateCache::new(100);
 
-    let template = cache.get_or_compile("{A:source:subj} [source:walk] in. {A:other:subj} [other:walk] in. {A:source:subj} [source:howl].").unwrap();
+    let template = cache.get_or_compile("{A:source:subj} [source:walk] in. {A:other:subj} [other:walk] in. {A:source:subj} [source:howl].").expect("Failed to compile template");
     let ctx = RenderContext::new("char_1")
         .with_entity("source", &wolf1)
         .with_entity("other", &wolf2);
 
     assert_eq!(
-        PerspectiveEngine::render(&template, &ctx).unwrap(),
+        PerspectiveEngine::render(&template, &ctx).expect("Failed to render template"),
         "A wolf walks in. Another wolf walks in. The first wolf howls."
     );
 }
@@ -542,13 +554,13 @@ fn test_suppress_anaphora_upgrades_unified() {
         .get_or_compile(
             "{A:source:subj} and {a:other:subj} walk in. {*!A:source:subj} [source:howl].",
         )
-        .unwrap();
+        .expect("Failed to compile template");
     let ctx = RenderContext::new("char_1")
         .with_entity("source", &wolf1)
         .with_entity("other", &slime);
 
     assert_eq!(
-        PerspectiveEngine::render(&template, &ctx).unwrap(),
+        PerspectiveEngine::render(&template, &ctx).expect("Failed to render template"),
         "A wolf and a slime walk in. A wolf howls."
     );
 }
@@ -568,11 +580,11 @@ fn test_definite_description_upgrade_with_possessives_unified() {
         .get_or_compile(
             "{A:source's:poss} sword [source:fall]. {*A:source's:poss} shield [source:break].",
         )
-        .unwrap();
+        .expect("Failed to compile template");
     let ctx = RenderContext::new("char_1").with_entity("source", &goblin);
 
     assert_eq!(
-        PerspectiveEngine::render(&t1, &ctx).unwrap(),
+        PerspectiveEngine::render(&t1, &ctx).expect("Failed to render template"),
         "A goblin's sword falls. The goblin's shield breaks."
     );
 }
@@ -599,10 +611,10 @@ fn test_singular_overrides_unified() {
         .get_or_compile(
             "{*One of the:-orcs:subj} [-orcs:bellow], and {:-orcs:subj} [-orcs:charge]!",
         )
-        .unwrap();
+        .expect("Failed to compile template");
     let ctx1 = RenderContext::new("viewer").with_entity("orcs", &orcs);
     assert_eq!(
-        PerspectiveEngine::render(&t1, &ctx1).unwrap(),
+        PerspectiveEngine::render(&t1, &ctx1).expect("Failed to render template"),
         "One of the orcs bellows, and it charges!"
     );
 
@@ -610,12 +622,12 @@ fn test_singular_overrides_unified() {
         .get_or_compile(
             "{*One of the:-orcs:subj} and {*a:goblin:subj} arrive. {:-orcs:Subj} [-orcs:bellow].",
         )
-        .unwrap();
+        .expect("Failed to compile template");
     let ctx2 = RenderContext::new("viewer")
         .with_entity("orcs", &orcs)
         .with_entity("goblin", &goblin);
     assert_eq!(
-        PerspectiveEngine::render(&t2, &ctx2).unwrap(),
+        PerspectiveEngine::render(&t2, &ctx2).expect("Failed to render template"),
         "One of the orcs and a goblin arrive. One of the orcs bellows."
     );
 }
@@ -639,22 +651,24 @@ fn test_ordinals_and_resets_unified() {
         .with_entity("w1", &w1)
         .with_entity("w2", &w2);
 
-    let t1 = cache.get_or_compile("{A:w1:subj} walks in. {A:w2:subj} walks in. {The:w1:subj} [w1:howl]. {The:w2:subj} [w2:grin].").unwrap();
+    let t1 = cache.get_or_compile("{A:w1:subj} walks in. {A:w2:subj} walks in. {The:w1:subj} [w1:howl]. {The:w2:subj} [w2:grin].").expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t1, &ctx).unwrap(),
+        PerspectiveEngine::render(&t1, &ctx).expect("Failed to render template"),
         "A wolf walks in. Another wolf walks in. The first wolf howls. The second wolf grins."
     );
 
     ctx.forget_anaphora("w2");
-    let t2 = cache.get_or_compile("{*The:w1:subj} [w1:sigh].").unwrap();
+    let t2 = cache
+        .get_or_compile("{*The:w1:subj} [w1:sigh].")
+        .expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t2, &ctx).unwrap(),
+        PerspectiveEngine::render(&t2, &ctx).expect("Failed to render template"),
         "The wolf sighs."
     );
 
-    let t3 = cache.get_or_compile("{*A:w2:subj} [w2:return]. {a:w1:Subj} [w1:growl] at {*the:w2:obj}. {a:w2:Subj} [w2:flee].").unwrap();
+    let t3 = cache.get_or_compile("{*A:w2:subj} [w2:return]. {a:w1:Subj} [w1:growl] at {*the:w2:obj}. {a:w2:Subj} [w2:flee].").expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t3, &ctx).unwrap(),
+        PerspectiveEngine::render(&t3, &ctx).expect("Failed to render template"),
         "Another wolf returns. The first wolf growls at the second wolf. The second wolf flees."
     );
 }
@@ -698,9 +712,9 @@ fn test_extract_group_member_override() {
     // 1. Without override: Uses the standard multi-member formatting
     let t1 = cache
         .get_or_compile("{party:Subj} [party:arrive].")
-        .unwrap();
+        .expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t1, &ctx).unwrap(),
+        PerspectiveEngine::render(&t1, &ctx).expect("Failed to render template"),
         "You and Bob arrive."
     );
 
@@ -709,9 +723,9 @@ fn test_extract_group_member_override() {
     // 2. With override: Extracts one member generically using "or"
     let t2 = cache
         .get_or_compile("{^party:Subj} [^party:arrive].")
-        .unwrap();
+        .expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t2, &ctx).unwrap(),
+        PerspectiveEngine::render(&t2, &ctx).expect("Failed to render template"),
         "You or Bob arrives."
     );
 
@@ -722,9 +736,9 @@ fn test_extract_group_member_override() {
     // Natively, it evaluates the shared gender of the group (Male + Male = Male -> "He").
     let t3 = cache
         .get_or_compile("{^party} enters. {a:^party:Subj} [^party:smile].")
-        .unwrap();
+        .expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t3, &ctx).unwrap(),
+        PerspectiveEngine::render(&t3, &ctx).expect("Failed to render template"),
         "You or Bob enters. He smiles."
     );
 
@@ -733,18 +747,21 @@ fn test_extract_group_member_override() {
     // 4. Large groups with Oxford comma "or" logic
     let t4 = cache
         .get_or_compile("{^big_party:Subj} [^big_party:arrive].")
-        .unwrap();
+        .expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t4, &ctx).unwrap(),
+        PerspectiveEngine::render(&t4, &ctx).expect("Failed to render template"),
         "You, Bob, or Charlie arrives."
     );
 
     // 5. Using the modifier on a non-group entity safely has no effect
     let t5 = cache
         .get_or_compile("{^player:Subj} [^player:smile].")
-        .unwrap();
+        .expect("Failed to compile template");
     let ctx2 = RenderContext::new("char_1").with_entity("player", &player);
-    assert_eq!(PerspectiveEngine::render(&t5, &ctx2).unwrap(), "You smile.");
+    assert_eq!(
+        PerspectiveEngine::render(&t5, &ctx2).expect("Failed to render template"),
+        "You smile."
+    );
 }
 
 #[test]
@@ -773,8 +790,11 @@ fn test_ambiguous_plural_you_override() {
     // With the ~ override, the engine permits "You" to refer to the whole party even though it's ambiguous
     let t1 = cache
         .get_or_compile("{~party:Subj} [~party:attack].")
-        .unwrap();
-    assert_eq!(PerspectiveEngine::render(&t1, &ctx).unwrap(), "You attack.");
+        .expect("Failed to compile template");
+    assert_eq!(
+        PerspectiveEngine::render(&t1, &ctx).expect("Failed to render template"),
+        "You attack."
+    );
 }
 
 // -------------------------------------------------------------------------
@@ -878,9 +898,9 @@ fn test_e2e_combat_round_unified() {
     // {A:g1} and {a:g2} ambush {player}!
     let t_intro = cache
         .get_or_compile("{*A:g1:subj} and {*a:g2:subj} ambush {*a:player:obj}!")
-        .unwrap();
+        .expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t_intro, &ctx).unwrap(),
+        PerspectiveEngine::render(&t_intro, &ctx).expect("Failed to render template"),
         "A goblin and another goblin ambush you!"
     );
 
@@ -889,18 +909,18 @@ fn test_e2e_combat_round_unified() {
         .get_or_compile(
             "{*A:player:subj} [player:slash] {*the:g1:obj} with {player's player.weapon:obj}.",
         )
-        .unwrap();
+        .expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t_attack, &ctx).unwrap(),
+        PerspectiveEngine::render(&t_attack, &ctx).expect("Failed to render template"),
         "You slash the first goblin with your glowing sword."
     );
 
     // {The:g2} [g2:swing] {g2:poss} {g2.weapon} at {player:obj}!
     let t_retaliate = cache
         .get_or_compile("{*The:g2:subj} [g2:swing] {g2's g2.weapon:obj} at {a:player:obj}!")
-        .unwrap();
+        .expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t_retaliate, &ctx).unwrap(),
+        PerspectiveEngine::render(&t_retaliate, &ctx).expect("Failed to render template"),
         "The second goblin swings its wooden club at you!"
     );
 }
@@ -965,10 +985,10 @@ fn test_dot_notation_resolution_unified() {
     let cache = TemplateCache::new(100);
 
     // {Source} [source:draw] {a:source.weapon} and [source:swing] {source:poss} {source.weapon}!
-    let t = cache.get_or_compile("{*A:Source:subj} [source:draw] {*a:source.weapon:obj} and [source:swing] {source's source.weapon:obj}!").unwrap();
+    let t = cache.get_or_compile("{*A:Source:subj} [source:draw] {*a:source.weapon:obj} and [source:swing] {source's source.weapon:obj}!").expect("Failed to compile template");
     let ctx = RenderContext::new("char_2").with_entity("source", &player);
     assert_eq!(
-        PerspectiveEngine::render(&t, &ctx).unwrap(),
+        PerspectiveEngine::render(&t, &ctx).expect("Failed to render template"),
         "Aldran draws a rusty sword and swings it!"
     );
 }
@@ -1020,9 +1040,9 @@ fn test_deeply_nested_properties_unified() {
     // You look at {the:tree.child.child}.
     let t = cache
         .get_or_compile("You look at {*the:tree.child.child:obj}.")
-        .unwrap();
+        .expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t, &ctx).unwrap(),
+        PerspectiveEngine::render(&t, &ctx).expect("Failed to render template"),
         "You look at the leaf."
     );
 }
@@ -1082,9 +1102,9 @@ fn test_nested_properties_returning_group_entities_unified() {
     // {The:boss.minions} [boss.minions:attack]!
     let t = cache
         .get_or_compile("{*the:boss.minions:subj} [boss.minions:attack]!")
-        .unwrap();
+        .expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t, &ctx).unwrap(),
+        PerspectiveEngine::render(&t, &ctx).expect("Failed to render template"),
         "The goblin and the slime attack!"
     );
 }
@@ -1151,9 +1171,9 @@ fn test_nested_properties_returning_proper_nouns_unified() {
     // {A:source} draws {a:source.weapon}.
     let t = cache
         .get_or_compile("{*A:source:subj} draws {*a:source.weapon:obj}.")
-        .unwrap();
+        .expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t, &ctx).unwrap(),
+        PerspectiveEngine::render(&t, &ctx).expect("Failed to render template"),
         "Arthur draws Excalibur."
     );
 }
@@ -1200,9 +1220,9 @@ fn test_plural_ordinals_with_collective_noun_unified() {
     // {A:p1} arrive. {A:p2} arrive.
     let t = cache
         .get_or_compile("{*A:p1:subj} arrive. {*A:p2:subj} arrive.")
-        .unwrap();
+        .expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t, &ctx).unwrap(),
+        PerspectiveEngine::render(&t, &ctx).expect("Failed to render template"),
         "Some wolves arrive. A second pack of wolves arrive."
     );
 }
@@ -1261,9 +1281,9 @@ fn test_unified_anaphora_equivalents() {
         .get_or_compile(
             "{*A:bob:subj} [bob:attack] {*A:aldran:obj}. {A:aldran:Subj} [aldran:fall].",
         )
-        .unwrap();
+        .expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t_track, &ctx_track).unwrap(),
+        PerspectiveEngine::render(&t_track, &ctx_track).expect("Failed to render template"),
         "Bob attacks Aldran. Aldran falls."
     );
 
@@ -1274,9 +1294,9 @@ fn test_unified_anaphora_equivalents() {
         .get_or_compile(
             "{*A:jill:subj} [jill:attack] {*A:aldran:obj}. {A:aldran:Subj} [aldran:fall].",
         )
-        .unwrap();
+        .expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t_track2, &ctx_track2).unwrap(),
+        PerspectiveEngine::render(&t_track2, &ctx_track2).expect("Failed to render template"),
         "Jill attacks Aldran. He falls."
     );
 
@@ -1284,25 +1304,27 @@ fn test_unified_anaphora_equivalents() {
     let ctx_cap = RenderContext::new("viewer").with_entity("target", &goblin);
     let t_cap = cache
         .get_or_compile("{a:target:Subj} [target:hiss].")
-        .unwrap();
+        .expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t_cap, &ctx_cap).unwrap(),
+        PerspectiveEngine::render(&t_cap, &ctx_cap).expect("Failed to render template"),
         "A goblin hisses."
     );
 
     // anaphora_across_contexts
     let ctx_across1 = RenderContext::new("char_2").with_entity("target", &goblin);
-    let t_across1 = cache.get_or_compile("{*the:target:subj} enters.").unwrap();
-    let _ = PerspectiveEngine::render(&t_across1, &ctx_across1).unwrap();
+    let t_across1 = cache
+        .get_or_compile("{*the:target:subj} enters.")
+        .expect("Failed to compile template");
+    let _ = PerspectiveEngine::render(&t_across1, &ctx_across1).expect("Failed to render template");
 
     let ctx_across2 = RenderContext::new("char_2")
         .with_entity("target", &goblin)
         .with_anaphora(ctx_across1.extract_anaphora());
     let t_across2 = cache
         .get_or_compile("{A:target:Subj} [target:look] around.")
-        .unwrap();
+        .expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t_across2, &ctx_across2).unwrap(),
+        PerspectiveEngine::render(&t_across2, &ctx_across2).expect("Failed to render template"),
         "It looks around."
     );
 
@@ -1313,10 +1335,10 @@ fn test_unified_anaphora_equivalents() {
     let _ = PerspectiveEngine::render(
         &cache
             .get_or_compile("{*A:bob:subj} is standing next to {*A:aldran:obj}.")
-            .unwrap(),
+            .expect("Failed to compile template"),
         &ctx_ambig,
     )
-    .unwrap();
+    .expect("Failed to render template");
     let ctx_ambig2 = RenderContext::new("viewer")
         .with_entity("aldran", &aldran)
         .with_entity("bob", &bob)
@@ -1325,10 +1347,10 @@ fn test_unified_anaphora_equivalents() {
         PerspectiveEngine::render(
             &cache
                 .get_or_compile("{A:aldran:Subj} [aldran:wave].")
-                .unwrap(),
+                .expect("Failed to compile template"),
             &ctx_ambig2
         )
-        .unwrap(),
+        .expect("Failed to render template"),
         "Aldran waves."
     );
 
@@ -1341,33 +1363,35 @@ fn test_unified_anaphora_equivalents() {
     let _ = PerspectiveEngine::render(
         &cache
             .get_or_compile("{*A:aldran:subj} [aldran:wave] at {*A:bob:obj}.")
-            .unwrap(),
+            .expect("Failed to compile template"),
         &ctx_mem,
     )
-    .unwrap();
+    .expect("Failed to render template");
     let _ = PerspectiveEngine::render(
         &cache
             .get_or_compile("{*the:goblin:subj} [goblin:approach].")
-            .unwrap(),
+            .expect("Failed to compile template"),
         &ctx_mem,
     )
-    .unwrap();
+    .expect("Failed to render template");
     assert_eq!(
         PerspectiveEngine::render(
-            &cache.get_or_compile("{A:bob:Subj} [bob:smile].").unwrap(),
+            &cache
+                .get_or_compile("{A:bob:Subj} [bob:smile].")
+                .expect("Failed to compile template"),
             &ctx_mem
         )
-        .unwrap(),
+        .expect("Failed to render template"),
         "He smiles."
     );
     assert_eq!(
         PerspectiveEngine::render(
             &cache
                 .get_or_compile("{A:aldran:Subj} [aldran:sigh].")
-                .unwrap(),
+                .expect("Failed to compile template"),
             &ctx_mem
         )
-        .unwrap(),
+        .expect("Failed to render template"),
         "Aldran sighs."
     );
 
@@ -1379,30 +1403,38 @@ fn test_unified_anaphora_equivalents() {
         .with_entity("dan", &dan)
         .with_pinned_entity("bob");
     let _ = PerspectiveEngine::render(
-        &cache.get_or_compile("{*A:tom:subj} arrives.").unwrap(),
+        &cache
+            .get_or_compile("{*A:tom:subj} arrives.")
+            .expect("Failed to compile template"),
         &ctx_pin,
     )
-    .unwrap();
+    .expect("Failed to render template");
     let _ = PerspectiveEngine::render(
-        &cache.get_or_compile("{*A:dan:subj} arrives.").unwrap(),
+        &cache
+            .get_or_compile("{*A:dan:subj} arrives.")
+            .expect("Failed to compile template"),
         &ctx_pin,
     )
-    .unwrap();
+    .expect("Failed to render template");
     assert_eq!(
         PerspectiveEngine::render(
-            &cache.get_or_compile("{A:bob:Subj} [bob:smile].").unwrap(),
+            &cache
+                .get_or_compile("{A:bob:Subj} [bob:smile].")
+                .expect("Failed to compile template"),
             &ctx_pin
         )
-        .unwrap(),
+        .expect("Failed to render template"),
         "Bob smiles."
     );
     ctx_pin.forget_anaphora("dan");
     assert_eq!(
         PerspectiveEngine::render(
-            &cache.get_or_compile("{A:bob:Subj} [bob:wave].").unwrap(),
+            &cache
+                .get_or_compile("{A:bob:Subj} [bob:wave].")
+                .expect("Failed to compile template"),
             &ctx_pin
         )
-        .unwrap(),
+        .expect("Failed to render template"),
         "He waves."
     );
 
@@ -1415,39 +1447,43 @@ fn test_unified_anaphora_equivalents() {
         .with_pinned_entity("tom")
         .with_entity("dan", &dan);
     let _ = PerspectiveEngine::render(
-        &cache.get_or_compile("{*A:dan:subj} arrives.").unwrap(),
+        &cache
+            .get_or_compile("{*A:dan:subj} arrives.")
+            .expect("Failed to compile template"),
         &ctx_exceed,
     )
-    .unwrap();
+    .expect("Failed to render template");
     assert_eq!(ctx_exceed.recent_entities.borrow().len(), 2);
 
     // anaphora_viewer_exemption
-    let t_exempt = cache.get_or_compile("{*A:Source:subj} [source:hit] {*the:target:obj}, then {a:source:subj} [source:step] back.").unwrap();
+    let t_exempt = cache.get_or_compile("{*A:Source:subj} [source:hit] {*the:target:obj}, then {a:source:subj} [source:step] back.").expect("Failed to compile template");
     assert_eq!(
-        render_msg!("char_3", &t_exempt, "source" => &aldran, "target" => &goblin).unwrap(),
+        render_msg!("char_3", &t_exempt, "source" => &aldran, "target" => &goblin)
+            .expect("Failed to render template"),
         "Aldran hits the goblin, then he steps back."
     );
     assert_eq!(
-        render_msg!("char_1", &t_exempt, "source" => &aldran, "target" => &goblin).unwrap(),
+        render_msg!("char_1", &t_exempt, "source" => &aldran, "target" => &goblin)
+            .expect("Failed to render template"),
         "You hit the goblin, then you step back."
     );
 
     // first_person_objective_anaphora_fallback
     let t_obj = cache
         .get_or_compile("The trap [strike] {a:target:obj}!")
-        .unwrap();
+        .expect("Failed to compile template");
     let ctx_obj1 = RenderContext::new("char_1")
         .with_stance(crate::models::ActorStance::FirstPerson)
         .with_entity("target", &aldran);
     assert_eq!(
-        PerspectiveEngine::render(&t_obj, &ctx_obj1).unwrap(),
+        PerspectiveEngine::render(&t_obj, &ctx_obj1).expect("Failed to render template"),
         "The trap strikes me!"
     );
     let ctx_obj2 = RenderContext::new("char_1")
         .with_stance(crate::models::ActorStance::FirstPerson)
         .with_entity("target", &goblin);
     assert_eq!(
-        PerspectiveEngine::render(&t_obj, &ctx_obj2).unwrap(),
+        PerspectiveEngine::render(&t_obj, &ctx_obj2).expect("Failed to render template"),
         "The trap strikes a goblin!"
     );
 }
@@ -1473,98 +1509,99 @@ fn test_unified_stance_tense_equivalents() {
     // actor_stances
     let t_stance = cache
         .get_or_compile("{*A:source:subj} [source:walk] forward.")
-        .unwrap();
+        .expect("Failed to compile template");
     assert_eq!(
-        render_msg!("char_1", &t_stance, "source" => &aldran).unwrap(),
+        render_msg!("char_1", &t_stance, "source" => &aldran).expect("Failed to render template"),
         "You walk forward."
     );
 
     // first_person_conjugation_and_pronouns
     let t_first = cache
         .get_or_compile("{A:source:subj} [source:be] looking for {a:source:poss} sword.")
-        .unwrap();
+        .expect("Failed to compile template");
     let ctx_first = RenderContext::new("char_1")
         .with_stance(crate::models::ActorStance::FirstPerson)
         .with_entity("source", &aldran);
     assert_eq!(
-        PerspectiveEngine::render(&t_first, &ctx_first).unwrap(),
+        PerspectiveEngine::render(&t_first, &ctx_first).expect("Failed to render template"),
         "I am looking for my sword."
     );
 
     // forced_stance_overrides_first_person
     let t_force = cache
         .get_or_compile("{*A:+source:subj} [+source:draw] {a:+source:poss} sword.")
-        .unwrap();
+        .expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t_force, &ctx_first).unwrap(),
+        PerspectiveEngine::render(&t_force, &ctx_first).expect("Failed to render template"),
         "Aldran draws his sword."
     );
 
     // all_pronoun_cases_with_stances
-    let t_cases = cache.get_or_compile("{A:source:Subj} [source:defend] {a:source:reflex}. {*The:target:subj} [target:strike] {a:source:obj}. It is {a:source:poss} fight, the victory is {a:source:abs_poss}!").unwrap();
+    let t_cases = cache.get_or_compile("{A:source:Subj} [source:defend] {a:source:reflex}. {*The:target:subj} [target:strike] {a:source:obj}. It is {a:source:poss} fight, the victory is {a:source:abs_poss}!").expect("Failed to compile template");
     let ctx_cases = RenderContext::new("char_1")
         .with_stance(crate::models::ActorStance::FirstPerson)
         .with_entity("source", &aldran)
         .with_entity("target", &goblin);
     assert_eq!(
-        PerspectiveEngine::render(&t_cases, &ctx_cases).unwrap(),
+        PerspectiveEngine::render(&t_cases, &ctx_cases).expect("Failed to render template"),
         "I defend myself. The goblin strikes me. It is my fight, the victory is mine!"
     );
 
     // possessive_nouns_with_stances / dynamic_possessive_nouns
     let t_poss = cache
         .get_or_compile("They take {*a:source's:poss} gold.")
-        .unwrap();
+        .expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t_poss, &ctx_first).unwrap(),
+        PerspectiveEngine::render(&t_poss, &ctx_first).expect("Failed to render template"),
         "They take my gold."
     );
 
     // dynamic_past_tense
     let t_past = cache
         .get_or_compile("{*A:source:subj} [source:hit] {*the:target:obj} and [source:laugh].")
-        .unwrap();
+        .expect("Failed to compile template");
     let ctx_past = RenderContext::new("char_1")
         .with_tense(crate::models::Tense::Past)
         .with_entity("source", &aldran)
         .with_entity("target", &goblin);
     assert_eq!(
-        PerspectiveEngine::render(&t_past, &ctx_past).unwrap(),
+        PerspectiveEngine::render(&t_past, &ctx_past).expect("Failed to render template"),
         "You hit the goblin and laughed."
     );
 
     // dynamic_past_tense_regular_fallbacks
     let t_chase = cache
         .get_or_compile("{*A:source:subj} [source:chase].")
-        .unwrap();
+        .expect("Failed to compile template");
     let ctx_director_past = RenderContext::new("char_2")
         .with_tense(crate::models::Tense::Past)
         .with_entity("source", &aldran);
     assert_eq!(
-        PerspectiveEngine::render(&t_chase, &ctx_director_past).unwrap(),
+        PerspectiveEngine::render(&t_chase, &ctx_director_past).expect("Failed to render template"),
         "Aldran chased."
     );
 
     // dynamic_past_tense_forced_conjugation
     let t_forced_past = cache
         .get_or_compile("{*A:source:subj} [source:freak out|freak out|freaks out].")
-        .unwrap();
+        .expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t_forced_past, &ctx_director_past).unwrap(),
+        PerspectiveEngine::render(&t_forced_past, &ctx_director_past)
+            .expect("Failed to render template"),
         "Aldran freaked out."
     );
     let t_both = cache
         .get_or_compile("{*A:source:subj} [source:be|am|are|is;was|were|was] here.")
-        .unwrap();
+        .expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t_both, &ctx_director_past).unwrap(),
+        PerspectiveEngine::render(&t_both, &ctx_director_past).expect("Failed to render template"),
         "Aldran was here."
     );
 
     // dynamic_past_tense_pronouns_and_possessives
-    let t_draw = cache.get_or_compile("{*A:source:subj} [source:draw] {a:source:poss} sword to defend {a:source:reflex}. The victory [source:be] {a:source:abs_poss}!").unwrap();
+    let t_draw = cache.get_or_compile("{*A:source:subj} [source:draw] {a:source:poss} sword to defend {a:source:reflex}. The victory [source:be] {a:source:abs_poss}!").expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t_draw, &ctx_director_past).unwrap(),
+        PerspectiveEngine::render(&t_draw, &ctx_director_past).expect("Failed to render template"),
         "Aldran drew his sword to defend himself. The victory was his!"
     );
 
@@ -1573,18 +1610,18 @@ fn test_unified_stance_tense_equivalents() {
         .get_or_compile(
             "{*A:source:subj} [source:have] no choice, {a:source:subj} [source:be] trapped.",
         )
-        .unwrap();
+        .expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t_have, &ctx_director_past).unwrap(),
+        PerspectiveEngine::render(&t_have, &ctx_director_past).expect("Failed to render template"),
         "Aldran had no choice, he was trapped."
     );
 
     // dynamic_past_tense_modal_verbs
     let t_can = cache
         .get_or_compile("{*A:source:subj} [source:can] win.")
-        .unwrap();
+        .expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t_can, &ctx_director_past).unwrap(),
+        PerspectiveEngine::render(&t_can, &ctx_director_past).expect("Failed to render template"),
         "Aldran could win."
     );
 
@@ -1595,27 +1632,27 @@ fn test_unified_stance_tense_equivalents() {
         .with_entity("target", &goblin);
     let t_walk = cache
         .get_or_compile("{*A:source:subj} [source:walk].")
-        .unwrap();
+        .expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t_walk, &ctx_future).unwrap(),
+        PerspectiveEngine::render(&t_walk, &ctx_future).expect("Failed to render template"),
         "Aldran will walk."
     );
 
     // dynamic_future_tense_force_director_stance
     let t_future_force = cache
         .get_or_compile("{*A:+source:subj} [+source:win] the battle.")
-        .unwrap();
+        .expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t_future_force, &ctx_future).unwrap(),
+        PerspectiveEngine::render(&t_future_force, &ctx_future).expect("Failed to render template"),
         "Aldran will win the battle."
     );
 
     // dynamic_future_tense_do_support
     let t_do = cache
         .get_or_compile("{*A:source:subj} [source:do(aux)] not run.")
-        .unwrap();
+        .expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t_do, &ctx_future).unwrap(),
+        PerspectiveEngine::render(&t_do, &ctx_future).expect("Failed to render template"),
         "Aldran will not run."
     );
 
@@ -1625,7 +1662,7 @@ fn test_unified_stance_tense_equivalents() {
             &t_walk,
             &RenderContext::new("char_2").with_entity("source", &aldran)
         )
-        .unwrap(),
+        .expect("Failed to render template"),
         "Aldran walks."
     );
 }
@@ -1686,16 +1723,20 @@ fn test_unified_possessives_with_long_descriptions_on_proper_nouns() {
         .with_last_mentioned("e2");
 
     // 1. Both owner and target use long descriptions with injected adjectives
-    let t1 = cache.get_or_compile("{A1's glowing e1:obj}.").unwrap();
+    let t1 = cache
+        .get_or_compile("{A1's glowing e1:obj}.")
+        .expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t1, &ctx).unwrap(),
+        PerspectiveEngine::render(&t1, &ctx).expect("Failed to render template"),
         "Arthur the Elder's glowing Excalibur of the Lake."
     );
 
     // 2. Drop possessive override (@) correctly drops the long owner and the adjectives
-    let t2 = cache.get_or_compile("{A1's glowing @e1:obj}.").unwrap();
+    let t2 = cache
+        .get_or_compile("{A1's glowing @e1:obj}.")
+        .expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t2, &ctx).unwrap(),
+        PerspectiveEngine::render(&t2, &ctx).expect("Failed to render template"),
         "Excalibur of the Lake."
     );
 }
@@ -1827,7 +1868,7 @@ fn test_double_possessive_chains_unified() {
         .with_entity("target", &hilt);
 
     // 1. Literal chained possessives!
-    // The parser intelligently isolates `source` as the dynamic owner, and safely absorbs `sword's` into the adjectives string.
+    // The parser isolates `source` as the dynamic owner, and safely absorbs `sword's` into the adjectives string.
     let t1 = cache
         .get_or_compile("{*A:source's sword's target:obj}.")
         .unwrap();

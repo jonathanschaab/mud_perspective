@@ -23,7 +23,7 @@ These are fundamental rules that must be followed to ensure the quality, stabili
 * **Dependency Management:** Before adding a new dependency, check if a reasonable alternative already exists within the project's current dependency tree. The goal is to keep the number of dependencies minimal.
 * **Keep Documentation Updated:** Any change to the code must be accompanied by corresponding changes to its documentation. Out-of-date documentation is a source of bugs.
 * **Modern Rust:** This project uses Rust 1.95.0 which was released on 4/16/2026 and is stable. This means Let chains are stable as are if let guards. is_none_or() is also stable. use these new features when they improve the code.
-* **No marketing:** Avoid flourishes and self praise in comments and documentation. Don't describe things as flawless, or highly intelligent.
+* **No marketing:** Avoid flourishes and self praise in comments and documentation. Don't describe things as flawless, or highly intelligent. Also avoid unnecessary exclamation points.
 
 ## Testing
 * **Test Coverage:** All new features and bug fixes must be accompanied by comprehensive tests. If you are fixing a bug that was not caught by existing tests, you must add a new test case that reproduces the bug to prevent regressions.

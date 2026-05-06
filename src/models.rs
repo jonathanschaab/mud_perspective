@@ -707,7 +707,7 @@ impl<'a> RenderContext<'a> {
         self
     }
 
-    /// Enables or disables the AST Pre-Pass to perfectly resolve name collisions ahead of time.
+    /// Enables or disables the AST Pre-Pass to resolve name collisions ahead of time.
     /// This is disabled by default to maximize performance, but can be enabled for critical narrative templates.
     #[must_use]
     pub fn with_lookahead(mut self, lookahead: bool) -> Self {

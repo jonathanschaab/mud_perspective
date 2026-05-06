@@ -1172,7 +1172,7 @@ fn test_resolve_target_deep_ordinal_natively() {
         .unwrap();
     PerspectiveEngine::render(&t, &ctx).unwrap();
 
-    // 1. Resolve the natural language phrase perfectly without requiring manual parsing!
+    // 1. Resolve the natural language phrase without requiring manual parsing!
     let m1 = ctx.resolve_target("the goblin's second sword");
     assert_eq!(m1.len(), 1);
 
@@ -1251,8 +1251,8 @@ fn test_resolve_target_deep_ordinal_structural() {
         .with_lookahead(true);
 
     // Seed ordinals using dot-notation structural properties
-    let t = cache.get_or_compile("{*A:aldran:subj} grabs {aldran's aldran.weapon1:obj} and {aldran's aldran.weapon2:obj}.").unwrap();
-    PerspectiveEngine::render(&t, &ctx).unwrap();
+    let t = cache.get_or_compile("{*A:aldran:subj} grabs {aldran's aldran.weapon1:obj} and {aldran's aldran.weapon2:obj}.").expect("Failed to compile template");
+    PerspectiveEngine::render(&t, &ctx).expect("Failed to render template");
 
     // Resolve the natural language phrase!
     let m1 = ctx.resolve_target("Aldran's second sword");
@@ -1331,10 +1331,10 @@ fn test_mixed_narrative_and_data_possessive_ordinals() {
     // The goblin draws his equipped sword (data), and picks up the dropped sword (narrative)
     let t = cache
         .get_or_compile("{*A:g:subj} draws {g's g.weapon:obj} and picks up {g's s_dropped:obj}.")
-        .unwrap();
+        .expect("Failed to compile template");
 
     assert_eq!(
-        PerspectiveEngine::render(&t, &ctx).unwrap(),
+        PerspectiveEngine::render(&t, &ctx).expect("Failed to render template"),
         "A goblin draws his sword and picks up his second sword."
     );
 
@@ -1421,7 +1421,9 @@ fn test_resolve_target_ordinals_on_owned_items() {
     assert_eq!(m1[0].path.as_deref(), Some("second sword"));
     assert_eq!(m1[0].path_uncertain, false);
 
-    let deep1 = m1[0].resolve_deep_entity().unwrap();
+    let deep1 = m1[0]
+        .resolve_deep_entity()
+        .expect("Failed to resolve deep entity");
     assert_eq!(deep1.display_name_for("viewer"), "glowing sword");
 
     // 2. A different ordinal on the owned item
@@ -1431,7 +1433,9 @@ fn test_resolve_target_ordinals_on_owned_items() {
     assert_eq!(m2[0].path.as_deref(), Some("third arrow"));
     assert_eq!(m2[0].path_uncertain, false);
 
-    let deep2 = m2[0].resolve_deep_entity().unwrap();
+    let deep2 = m2[0]
+        .resolve_deep_entity()
+        .expect("Failed to resolve deep entity");
     assert_eq!(deep2.display_name_for("viewer"), "glowing sword");
 }
 

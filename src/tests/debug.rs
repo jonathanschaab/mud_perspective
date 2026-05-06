@@ -3,9 +3,11 @@ fn test_debug_standard_entities_permutations() {
     use crate::debug::test_template_with_standard_entities;
     use crate::engine::Template;
 
-    let template = Template::compile("{*A:source:subj} [source:look] around.").unwrap();
+    let template = Template::compile("{*A:source:subj} [source:look] around.")
+        .expect("Failed to compile template");
     let bindings = std::collections::HashMap::new();
-    let results = test_template_with_standard_entities(&template, &bindings, false).unwrap();
+    let results = test_template_with_standard_entities(&template, &bindings, false)
+        .expect("Failed to generate permutations");
 
     // 7 viewers * 3 stances * 3 tenses * 7 actors = 441 permutations
     assert_eq!(results.len(), 441);
@@ -33,7 +35,7 @@ fn test_debug_permutations_limit_error() {
 
     // 6 standard actors, 8 keys = 6^8 = 1,679,616 entity permutations
     // 3 stances * 1 tense * 1,679,616 = 5,038,848 total combinations > 100,000 threshold
-    let template = Template::compile("{*a:a:subj} {*a:b:subj} {*a:c:subj} {*a:d:subj} {*a:e:subj} {*a:f:subj} {*a:g:subj} {*a:h:subj}").unwrap();
+    let template = Template::compile("{*a:a:subj} {*a:b:subj} {*a:c:subj} {*a:d:subj} {*a:e:subj} {*a:f:subj} {*a:g:subj} {*a:h:subj}").expect("Failed to compile template");
     let entities_data = standard_test_entities();
     let entities: Vec<&dyn TemplateEntity> = entities_data
         .iter()
@@ -61,7 +63,11 @@ fn test_debug_permutations_limit_error() {
         false,
     );
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("Too many combinations"));
+    assert!(
+        result
+            .expect_err("Expected an error")
+            .contains("Too many combinations")
+    );
 }
 
 #[test]
@@ -71,7 +77,8 @@ fn test_debug_permutations_multiple_entities() {
     use crate::models::{ActorStance, TemplateEntity, Tense};
 
     let template =
-        Template::compile("{*A:source:subj} [source:give] {*the:target:obj} a high five.").unwrap();
+        Template::compile("{*A:source:subj} [source:give] {*the:target:obj} a high five.")
+            .expect("Failed to compile template");
     let entities_data = standard_test_entities();
 
     // Use 2 entities to keep the permutation count small: The player and a goblin
@@ -96,7 +103,7 @@ fn test_debug_permutations_multiple_entities() {
         &bindings,
         false,
     )
-    .unwrap();
+    .expect("Failed to generate permutations");
 
     // 1 stance * 1 tense * (2 entities ^ 2 keys) = 4 permutations
     assert_eq!(results.len(), 4);
@@ -115,7 +122,8 @@ fn test_debug_permutations_with_bindings() {
     use crate::models::{ActorStance, TemplateEntity, Tense};
     use std::collections::HashMap;
 
-    let template = Template::compile("{*A:source:subj} [source:pick up] {*the:item:obj}.").unwrap();
+    let template = Template::compile("{*A:source:subj} [source:pick up] {*the:item:obj}.")
+        .expect("Failed to compile template");
 
     let entities_data = standard_test_entities();
     let mut subsets: HashMap<String, Vec<&dyn TemplateEntity>> = HashMap::new();
@@ -143,7 +151,7 @@ fn test_debug_permutations_with_bindings() {
         &bindings,
         false,
     )
-    .unwrap();
+    .expect("Failed to generate permutations");
 
     // 6 actors * 3 objects * 1 stance * 1 tense = 18 permutations
     assert_eq!(results.len(), 18);
@@ -163,7 +171,8 @@ fn test_debug_permutations_subset_exclusion() {
     use crate::models::{ActorStance, TemplateEntity, Tense};
     use std::collections::HashMap;
 
-    let template = Template::compile("{*A:source:subj} [source:pick up] {*the:item:obj}.").unwrap();
+    let template = Template::compile("{*A:source:subj} [source:pick up] {*the:item:obj}.")
+        .expect("Failed to compile template");
 
     let entities_data = standard_test_entities();
     let mut subsets: HashMap<String, Vec<&dyn TemplateEntity>> = HashMap::new();
@@ -191,7 +200,7 @@ fn test_debug_permutations_subset_exclusion() {
         &bindings,
         false,
     )
-    .unwrap();
+    .expect("Failed to generate permutations");
 
     for result in results {
         // Ensure no actor ends up in the item position
@@ -216,7 +225,8 @@ fn test_debug_permutations_objects_never_viewers() {
     use crate::models::{ActorStance, TemplateEntity, Tense};
     use std::collections::HashMap;
 
-    let template = Template::compile("{*A:source:subj} [source:look] at {*the:item:obj}.").unwrap();
+    let template = Template::compile("{*A:source:subj} [source:look] at {*the:item:obj}.")
+        .expect("Failed to compile template");
 
     let entities_data = standard_test_entities();
     let mut subsets: HashMap<String, Vec<&dyn TemplateEntity>> = HashMap::new();
@@ -248,7 +258,7 @@ fn test_debug_permutations_objects_never_viewers() {
         &bindings,
         false,
     )
-    .unwrap();
+    .expect("Failed to generate permutations");
 
     // 6 actors * 3 objects * 3 stances * 1 tense = 54 permutations
     assert_eq!(results.len(), 54);
@@ -277,7 +287,8 @@ fn test_debug_permutations_subset_errors() {
     use crate::models::{ActorStance, TemplateEntity, Tense};
     use std::collections::HashMap;
 
-    let template = Template::compile("{*A:source:subj} [source:look].").unwrap();
+    let template =
+        Template::compile("{*A:source:subj} [source:look].").expect("Failed to compile template");
 
     let bindings = HashMap::new();
     let stances = vec![ActorStance::SecondPerson];
@@ -295,7 +306,7 @@ fn test_debug_permutations_subset_errors() {
         false,
     );
     assert_eq!(
-        result_missing.unwrap_err(),
+        result_missing.expect_err("Expected an error"),
         "Subset 'actors' not found and no 'actors' fallback available."
     );
 
@@ -311,5 +322,8 @@ fn test_debug_permutations_subset_errors() {
         &bindings,
         false,
     );
-    assert_eq!(result_empty.unwrap_err(), "Subset 'actors' is empty.");
+    assert_eq!(
+        result_empty.expect_err("Expected an error"),
+        "Subset 'actors' is empty."
+    );
 }

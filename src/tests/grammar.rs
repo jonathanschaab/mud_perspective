@@ -130,17 +130,17 @@ fn test_first_person_and_be_verbs() {
     // 1. "be" (Handled dynamically by stance and perspective overrides)
     let template_be = cache
         .get_or_compile("{*A:source:subj} [source:be] ready.")
-        .unwrap();
+        .expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&template_be, &ctx_first).unwrap(),
+        PerspectiveEngine::render(&template_be, &ctx_first).expect("Failed to render template"),
         "I am ready."
     );
     assert_eq!(
-        PerspectiveEngine::render(&template_be, &ctx_second).unwrap(),
+        PerspectiveEngine::render(&template_be, &ctx_second).expect("Failed to render template"),
         "You are ready."
     );
     assert_eq!(
-        PerspectiveEngine::render(&template_be, &ctx_third).unwrap(),
+        PerspectiveEngine::render(&template_be, &ctx_third).expect("Failed to render template"),
         "Aldran is ready."
     );
 
@@ -331,7 +331,7 @@ fn test_macro_register_custom_verbs() {
 
     let cache = TemplateCache::new(100);
 
-    // Ergonomically register multiple custom verbs at once
+    // Register multiple custom verbs at once
     crate::register_custom_verbs! {
         "bloop" => ("bloopses", "bloopeded"),
         "blarg" => ("blargs", "blarged"),

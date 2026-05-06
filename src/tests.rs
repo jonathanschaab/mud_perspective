@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used)]
+
 mod anaphora;
 pub mod common;
 mod debug;
