@@ -216,12 +216,7 @@ impl Template {
     }
 
     fn parse_entity(content: &str) -> Result<Token, String> {
-        let has_letters = content.chars().any(char::is_alphabetic);
-        let is_all_caps = has_letters
-            && content
-                .chars()
-                .filter(|c| c.is_alphabetic())
-                .all(char::is_uppercase);
+        let is_all_caps = is_all_caps(content);
 
         let parts: Vec<&str> = content.split(TAG_SEPARATOR).map(str::trim).collect();
         reject_if(
@@ -309,12 +304,7 @@ impl Template {
     }
 
     fn parse_verb(content: &str) -> Result<Token, String> {
-        let has_letters = content.chars().any(char::is_alphabetic);
-        let is_all_caps = has_letters
-            && content
-                .chars()
-                .filter(|c| c.is_alphabetic())
-                .all(char::is_uppercase);
+        let is_all_caps = is_all_caps(content);
 
         let (p1, p2_opt) = split_tag(content, TAG_VERB_OPEN, "Malformed verb tag")?;
         let (p1_str, p1_flags) = parse_stance_prefixes(p1);
@@ -1700,16 +1690,7 @@ impl PerspectiveEngine {
         {
             // Prevent false positives when a sub-property is located at memory offset 0
             // of its parent struct, which causes their data pointers to be identical.
-            if key.starts_with(active_key)
-                && key.len() > active_key.len()
-                && key.as_bytes().get(active_key.len()) == Some(&b'.')
-            {
-                return false;
-            }
-            if active_key.starts_with(key)
-                && active_key.len() > key.len()
-                && active_key.as_bytes().get(key.len()) == Some(&b'.')
-            {
+            if is_sub_property_path(active_key, key) || is_sub_property_path(key, active_key) {
                 return false;
             }
             return std::ptr::addr_eq(entity, active_entity);
@@ -2381,6 +2362,22 @@ const fn viewer_name(
 #[inline]
 fn is_capitalized(s: &str) -> bool {
     s.chars().next().is_some_and(char::is_uppercase)
+}
+
+#[inline]
+fn is_all_caps(s: &str) -> bool {
+    let has_letters = s.chars().any(char::is_alphabetic);
+    has_letters
+        && s.chars()
+            .filter(|c| c.is_alphabetic())
+            .all(char::is_uppercase)
+}
+
+#[inline]
+fn is_sub_property_path(parent: &str, child: &str) -> bool {
+    child.starts_with(parent)
+        && child.len() > parent.len()
+        && child.as_bytes().get(parent.len()) == Some(&b'.')
 }
 
 #[inline]
