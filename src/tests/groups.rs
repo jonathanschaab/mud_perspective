@@ -812,3 +812,90 @@ fn test_nested_properties_returning_group_entities() {
         "The goblin and the slime attack!"
     );
 }
+
+#[test]
+fn test_explicit_capitalization_after_possessive_in_groups() {
+    let player = MockEntity {
+        id: "char_1".to_string(),
+        name: "Aldran".to_string(),
+        gender: Gender::Male,
+        is_plural: false,
+        is_proper_noun: true,
+    };
+
+    let sword = MockEntity {
+        id: "item_1".to_string(),
+        name: "sword".to_string(),
+        gender: Gender::Neutral,
+        is_plural: false,
+        is_proper_noun: false,
+    };
+
+    let shield = MockEntity {
+        id: "item_2".to_string(),
+        name: "shield".to_string(),
+        gender: Gender::Neutral,
+        is_plural: false,
+        is_proper_noun: false,
+    };
+
+    let cache = TemplateCache::new(100);
+    let weapons = GroupEntity::new(vec![&sword, &shield]);
+
+    let ctx = RenderContext::new("char_2")
+        .with_entity("player", &player)
+        .with_entity("weapons", &weapons);
+
+    // 1. Uncapitalized explicit noun after possessive
+    let t_normal = cache.get_or_compile("{player's weapons}.").unwrap();
+    assert_eq!(
+        PerspectiveEngine::render(&t_normal, &ctx).unwrap(),
+        "Aldran's sword and shield."
+    );
+
+    // 2. Explicitly capitalized noun {Weapons} after possessive
+    let t_cap = cache.get_or_compile("{player's} {Weapons}.").unwrap();
+    assert_eq!(
+        PerspectiveEngine::render(&t_cap, &ctx).unwrap(),
+        "Aldran's Sword and shield."
+    );
+}
+
+#[test]
+fn test_group_entity_forced_3rd_person() {
+    let player = MockEntity {
+        id: "char_1".to_string(),
+        name: "Aldran".to_string(),
+        gender: Gender::Male,
+        is_plural: false,
+        is_proper_noun: true,
+    };
+    let ally = MockEntity {
+        id: "char_2".to_string(),
+        name: "Bob".to_string(),
+        gender: Gender::Male,
+        is_plural: false,
+        is_proper_noun: true,
+    };
+
+    let party = GroupEntity::new(vec![&player, &ally]);
+    let cache = TemplateCache::new(100);
+    let ctx = RenderContext::new("char_1").with_entity("party", &party);
+
+    let t1 = cache
+        .get_or_compile("{*A:party:subj} [party:arrive].")
+        .unwrap();
+    assert_eq!(
+        PerspectiveEngine::render(&t1, &ctx).unwrap(),
+        "You and Bob arrive."
+    );
+
+    // With the `+` modifier, the viewer check naturally resolves the entire group evaluation into Director Stance!
+    let t2 = cache
+        .get_or_compile("{*A:+party:subj} [+party:arrive].")
+        .unwrap();
+    assert_eq!(
+        PerspectiveEngine::render(&t2, &ctx).unwrap(),
+        "Aldran and Bob arrive."
+    );
+}

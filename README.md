@@ -64,6 +64,11 @@ impl TemplateEntity for Character {
     //     else { None }
     // }
 
+    // Optional: Provide a list of valid adjectives players can use to target this entity.
+    // fn adjectives(&self) -> Option<&[&str]> {
+    //     Some(&["large", "angry"])
+    // }
+
     // Optional: Expose nested entities like body parts, targets, or equipment
     fn get_property(&self, property_name: &str) -> Option<&dyn TemplateEntity> {
         match property_name {
@@ -244,10 +249,11 @@ let template = cache.get_or_compile("{source} [source:open] the door.")?;
 
 ### **4. Syntax Reference**
 
-* **Entity Tags:** The engine uses a flexible, three-part tag syntax: `{article:key:case}` (e.g., `{the:source.weapon:obj}`). It attempts to evaluate the pronoun case first (outputting "him" or "you"). If the engine detects ambiguity or it's the first mention, it falls back to the noun using your explicitly provided article (outputting "the sword"). Because the `article` and `case` segments are optional, a single tag scales from simple noun insertions to complex, context-aware pronouns:
+* **Entity Tags:** The engine uses a flexible tag syntax that scales from one to four parts: `{article:owner_and_adjectives:target:case}` (e.g., `{the:source.weapon:obj}`). It attempts to evaluate the pronoun case first (outputting "him" or "you"). If the engine detects ambiguity or it's the first mention, it falls back to the noun using your explicitly provided article (outputting "the sword"). Because most segments are optional, a single tag scales from simple noun insertions to complex, context-aware pronouns:
   * `{key}`: Inserts the entity's display name.
   * `{key:case}`: Appends a pronoun case, defaulting to an indefinite article ("a") if the engine forces a noun fallback.
   * `{article:key}`: Prepends a specific article directly to the noun.
+  * `{article:owner's adjectives:target:case}`: Demarcates multi-word target keys from dynamically injected adjectives.
 * **Key:** The core identifier for the entity. 
   * *Capitalization:* Capitalize the first letter (`{Key}`) to force title-casing mid-sentence. 
   * *Director Stance:* Prepend a plus (`{+key}` or `{+key:subj}`) to force the engine to render the character's 3rd-person name or pronoun even if the viewer is that character.
@@ -256,7 +262,8 @@ let template = cache.get_or_compile("{source} [source:open] the door.")?;
   * *Capitalization:* Capitalize the first letter (`{key:Subj}`) to force title-casing mid-sentence.
   * *Forced Pronoun:* Prepend an exclamation mark (`{key:!subj}`) to force the pronoun to render even if the engine detects it would be ambiguous.
 * **ALL CAPS:** Emphasized yelling and dramatic formatting are supported natively. If the tag's elements are written in entirely uppercase letters (e.g., `{THE:TARGET:OBJ}`, `{SOURCE}`, `[TARGET:ATTACK]`), the engine activates ALL CAPS mode. It bypasses standard title-casing and fully uppercases the output, including fallback articles, nouns, possessive suffixes, and conjugated verbs!
-* **Possessive Nouns:** Append `'s` or just a trailing apostrophe (`'`) to any entity tag (e.g., `{source's}` or `{wolves'}`) to dynamically generate the correct possessive noun suffix. If the entity is the viewer, it automatically renders as "your" or "my". Plural entities ending in "s" (like "wolves") will correctly render with just an apostrophe ("wolves'"). Group Entities distribute possessives across all members if mixed with a pronoun (e.g., "your and the goblin's"), or append to the final item (e.g., "Aldran and the goblin's").
+* **Possessive Nouns:** Append `'s` or just a trailing apostrophe (`'`) to any entity tag. This can be used standalone (`{source's}` -> "your" / "Aldran's") or combined with a target (`{source's target}`). When combined with a target, the engine natively bridges the grammatical relationship: it converts the owner to "your" or "my" if it's the viewer, naturally injects adjectives (e.g., `{source's glowing target}`), and suppresses the target's article. If your target key contains spaces, you can explicitly demarcate the adjectives from the target key using an additional colon (`{source's glowing:iron sword}`). Plural entities ending in "s" (like "wolves") will correctly render with just an apostrophe ("wolves' target"). 
+  * *Unique Proper Nouns:* If a named target is truly unique (like Excalibur), you can prepend the `@` modifier (`{source's @target}`) to force the engine to drop the possessive owner entirely, gracefully outputting "Excalibur" instead of "your Excalibur". If the target is a common noun, the `@` is ignored.
 * **Articles / Demonstratives:** You can use `a`, `the`, `this`, `that`, `another`, `one`, `one of the`, and `some` in front of any key to automatically append the article. Indefinite articles ("a") automatically adapt to "some" for plural entities, and demonstratives automatically adapt based on plurality ("this" becomes "these", "that" becomes "those"). Use `{A:key}`, `{The:key}`, etc., to force capitalization mid-sentence. These are automatically suppressed if the entity evaluates to the viewer ("you") or is flagged as a proper noun. You can force an article to render for a proper noun by prepending a plus sign (e.g., `{+this:key}`). You can disable the automatic upgrade of "a" to "the" for previously seen entities by prepending an exclamation mark (e.g., `{!a:key}`).
   * *Best Practice for Plural Proper Nouns:* To represent factions or bands (e.g., "the Avengers", "the Smiths"), include "the" directly in the entity's base name and flag it as a proper noun. The engine will natively suppress any dynamic articles requested by the template, preventing redundant outputs like "the the Avengers".
   * *Ordinals:* If multiple indistinguishable entities are introduced in the same context, the engine automatically upgrades "another" into ordinals ("a third", "a fourth"). For indistinguishable plural entities (e.g., multiple groups of wolves), the engine defaults to "a second set of wolves", but this can be customized by implementing `collective_noun()` on the entity to output natural phrasing like "a second pack of wolves". You can reference them explicitly with definite articles (e.g. `{the:w1}` -> "the first wolf", `{the:w2}` -> "the second wolf"). Ordinals are stable, meaning they persist even if other entities leave the room, and reset automatically when the group drops to a single member. By default, ordinals are rendered as words up to 999, after which they switch to integer form ("1000th"). You can configure this threshold using `ctx.with_ordinal_word_threshold(20)`.
@@ -369,8 +376,10 @@ The `TargetMatch` struct contains the matched key, the base entity, the requeste
 
 * **Pronouns:** Evaluates against `recent_entities` (e.g., "him" matches the last male entity).
 * **Ordinals:** Maps words like "second" or postfixes like "wolf 2" to stable ordinals.
-* **Nested Properties:** Parses possessives like "Aldran's sword" into entity + path.
+* **Deep Target Resolution:** The engine naturally understands possessive relationships from player inputs. It seamlessly maps phrases like "Aldran's sword" or "his glowing sword" back to their underlying narrative tags (`{source's target}`) or structural data properties (`{source.weapon}`). It also automatically tracks isolated namespaces for ordinals, so a command like "look at Aldran's second sword" flawlessly resolves directly to the exact sub-entity pointer without requiring you to build your own NLP string parser inside your game's `get_property` implementation!
 * **Ambiguity:** Returns multiple matches if an input is vague (e.g., "goblin" might match several).
+* **Adjectives & Aliases:** Players can mix and match articles, adjectives, aliases, and names (e.g., "the large angry boss"). The engine ensures the base name or alias matches exactly, while validating any preceding adjectives against the entity's `adjectives()` list.
+* **Inline Template Adjectives:** If a template dynamically injects an adjective (e.g., `{source's glowing:sword}`), the engine temporarily stores "glowing" in the scene's memory. This allows players to intuitively type "get glowing sword" immediately after reading it, even if "glowing" isn't normally in the item's database state!
 * **Incomplete Possessives:** If a user submits an incomplete possessive (like "take Aldran's"), the engine intentionally returns `0` matches. This prevents the player from targeting the base entity (Aldran himself) and allows your game to respond with "Aldran's what?".
 
 #### TargetMatch & Strict Resolution

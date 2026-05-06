@@ -93,6 +93,10 @@ fn test_malformed_tags_return_errors() {
         Template::compile("The {x:y:z} approaches.").expect_err("Expected compilation to fail");
     assert_eq!(entity_err, "Malformed entity tag: {x:y:z}");
 
+    let entity_err4 =
+        Template::compile("The {x:y:z:a} approaches.").expect_err("Expected compilation to fail");
+    assert_eq!(entity_err4, "Malformed entity tag: {x:y:z:a}");
+
     let verb_err =
         Template::compile("The goblin [a:b:c]").expect_err("Expected compilation to fail");
     assert_eq!(verb_err, "Malformed verb tag: [a:b:c]");
@@ -229,21 +233,15 @@ fn test_dot_notation_resolution() {
     };
 
     let cache = TemplateCache::new(100);
-    let template = cache.get_or_compile("{*A:Source:subj} [source:draw] {*a:source.weapon:obj} and [source:swing] {a:source:poss} {*a:source.weapon:obj}!").expect("Failed to compile template");
+    let template = cache.get_or_compile("{*A:Source:subj} [source:draw] {*a:source.weapon:obj} and [source:swing] {source's source.weapon:obj}!").expect("Failed to compile template");
 
     let out_director =
         render_msg!("char_2", &template, "source" => &player).expect("Failed to render template");
-    assert_eq!(
-        out_director,
-        "Aldran draws a rusty sword and swings his rusty sword!"
-    );
+    assert_eq!(out_director, "Aldran draws a rusty sword and swings it!");
 
     let out_actor =
         render_msg!("char_1", &template, "source" => &player).expect("Failed to render template");
-    assert_eq!(
-        out_actor,
-        "You draw a rusty sword and swing your rusty sword!"
-    );
+    assert_eq!(out_actor, "You draw a rusty sword and swing it!");
 
     // Verify graceful error handling if a builder requests a property that doesn't exist
     let err_template = cache

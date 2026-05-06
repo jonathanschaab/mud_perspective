@@ -22,6 +22,7 @@ pub(crate) const MOD_PREFER_NOUN: char = '*';
 pub(crate) const MOD_ALLOW_AMBIGUOUS_YOU: char = '~';
 pub(crate) const MOD_EXTRACT_GROUP_MEMBER: char = '^';
 pub(crate) const MOD_POSSESSIVE: &str = "'s";
+pub(crate) const MOD_DROP_POSSESSIVE: char = '@';
 
 pub(crate) const CTRL_SENTENCE_BREAK: &str = "SB";
 pub(crate) const CTRL_NO_SENTENCE_BREAK: &str = "NO_SB";
@@ -31,7 +32,7 @@ pub(crate) const CTRL_NO_SENTENCE_BREAK: &str = "NO_SB";
 pub enum Token {
     /// Plain text that is inserted exactly as-is.
     Literal(String),
-    /// e.g., {source}, {a:source}, or {the:target}
+    /// e.g., `{source}`, `{a:source}`, `{the:target:obj}`, or `{source's glowing target}`
     EntityRef {
         /// The key of the entity in the `RenderContext`.
         key: String,
@@ -39,6 +40,12 @@ pub enum Token {
         article: Option<String>,
         /// The optional type of pronoun requested (e.g., `"subj"`, `"obj"`, `"poss"`, `"abs_poss"`, `"reflex"`).
         p_type: Option<String>,
+        /// The optional owner key if this is a narrative possessive (e.g., `source` in `{source's target}`)
+        owner_key: Option<String>,
+        /// Modifiers specifically attached to the owner
+        owner_flags: TagFlags,
+        /// Optional adjectives between the owner and the target
+        adjectives: Option<String>,
         /// A packed bitflags struct containing all formatting modifiers.
         flags: TagFlags,
     },
@@ -81,6 +88,10 @@ pub struct Template {
 
 /// Type alias for the parsed components of a verb's conjugations.
 pub(crate) type VerbConjugations<'a> = (&'a str, Option<Vec<String>>, Option<Vec<String>>);
+
+/// Type alias for the destructured components of an entity tag.
+pub(crate) type DestructuredEntityTag<'a> =
+    (Option<&'a str>, Option<&'a str>, &'a str, Option<&'a str>);
 
 impl Template {
     /// Compiles a raw text string into a `Template` AST.
@@ -158,18 +169,24 @@ impl Template {
         let mut template_keys = Vec::new();
         let mut seen_keys = HashSet::new();
         for token in &tokens {
-            let k = match token {
-                Token::EntityRef { key, .. }
-                | Token::VerbRef {
+            match token {
+                Token::EntityRef { key, owner_key, .. } => {
+                    if seen_keys.insert(key.as_str()) {
+                        template_keys.push(key.clone());
+                    }
+                    if let Some(ok) = owner_key
+                        && seen_keys.insert(ok.as_str())
+                    {
+                        template_keys.push(ok.clone());
+                    }
+                }
+                Token::VerbRef {
                     subject_key: Some(key),
                     ..
-                } => Some(key.as_str()),
-                _ => None,
-            };
-            if let Some(key) = k
-                && seen_keys.insert(key)
-            {
-                template_keys.push(key.to_string());
+                } if seen_keys.insert(key.as_str()) => {
+                    template_keys.push(key.clone());
+                }
+                _ => {}
             }
         }
 
@@ -184,29 +201,68 @@ impl Template {
     fn destructure_entity_tag<'a>(
         parts: &'a [&'a str],
         content: &str,
-    ) -> Result<(Option<&'a str>, &'a str, Option<&'a str>), String> {
+    ) -> Result<DestructuredEntityTag<'a>, String> {
         match parts {
-            [p1, p2, p3] => {
+            [p1, p2, p3, p4] => {
                 let (p1_clean, _) = parse_stance_prefixes(p1);
-                if !p1_clean.is_empty() && !is_article(p1_clean) {
+                if p1_clean.is_empty() || !is_article(p1_clean) {
                     return Err(validation_error(
                         "Malformed entity tag",
                         content,
                         TAG_ENTITY_OPEN,
                     ));
                 }
-                let article = if p1.is_empty() { None } else { Some(*p1) };
-                Ok((article, *p2, Some(*p3)))
+                Ok((Some(*p1), Some(*p2), *p3, Some(*p4)))
+            }
+            [p1, p2, p3] => {
+                let (p1_clean, _) = parse_stance_prefixes(p1);
+                if p1_clean.is_empty() || is_article(p1_clean) {
+                    let (p2_clean, _) = parse_stance_prefixes(p2);
+                    let article = if p1.is_empty() { None } else { Some(*p1) };
+
+                    if is_owner_part(p2_clean) && !is_p_type(p3) {
+                        Ok((article, Some(*p2), *p3, None))
+                    } else if is_p_type(p3) || p3.is_empty() {
+                        Ok((article, None, *p2, Some(*p3)))
+                    } else {
+                        Err(validation_error(
+                            "Malformed entity tag",
+                            content,
+                            TAG_ENTITY_OPEN,
+                        ))
+                    }
+                } else if is_owner_part(p1_clean) && (is_p_type(p3) || p3.is_empty()) {
+                    Ok((None, Some(*p1), *p2, Some(*p3)))
+                } else {
+                    Err(validation_error(
+                        "Malformed entity tag",
+                        content,
+                        TAG_ENTITY_OPEN,
+                    ))
+                }
             }
             [p1, p2] => {
                 let (p1_clean, _) = parse_stance_prefixes(p1);
+
                 if !p1_clean.is_empty() && is_article(p1_clean) {
-                    Ok((Some(*p1), *p2, None))
+                    let article = if p1.is_empty() { None } else { Some(*p1) };
+                    Ok((article, None, *p2, None))
+                } else if is_p_type(p2) || p2.is_empty() {
+                    Ok((None, None, *p1, Some(*p2)))
+                } else if is_owner_part(p1_clean) {
+                    Ok((None, Some(*p1), *p2, None))
+                } else if p1_clean.is_empty() {
+                    let article = if p1.is_empty() { None } else { Some(*p1) };
+                    Ok((article, None, *p2, None))
                 } else {
-                    Ok((None, *p1, Some(*p2)))
+                    Err(validation_error(
+                        "Malformed entity tag",
+                        content,
+                        TAG_ENTITY_OPEN,
+                    ))
                 }
             }
-            [p1] => Ok((None, *p1, None)),
+            [p1] => Ok((None, None, *p1, None)),
             _ => Err(validation_error(
                 "Malformed entity tag",
                 content,
@@ -220,19 +276,24 @@ impl Template {
 
         let parts: Vec<&str> = content.split(TAG_SEPARATOR).map(str::trim).collect();
         reject_if(
-            parts.is_empty() || parts.len() > 3,
+            parts.is_empty() || parts.len() > 4,
             "Malformed entity tag",
             content,
             TAG_ENTITY_OPEN,
         )?;
 
-        let (raw_article, raw_key, raw_p_type) = Self::destructure_entity_tag(&parts, content)?;
+        let (raw_article, raw_owner, raw_key, raw_p_type) =
+            Self::destructure_entity_tag(&parts, content)?;
 
         let mut flags = TagFlags::empty();
 
         let clean_article = Self::process_article_part(raw_article, &mut flags);
+
+        let (owner_key, owner_flags, adjectives, working_key) =
+            Self::process_owner_part(raw_owner, raw_key);
+
         let clean_key = Self::process_key_part(
-            raw_key,
+            working_key,
             raw_article.is_some(),
             raw_p_type.is_some(),
             content,
@@ -246,8 +307,100 @@ impl Template {
             key: clean_key.to_lowercase(),
             article: clean_article.map(ToString::to_string),
             p_type: clean_p_type.map(str::to_lowercase),
+            owner_key,
+            owner_flags,
+            adjectives,
             flags,
         })
+    }
+
+    #[inline]
+    fn process_owner_part<'a>(
+        raw_owner: Option<&'a str>,
+        raw_key: &'a str,
+    ) -> (Option<String>, TagFlags, Option<String>, &'a str) {
+        let mut owner_key = None;
+        let mut owner_flags = TagFlags::empty();
+        let mut adjectives = None;
+        let mut working_key = raw_key;
+
+        if let Some(owner_part) = raw_owner {
+            let owner_idx_3 = owner_part
+                .find("'s ")
+                .or_else(|| owner_part.find("'S "))
+                .or_else(|| owner_part.find("’s "))
+                .or_else(|| owner_part.find("’S "));
+            let owner_idx_2 = owner_part.find("' ").or_else(|| owner_part.find("’ "));
+
+            let (owner_str, adj_str) = if let Some(idx) = owner_idx_3 {
+                (&owner_part[..idx], &owner_part[idx + 3..])
+            } else if let Some(idx) = owner_idx_2 {
+                (&owner_part[..idx], &owner_part[idx + 2..])
+            } else if let Some(stripped) = owner_part
+                .strip_suffix(MOD_POSSESSIVE)
+                .or_else(|| owner_part.strip_suffix("'S"))
+                .or_else(|| owner_part.strip_suffix("’s"))
+                .or_else(|| owner_part.strip_suffix("’S"))
+            {
+                (stripped, "")
+            } else if let Some(stripped) = owner_part
+                .strip_suffix('\'')
+                .or_else(|| owner_part.strip_suffix('’'))
+            {
+                (stripped, "")
+            } else {
+                (owner_part, "")
+            };
+
+            let (clean_owner, mut o_flags) = parse_stance_prefixes(owner_str);
+            o_flags.set(TagFlags::IS_CAPITALIZED, is_capitalized(clean_owner));
+            owner_key = Some(clean_owner.to_lowercase());
+            owner_flags = o_flags;
+
+            let adj = adj_str.trim();
+            if !adj.is_empty() {
+                adjectives = Some(format!("{adj} "));
+            }
+        } else {
+            let owner_idx_3 = working_key
+                .find("'s ")
+                .or_else(|| working_key.find("'S "))
+                .or_else(|| working_key.find("’s "))
+                .or_else(|| working_key.find("’S "));
+            let owner_idx_2 = working_key.find("' ").or_else(|| working_key.find("’ "));
+
+            if let Some(idx) = owner_idx_3 {
+                let owner_part = &working_key[..idx];
+                let (clean_owner, mut o_flags) = parse_stance_prefixes(owner_part);
+                o_flags.set(TagFlags::IS_CAPITALIZED, is_capitalized(clean_owner));
+                owner_key = Some(clean_owner.to_lowercase());
+                owner_flags = o_flags;
+
+                let remainder = &working_key[idx + 3..];
+                if let Some(space_idx) = remainder.rfind(' ') {
+                    adjectives = Some(remainder[..=space_idx].to_string());
+                    working_key = &remainder[space_idx + 1..];
+                } else {
+                    working_key = remainder;
+                }
+            } else if let Some(idx) = owner_idx_2 {
+                let owner_part = &working_key[..idx];
+                let (clean_owner, mut o_flags) = parse_stance_prefixes(owner_part);
+                o_flags.set(TagFlags::IS_CAPITALIZED, is_capitalized(clean_owner));
+                owner_key = Some(clean_owner.to_lowercase());
+                owner_flags = o_flags;
+
+                let remainder = &working_key[idx + 2..];
+                if let Some(space_idx) = remainder.rfind(' ') {
+                    adjectives = Some(remainder[..=space_idx].to_string());
+                    working_key = &remainder[space_idx + 1..];
+                } else {
+                    working_key = remainder;
+                }
+            }
+        }
+
+        (owner_key, owner_flags, adjectives, working_key)
     }
 
     #[inline]
@@ -463,7 +616,7 @@ bitflags::bitflags! {
         const FORCE_ARTICLE = 1 << 1;
         /// A flag indicating if the builder explicitly forced the 3rd-person stance (e.g. {+source}).
         const FORCE_3RD_PERSON = 1 << 2;
-        /// A flag indicating if the builder explicitly forced the possessive form (e.g. {source's}).
+        /// A flag indicating if the builder explicitly forced the possessive form (e.g., `{source's}`, `{source's target}`).
         const IS_POSSESSIVE = 1 << 3;
         /// A flag indicating if the builder explicitly disabled the anaphoric article upgrade (e.g. {!a:source}).
         const NO_SMART = 1 << 4;
@@ -483,6 +636,8 @@ bitflags::bitflags! {
         const PRONOUN_CAPITALIZED = 1 << 11;
         /// A flag indicating the entire tag was written in uppercase, activating ALL CAPS mode.
         const ALL_CAPS = 1 << 12;
+        /// A flag indicating the builder used the Safe Override (@) to drop possessives for proper nouns.
+        const DROP_POSSESSIVE = 1 << 13;
     }
 }
 
@@ -506,6 +661,7 @@ impl TagFlags {
         extract_group_member: bool,
         pronoun_capitalized: bool,
         all_caps: bool,
+        drop_possessive: bool,
     ) -> Self {
         let mut flags = Self::empty();
         flags.set(Self::IS_CAPITALIZED, is_capitalized);
@@ -521,6 +677,7 @@ impl TagFlags {
         flags.set(Self::EXTRACT_GROUP_MEMBER, extract_group_member);
         flags.set(Self::PRONOUN_CAPITALIZED, pronoun_capitalized);
         flags.set(Self::ALL_CAPS, all_caps);
+        flags.set(Self::DROP_POSSESSIVE, drop_possessive);
         flags
     }
 
@@ -600,6 +757,13 @@ impl TagFlags {
     pub const fn extract_group_member(self) -> bool {
         self.contains(Self::EXTRACT_GROUP_MEMBER)
     }
+
+    /// Returns `true` if the drop possessive override flag is set.
+    #[inline]
+    #[must_use]
+    pub const fn drop_possessive(self) -> bool {
+        self.contains(Self::DROP_POSSESSIVE)
+    }
 }
 
 #[cold]
@@ -612,6 +776,34 @@ pub(crate) fn validation_error(message: &str, content: &str, open_char: char) ->
     let formatted_message = format!("{message}: {open_char}{content}{close_char}");
     tracing::error!("{}", formatted_message);
     formatted_message
+}
+
+#[inline]
+pub(crate) fn is_p_type(s: &str) -> bool {
+    let (clean, _) = parse_stance_prefixes(s);
+    let lower = clean.trim().to_lowercase();
+    matches!(
+        lower.as_str(),
+        "subj" | "obj" | "poss" | "abs_poss" | "reflex"
+    )
+}
+
+#[inline]
+pub(crate) fn is_owner_part(s: &str) -> bool {
+    let (clean, _) = parse_stance_prefixes(s);
+    let clean = clean.trim();
+    clean.contains("'s ")
+        || clean.contains("'S ")
+        || clean.contains("’s ")
+        || clean.contains("’S ")
+        || clean.contains("' ")
+        || clean.contains("’ ")
+        || clean.ends_with("'s")
+        || clean.ends_with("'S")
+        || clean.ends_with("’s")
+        || clean.ends_with("’S")
+        || clean.ends_with('\'')
+        || clean.ends_with('’')
 }
 
 #[inline]
@@ -664,6 +856,9 @@ pub(crate) fn parse_stance_prefixes(mut s: &str) -> (&str, TagFlags) {
             s = stripped;
         } else if let Some(stripped) = s.strip_prefix(MOD_EXTRACT_GROUP_MEMBER) {
             flags.insert(TagFlags::EXTRACT_GROUP_MEMBER);
+            s = stripped;
+        } else if let Some(stripped) = s.strip_prefix(MOD_DROP_POSSESSIVE) {
+            flags.insert(TagFlags::DROP_POSSESSIVE);
             s = stripped;
         } else {
             break;

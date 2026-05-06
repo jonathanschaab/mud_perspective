@@ -77,17 +77,9 @@ fn evaluate_template(
         }
         desc.push_str("} -> ");
 
-        match PerspectiveEngine::render(template, &ctx) {
-            Ok(res) => {
-                desc.push_str(&res);
-                Ok(vec![desc])
-            }
-            Err(e) => {
-                desc.push_str("ERROR: ");
-                desc.push_str(&e);
-                Ok(vec![desc])
-            }
-        }
+        let res = PerspectiveEngine::render(template, &ctx)?;
+        desc.push_str(&res);
+        Ok(vec![desc])
     } else if let Some(payload) = custom_payload {
         let mut subsets: std::collections::HashMap<String, Vec<&dyn TemplateEntity>> =
             std::collections::HashMap::new();

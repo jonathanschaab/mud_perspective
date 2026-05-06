@@ -634,6 +634,184 @@ fn test_group_entity_aliases() {
 }
 
 #[test]
+fn test_resolve_target_adjectives_and_aliases() {
+    struct Boss {
+        name: &'static str,
+        long_name: &'static str,
+        aliases: &'static [&'static str],
+        adjectives: &'static [&'static str],
+    }
+    impl TemplateEntity for Boss {
+        fn contains_viewer(&self, _: &str) -> bool {
+            false
+        }
+        fn gender(&self) -> Gender {
+            Gender::Male
+        }
+        fn is_plural(&self) -> bool {
+            false
+        }
+        fn is_proper_noun_for(&self, _: &str) -> bool {
+            true
+        }
+        fn display_name_for<'a>(&'a self, _: &str) -> Cow<'a, str> {
+            Cow::Borrowed(self.name)
+        }
+        fn long_display_name_for<'a>(&'a self, _: &str) -> Option<Cow<'a, str>> {
+            Some(Cow::Borrowed(self.long_name))
+        }
+        fn aliases(&self) -> Option<&[&str]> {
+            Some(self.aliases)
+        }
+        fn adjectives(&self) -> Option<&[&str]> {
+            Some(self.adjectives)
+        }
+    }
+
+    let aldran = Boss {
+        name: "Aldran",
+        long_name: "Aldran the Conqueror",
+        aliases: &["dark lord", "boss"],
+        adjectives: &["angry", "tall", "green"],
+    };
+
+    let ctx = RenderContext::new("viewer").with_entity("aldran", &aldran);
+
+    // 1. Exact match on short name, long name, or alias
+    assert_eq!(ctx.resolve_target("aldran").len(), 1);
+    assert_eq!(ctx.resolve_target("Aldran the Conqueror").len(), 1);
+    assert_eq!(ctx.resolve_target("dark lord").len(), 1);
+
+    // 2. Adjective + Short Name
+    assert_eq!(ctx.resolve_target("angry Aldran").len(), 1);
+    assert_eq!(ctx.resolve_target("tall angry Aldran").len(), 1);
+
+    // 3. Adjective + Alias
+    assert_eq!(ctx.resolve_target("green boss").len(), 1);
+    assert_eq!(ctx.resolve_target("tall dark lord").len(), 1);
+
+    // 4. Missing adjective fails cleanly
+    assert_eq!(ctx.resolve_target("short Aldran").len(), 0);
+
+    // 5. Incomplete alias or name fails (protects against "Mr.")
+    assert_eq!(ctx.resolve_target("dark").len(), 0);
+    assert_eq!(ctx.resolve_target("lord").len(), 0);
+}
+
+#[test]
+fn test_resolve_target_inline_adjectives_tracking() {
+    let goblin = MockEntity {
+        id: "mob_1".into(),
+        name: "goblin".into(),
+        gender: Gender::Neutral,
+        is_plural: false,
+        is_proper_noun: false,
+    };
+    let sword = MockEntity {
+        id: "item_1".into(),
+        name: "sword".into(),
+        gender: Gender::Neutral,
+        is_plural: false,
+        is_proper_noun: false,
+    };
+
+    let cache = TemplateCache::new(100);
+    let ctx = RenderContext::new("viewer")
+        .with_entity("goblin", &goblin)
+        .with_entity("sword", &sword);
+
+    // Initial check: "gleaming sword" should not match because it's not in the data!
+    assert_eq!(ctx.resolve_target("gleaming sword").len(), 0);
+
+    // Render a template that injects "gleaming" inline!
+    let t = cache
+        .get_or_compile("{*A:goblin:subj} draws {goblin's gleaming:sword:obj}.")
+        .unwrap();
+    PerspectiveEngine::render(&t, &ctx).unwrap();
+
+    // Now, the anaphora memory tracks the rendered adjective!
+    let m = ctx.resolve_target("gleaming sword");
+    assert_eq!(m.len(), 1);
+    assert_eq!(m[0].key, "sword");
+
+    // Unrelated adjectives still fail
+    assert_eq!(ctx.resolve_target("rusty sword").len(), 0);
+}
+
+#[test]
+#[cfg(feature = "ansi")]
+fn test_resolve_target_inline_adjectives_strips_ansi() {
+    let goblin = MockEntity {
+        id: "mob_1".into(),
+        name: "goblin".into(),
+        gender: Gender::Neutral,
+        is_plural: false,
+        is_proper_noun: false,
+    };
+    let sword = MockEntity {
+        id: "item_1".into(),
+        name: "sword".into(),
+        gender: Gender::Neutral,
+        is_plural: false,
+        is_proper_noun: false,
+    };
+
+    let cache = TemplateCache::new(100);
+    let ctx = RenderContext::new("viewer")
+        .with_entity("goblin", &goblin)
+        .with_entity("sword", &sword);
+
+    let t = cache
+        .get_or_compile("{*A:goblin:subj} draws {goblin's \x1b[31mgleaming\x1b[0m:sword:obj}.")
+        .unwrap();
+    PerspectiveEngine::render(&t, &ctx).unwrap();
+
+    // It should have stripped the ANSI codes and tracked just "gleaming"
+    let m = ctx.resolve_target("gleaming sword");
+    assert_eq!(m.len(), 1);
+    assert_eq!(m[0].key, "sword");
+}
+
+#[test]
+fn test_resolve_target_inline_adjectives_cleared_on_reset() {
+    let goblin = MockEntity {
+        id: "mob_1".into(),
+        name: "goblin".into(),
+        gender: Gender::Neutral,
+        is_plural: false,
+        is_proper_noun: false,
+    };
+    let sword = MockEntity {
+        id: "item_1".into(),
+        name: "sword".into(),
+        gender: Gender::Neutral,
+        is_plural: false,
+        is_proper_noun: false,
+    };
+
+    let cache = TemplateCache::new(100);
+    let ctx = RenderContext::new("viewer")
+        .with_entity("goblin", &goblin)
+        .with_entity("sword", &sword);
+
+    let t = cache
+        .get_or_compile("{*A:goblin:subj} draws {goblin's gleaming:sword:obj}.")
+        .unwrap();
+    PerspectiveEngine::render(&t, &ctx).unwrap();
+
+    // The adjective is tracked initially
+    let m1 = ctx.resolve_target("gleaming sword");
+    assert_eq!(m1.len(), 1);
+
+    // Reset the narrative memory (e.g., player leaves the room)
+    ctx.clear_anaphora();
+
+    // The inline adjective is safely forgotten!
+    let m2 = ctx.resolve_target("gleaming sword");
+    assert_eq!(m2.len(), 0);
+}
+
+#[test]
 fn test_resolve_target_ambiguous_multiple_matches() {
     struct GuardActor {
         name: &'static str,
@@ -896,6 +1074,306 @@ fn test_resolve_target_ordinals_with_sub_elements() {
     assert_eq!(m2.len(), 1);
     assert_eq!(m2[0].key, "o2");
     assert_eq!(m2[0].path_uncertain, true); // o2 does not have the sword!
+}
+
+#[test]
+fn test_resolve_target_deep_ordinal_natively() {
+    let goblin = MockEntity {
+        id: "g1".into(),
+        name: "goblin".into(),
+        gender: Gender::Neutral,
+        is_plural: false,
+        is_proper_noun: false,
+    };
+    let sword1 = MockEntity {
+        id: "s1".into(),
+        name: "sword".into(),
+        gender: Gender::Neutral,
+        is_plural: false,
+        is_proper_noun: false,
+    };
+    let sword2 = MockEntity {
+        id: "s2".into(),
+        name: "sword".into(),
+        gender: Gender::Neutral,
+        is_plural: false,
+        is_proper_noun: false,
+    };
+
+    let cache = TemplateCache::new(100);
+    let ctx = RenderContext::new("viewer")
+        .with_entity("g1", &goblin)
+        .with_entity("s1", &sword1)
+        .with_entity("s2", &sword2)
+        .with_lookahead(true);
+
+    // Seed ordinals using narrative possessives
+    let t = cache
+        .get_or_compile("{*A:g1:subj} grabs {g1's s1:obj} and {g1's s2:obj}.")
+        .unwrap();
+    PerspectiveEngine::render(&t, &ctx).unwrap();
+
+    // 1. Resolve the natural language phrase perfectly without requiring manual parsing!
+    let m1 = ctx.resolve_target("the goblin's second sword");
+    assert_eq!(m1.len(), 1);
+
+    // Prove it fully resolved to the deep root entity natively without pathing delegation!
+    assert_eq!(m1[0].key, "s2");
+    assert_eq!(m1[0].path, None);
+    assert_eq!(m1[0].path_uncertain, false);
+
+    // 2. Ambiguous query returns both matches
+    let m2 = ctx.resolve_target("the goblin's sword");
+    assert_eq!(m2.len(), 2);
+}
+
+#[test]
+fn test_resolve_target_deep_ordinal_structural() {
+    struct Weapon {
+        name: &'static str,
+    }
+    impl TemplateEntity for Weapon {
+        fn contains_viewer(&self, _: &str) -> bool {
+            false
+        }
+        fn gender(&self) -> Gender {
+            Gender::Neutral
+        }
+        fn is_plural(&self) -> bool {
+            false
+        }
+        fn is_proper_noun_for(&self, _: &str) -> bool {
+            false
+        }
+        fn display_name_for<'a>(&'a self, _: &str) -> Cow<'a, str> {
+            Cow::Borrowed(self.name)
+        }
+    }
+
+    struct Actor {
+        name: &'static str,
+        w1: Weapon,
+        w2: Weapon,
+    }
+    impl TemplateEntity for Actor {
+        fn contains_viewer(&self, _: &str) -> bool {
+            false
+        }
+        fn gender(&self) -> Gender {
+            Gender::Male
+        }
+        fn is_plural(&self) -> bool {
+            false
+        }
+        fn is_proper_noun_for(&self, _: &str) -> bool {
+            true
+        }
+        fn display_name_for<'a>(&'a self, _: &str) -> Cow<'a, str> {
+            Cow::Borrowed(self.name)
+        }
+        fn get_property(&self, prop: &str) -> Option<&dyn TemplateEntity> {
+            match prop {
+                "weapon1" => Some(&self.w1),
+                "weapon2" => Some(&self.w2),
+                _ => None,
+            }
+        }
+    }
+
+    let aldran = Actor {
+        name: "Aldran",
+        w1: Weapon { name: "sword" },
+        w2: Weapon { name: "sword" },
+    };
+
+    let cache = TemplateCache::new(100);
+    let ctx = RenderContext::new("viewer")
+        .with_entity("aldran", &aldran)
+        .with_lookahead(true);
+
+    // Seed ordinals using dot-notation structural properties
+    let t = cache.get_or_compile("{*A:aldran:subj} grabs {aldran's aldran.weapon1:obj} and {aldran's aldran.weapon2:obj}.").unwrap();
+    PerspectiveEngine::render(&t, &ctx).unwrap();
+
+    // Resolve the natural language phrase!
+    let m1 = ctx.resolve_target("Aldran's second sword");
+    assert_eq!(m1.len(), 1);
+
+    // Prove it fully resolved to the deep property natively!
+    assert_eq!(m1[0].key, "aldran.weapon2");
+    assert_eq!(m1[0].path, None);
+    assert_eq!(m1[0].path_uncertain, false);
+}
+
+#[test]
+fn test_mixed_narrative_and_data_possessive_ordinals() {
+    struct Weapon {
+        name: &'static str,
+    }
+    impl TemplateEntity for Weapon {
+        fn contains_viewer(&self, _: &str) -> bool {
+            false
+        }
+        fn gender(&self) -> Gender {
+            Gender::Neutral
+        }
+        fn is_plural(&self) -> bool {
+            false
+        }
+        fn is_proper_noun_for(&self, _: &str) -> bool {
+            false
+        }
+        fn display_name_for<'a>(&'a self, _: &str) -> Cow<'a, str> {
+            Cow::Borrowed(self.name)
+        }
+    }
+
+    struct Actor {
+        name: &'static str,
+        weapon: Weapon,
+    }
+    impl TemplateEntity for Actor {
+        fn contains_viewer(&self, _: &str) -> bool {
+            false
+        }
+        fn gender(&self) -> Gender {
+            Gender::Male
+        }
+        fn is_plural(&self) -> bool {
+            false
+        }
+        fn is_proper_noun_for(&self, _: &str) -> bool {
+            false
+        }
+        fn display_name_for<'a>(&'a self, _: &str) -> Cow<'a, str> {
+            Cow::Borrowed(self.name)
+        }
+        fn get_property(&self, prop: &str) -> Option<&dyn TemplateEntity> {
+            if prop == "weapon" {
+                Some(&self.weapon)
+            } else {
+                None
+            }
+        }
+    }
+
+    let goblin = Actor {
+        name: "goblin",
+        weapon: Weapon { name: "sword" },
+    };
+    let dropped_sword = Weapon { name: "sword" };
+
+    let cache = TemplateCache::new(100);
+    let ctx = RenderContext::new("viewer")
+        .with_entity("g", &goblin)
+        .with_entity("s_dropped", &dropped_sword)
+        .with_lookahead(true);
+
+    // The goblin draws his equipped sword (data), and picks up the dropped sword (narrative)
+    let t = cache
+        .get_or_compile("{*A:g:subj} draws {g's g.weapon:obj} and picks up {g's s_dropped:obj}.")
+        .unwrap();
+
+    assert_eq!(
+        PerspectiveEngine::render(&t, &ctx).unwrap(),
+        "A goblin draws his sword and picks up his second sword."
+    );
+
+    let m1 = ctx.resolve_target("the goblin's first sword");
+    assert_eq!(m1.len(), 1);
+    assert_eq!(m1[0].key, "g.weapon");
+
+    let m2 = ctx.resolve_target("the goblin's second sword");
+    assert_eq!(m2.len(), 1);
+    assert_eq!(m2[0].key, "s_dropped");
+}
+#[test]
+fn test_resolve_target_ordinals_on_owned_items() {
+    struct Item {
+        name: &'static str,
+    }
+    impl TemplateEntity for Item {
+        fn contains_viewer(&self, _: &str) -> bool {
+            false
+        }
+        fn gender(&self) -> Gender {
+            Gender::Neutral
+        }
+        fn is_plural(&self) -> bool {
+            false
+        }
+        fn is_proper_noun_for(&self, _: &str) -> bool {
+            false
+        }
+        fn display_name_for<'a>(&'a self, _: &str) -> Cow<'a, str> {
+            Cow::Borrowed(self.name)
+        }
+    }
+
+    struct Mob {
+        name: &'static str,
+        sword1: Item,
+        sword2: Item,
+    }
+    impl TemplateEntity for Mob {
+        fn contains_viewer(&self, _: &str) -> bool {
+            false
+        }
+        fn gender(&self) -> Gender {
+            Gender::Male
+        }
+        fn is_plural(&self) -> bool {
+            false
+        }
+        fn is_proper_noun_for(&self, _: &str) -> bool {
+            false
+        }
+        fn display_name_for<'a>(&'a self, _: &str) -> Cow<'a, str> {
+            Cow::Borrowed(self.name)
+        }
+        fn get_property(&self, property_name: &str) -> Option<&dyn TemplateEntity> {
+            // The engine passes the raw path text, allowing developers to implement
+            // their own inventory parsing logic for ordinals if desired!
+            match property_name {
+                "sword" | "first sword" => Some(&self.sword1),
+                "second sword" | "third arrow" => Some(&self.sword2),
+                _ => None,
+            }
+        }
+    }
+
+    let orc = Mob {
+        name: "orc",
+        sword1: Item {
+            name: "rusty sword",
+        },
+        sword2: Item {
+            name: "glowing sword",
+        },
+    };
+
+    let ctx = RenderContext::new("viewer").with_entity("orc", &orc);
+
+    // 1. Ordinal on the owned item!
+    // The engine isolates "the orc" and correctly passes "second sword" to `get_property`!
+    let m1 = ctx.resolve_target("the orc's second sword");
+    assert_eq!(m1.len(), 1);
+    assert_eq!(m1[0].key, "orc");
+    assert_eq!(m1[0].path.as_deref(), Some("second sword"));
+    assert_eq!(m1[0].path_uncertain, false);
+
+    let deep1 = m1[0].resolve_deep_entity().unwrap();
+    assert_eq!(deep1.display_name_for("viewer"), "glowing sword");
+
+    // 2. A different ordinal on the owned item
+    let m2 = ctx.resolve_target("the orc's third arrow");
+    assert_eq!(m2.len(), 1);
+    assert_eq!(m2[0].key, "orc");
+    assert_eq!(m2[0].path.as_deref(), Some("third arrow"));
+    assert_eq!(m2[0].path_uncertain, false);
+
+    let deep2 = m2[0].resolve_deep_entity().unwrap();
+    assert_eq!(deep2.display_name_for("viewer"), "glowing sword");
 }
 
 #[test]
@@ -1188,8 +1666,9 @@ fn test_e2e_combat_round() {
     assert_eq!(nested_item.display_name_for("viewer"), "wooden club");
 
     // 6. Simulate Player Input: "attack it" (Ambiguous pronoun, both neutral goblins are in memory)
+    // The engine perfectly tracks the dot-notation properties, meaning the 2 goblins AND the wooden club are all valid neutral targets!
     let targets_pronoun = ctx.resolve_target("it");
-    assert_eq!(targets_pronoun.len(), 2);
+    assert_eq!(targets_pronoun.len(), 3);
 }
 
 #[test]
@@ -1228,7 +1707,7 @@ fn test_resolve_target_unicode_optimizations() {
         aliases: &[],
     }; // Identical name for ordinals testing
     let o1 = UnicodeMob {
-        name: "Mÿstïc Ørc",
+        name: "Mÿstïc Örc",
         aliases: &[],
     };
 
@@ -1534,4 +2013,112 @@ fn test_trailing_apostrophe_in_template_tag() {
         PerspectiveEngine::render(&t2, &ctx).expect("Failed to render template"),
         "You take the boss's gold."
     );
+}
+
+#[test]
+fn test_resolve_target_deduplication() {
+    let goblin = MockEntity {
+        id: "mob_1".to_string(),
+        name: "goblin".to_string(),
+        gender: Gender::Neutral,
+        is_plural: false,
+        is_proper_noun: false,
+    };
+
+    // Bind the EXACT SAME entity instance to two different keys
+    let ctx = RenderContext::new("viewer")
+        .with_entity("g1", &goblin)
+        .with_entity("g2", &goblin);
+
+    let matches = ctx.resolve_target("goblin");
+    // Because both keys point to the same entity data pointer,
+    // it should deduplicate and only return ONE match, avoiding false ambiguity!
+    assert_eq!(matches.len(), 1);
+    assert!(matches[0].key == "g1" || matches[0].key == "g2");
+}
+
+#[test]
+fn test_resolve_target_alias_ordinal_synergy() {
+    struct Boss {
+        name: &'static str,
+    }
+    impl TemplateEntity for Boss {
+        fn contains_viewer(&self, _: &str) -> bool {
+            false
+        }
+        fn gender(&self) -> Gender {
+            Gender::Male
+        }
+        fn is_plural(&self) -> bool {
+            false
+        }
+        fn is_proper_noun_for(&self, _: &str) -> bool {
+            true
+        }
+        fn display_name_for<'a>(&'a self, _: &str) -> Cow<'a, str> {
+            Cow::Borrowed(self.name)
+        }
+        fn aliases(&self) -> Option<&[&str]> {
+            Some(&["dark lord"])
+        }
+    }
+
+    let b1 = Boss { name: "Aldran" };
+    let b2 = Boss { name: "Malakor" };
+
+    let ctx = RenderContext::new("viewer")
+        .with_entity("b1", &b1)
+        .with_entity("b2", &b2)
+        .with_lookahead(true);
+
+    let cache = TemplateCache::new(100);
+    let t = cache
+        .get_or_compile("{*A:b1:subj} and {*A:b2:subj} arrive.")
+        .unwrap();
+    PerspectiveEngine::render(&t, &ctx).unwrap();
+
+    // Because their display names are completely different ("Aldran" and "Malakor"), the
+    // engine natively recognizes they do not collide, so it generates NO ordinals for them!
+    // Because no ordinals are generated, targeting an alias with an ordinal deliberately
+    // does not resolve. You must target the unambiguous display name.
+    let m = ctx.resolve_target("the second dark lord");
+    assert_eq!(m.len(), 0);
+
+    let m2 = ctx.resolve_target("Malakor");
+    assert_eq!(m2.len(), 1);
+
+    // But "dark lord" resolves ambiguously to both as intended!
+    let m_ambig = ctx.resolve_target("dark lord");
+    assert_eq!(m_ambig.len(), 2);
+}
+
+#[test]
+fn test_is_same_entity_comparison() {
+    use crate::models::is_same_entity;
+
+    let goblin1 = MockEntity {
+        id: "mob_1".to_string(),
+        name: "goblin".to_string(),
+        gender: Gender::Neutral,
+        is_plural: false,
+        is_proper_noun: false,
+    };
+
+    let goblin2 = MockEntity {
+        id: "mob_1".to_string(), // Identical fields
+        name: "goblin".to_string(),
+        gender: Gender::Neutral,
+        is_plural: false,
+        is_proper_noun: false,
+    };
+
+    let ref1: &dyn TemplateEntity = &goblin1;
+    let ref1_dup: &dyn TemplateEntity = &goblin1;
+    let ref2: &dyn TemplateEntity = &goblin2;
+
+    // Should be true for references to the exact same instance in memory
+    assert!(is_same_entity(ref1, ref1_dup));
+
+    // Should be false for different instances, even with completely identical data
+    assert!(!is_same_entity(ref1, ref2));
 }

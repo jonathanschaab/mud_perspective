@@ -169,6 +169,32 @@ pub(crate) fn skip_protocol_tags(
     }
 }
 
+pub(crate) fn strip_all_protocol_tags(input: &str) -> String {
+    #[cfg(not(any(feature = "mxp", feature = "msp", feature = "ansi")))]
+    {
+        input.to_string()
+    }
+    #[cfg(any(feature = "mxp", feature = "msp", feature = "ansi"))]
+    {
+        if !has_protocol_tags(input) {
+            return input.to_string();
+        }
+
+        let mut output = String::with_capacity(input.len());
+        let mut chars = input.char_indices().peekable();
+
+        while let Some(&(i, c)) = chars.peek() {
+            let remainder = input.get(i..).unwrap_or_default();
+            if skip_protocol_tags(&mut chars, remainder, i).is_some() {
+                continue;
+            }
+            chars.next();
+            output.push(c);
+        }
+        output
+    }
+}
+
 #[cfg(any(feature = "mxp", feature = "msp", feature = "ansi"))]
 #[inline]
 pub(crate) fn find_skipped_tag_end(remainder: &str) -> Option<usize> {

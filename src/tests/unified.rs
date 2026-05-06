@@ -885,7 +885,11 @@ fn test_e2e_combat_round_unified() {
     );
 
     // {player} [player:slash] {the:g1} with {player:poss} {player.weapon}.
-    let t_attack = cache.get_or_compile("{*A:player:subj} [player:slash] {*the:g1:obj} with {a:player:poss} {*a:player.weapon:obj}.").unwrap();
+    let t_attack = cache
+        .get_or_compile(
+            "{*A:player:subj} [player:slash] {*the:g1:obj} with {player's player.weapon:obj}.",
+        )
+        .unwrap();
     assert_eq!(
         PerspectiveEngine::render(&t_attack, &ctx).unwrap(),
         "You slash the first goblin with your glowing sword."
@@ -893,9 +897,7 @@ fn test_e2e_combat_round_unified() {
 
     // {The:g2} [g2:swing] {g2:poss} {g2.weapon} at {player:obj}!
     let t_retaliate = cache
-        .get_or_compile(
-            "{*The:g2:subj} [g2:swing] {a:g2:poss} {*a:g2.weapon:obj} at {a:player:obj}!",
-        )
+        .get_or_compile("{*The:g2:subj} [g2:swing] {g2's g2.weapon:obj} at {a:player:obj}!")
         .unwrap();
     assert_eq!(
         PerspectiveEngine::render(&t_retaliate, &ctx).unwrap(),
@@ -963,11 +965,11 @@ fn test_dot_notation_resolution_unified() {
     let cache = TemplateCache::new(100);
 
     // {Source} [source:draw] {a:source.weapon} and [source:swing] {source:poss} {source.weapon}!
-    let t = cache.get_or_compile("{*A:Source:subj} [source:draw] {*a:source.weapon:obj} and [source:swing] {a:source:poss} {*a:source.weapon:obj}!").unwrap();
+    let t = cache.get_or_compile("{*A:Source:subj} [source:draw] {*a:source.weapon:obj} and [source:swing] {source's source.weapon:obj}!").unwrap();
     let ctx = RenderContext::new("char_2").with_entity("source", &player);
     assert_eq!(
         PerspectiveEngine::render(&t, &ctx).unwrap(),
-        "Aldran draws a rusty sword and swings his rusty sword!"
+        "Aldran draws a rusty sword and swings it!"
     );
 }
 
@@ -1625,6 +1627,492 @@ fn test_unified_stance_tense_equivalents() {
         )
         .unwrap(),
         "Aldran walks."
+    );
+}
+
+#[test]
+fn test_unified_possessives_with_long_descriptions_on_proper_nouns() {
+    struct LongProperNoun {
+        short_name: &'static str,
+        long_name: &'static str,
+    }
+    impl TemplateEntity for LongProperNoun {
+        fn contains_viewer(&self, _: &str) -> bool {
+            false
+        }
+        fn gender(&self) -> Gender {
+            Gender::Male
+        }
+        fn is_plural(&self) -> bool {
+            false
+        }
+        fn is_proper_noun_for(&self, _: &str) -> bool {
+            true
+        }
+        fn display_name_for<'a>(&'a self, _: &str) -> Cow<'a, str> {
+            Cow::Borrowed(self.short_name)
+        }
+        fn long_display_name_for<'a>(&'a self, _: &str) -> Option<Cow<'a, str>> {
+            Some(Cow::Borrowed(self.long_name))
+        }
+    }
+
+    // Two kings named Arthur and two swords named Excalibur to force collisions
+    // and trigger the long descriptions dynamically!
+    let arthur1 = LongProperNoun {
+        short_name: "Arthur",
+        long_name: "Arthur the Elder",
+    };
+    let arthur2 = LongProperNoun {
+        short_name: "Arthur",
+        long_name: "Arthur the Younger",
+    };
+    let excalibur1 = LongProperNoun {
+        short_name: "Excalibur",
+        long_name: "Excalibur of the Lake",
+    };
+    let excalibur2 = LongProperNoun {
+        short_name: "Excalibur",
+        long_name: "Excalibur of the Stone",
+    };
+
+    let cache = TemplateCache::new(100);
+    let ctx = RenderContext::new("viewer")
+        .with_entity("a1", &arthur1)
+        .with_entity("a2", &arthur2)
+        .with_entity("e1", &excalibur1)
+        .with_entity("e2", &excalibur2)
+        .with_last_mentioned("a2")
+        .with_last_mentioned("e2");
+
+    // 1. Both owner and target use long descriptions with injected adjectives
+    let t1 = cache.get_or_compile("{A1's glowing e1:obj}.").unwrap();
+    assert_eq!(
+        PerspectiveEngine::render(&t1, &ctx).unwrap(),
+        "Arthur the Elder's glowing Excalibur of the Lake."
+    );
+
+    // 2. Drop possessive override (@) correctly drops the long owner and the adjectives
+    let t2 = cache.get_or_compile("{A1's glowing @e1:obj}.").unwrap();
+    assert_eq!(
+        PerspectiveEngine::render(&t2, &ctx).unwrap(),
+        "Excalibur of the Lake."
+    );
+}
+
+#[test]
+fn test_unified_possessives_with_dot_notation_and_overrides() {
+    struct Item {
+        name: &'static str,
+        is_proper: bool,
+    }
+    impl TemplateEntity for Item {
+        fn contains_viewer(&self, _: &str) -> bool {
+            false
+        }
+        fn gender(&self) -> Gender {
+            Gender::Neutral
+        }
+        fn is_plural(&self) -> bool {
+            false
+        }
+        fn is_proper_noun_for(&self, _: &str) -> bool {
+            self.is_proper
+        }
+        fn display_name_for<'a>(&'a self, _: &str) -> Cow<'a, str> {
+            Cow::Borrowed(self.name)
+        }
+    }
+
+    struct Actor {
+        name: &'static str,
+        item: Item,
+    }
+    impl TemplateEntity for Actor {
+        fn contains_viewer(&self, _: &str) -> bool {
+            false
+        }
+        fn gender(&self) -> Gender {
+            Gender::Male
+        }
+        fn is_plural(&self) -> bool {
+            false
+        }
+        fn is_proper_noun_for(&self, _: &str) -> bool {
+            true
+        }
+        fn display_name_for<'a>(&'a self, _: &str) -> Cow<'a, str> {
+            Cow::Borrowed(self.name)
+        }
+        fn get_property(&self, prop: &str) -> Option<&dyn TemplateEntity> {
+            if prop == "item" {
+                Some(&self.item)
+            } else {
+                None
+            }
+        }
+    }
+
+    let arthur = Actor {
+        name: "Arthur",
+        item: Item {
+            name: "Excalibur",
+            is_proper: true,
+        },
+    };
+    let aldran = Actor {
+        name: "Aldran",
+        item: Item {
+            name: "sword",
+            is_proper: false,
+        },
+    };
+
+    let cache = TemplateCache::new(100);
+    let ctx = RenderContext::new("viewer")
+        .with_entity("arthur", &arthur)
+        .with_entity("aldran", &aldran);
+
+    // 1. Target is a proper noun via dot notation -> Drops owner
+    let t1 = cache
+        .get_or_compile("{*A:arthur's @arthur.item:obj}.")
+        .unwrap();
+    assert_eq!(PerspectiveEngine::render(&t1, &ctx).unwrap(), "Excalibur.");
+
+    // 2. Target is a common noun via dot notation -> Keeps owner
+    let t2 = cache
+        .get_or_compile("{*A:aldran's @aldran.item:obj}.")
+        .unwrap();
+    assert_eq!(
+        PerspectiveEngine::render(&t2, &ctx).unwrap(),
+        "Aldran's sword."
+    );
+
+    // 3. Owner is via dot notation, Target is proper -> Drops owner
+    let t3 = cache
+        .get_or_compile("{*A:aldran.item's @arthur.item:obj}.")
+        .unwrap();
+    assert_eq!(PerspectiveEngine::render(&t3, &ctx).unwrap(), "Excalibur.");
+
+    // 4. Owner is via dot notation, Target is common -> Keeps owner
+    let t4 = cache
+        .get_or_compile("{*A:arthur.item's @aldran.item:obj}.")
+        .unwrap();
+    assert_eq!(
+        PerspectiveEngine::render(&t4, &ctx).unwrap(),
+        "Excalibur's sword."
+    );
+}
+
+#[test]
+fn test_double_possessive_chains_unified() {
+    let player = MockEntity {
+        id: "char_1".into(),
+        name: "Aldran".into(),
+        gender: Gender::Male,
+        is_plural: false,
+        is_proper_noun: true,
+    };
+    let hilt = MockEntity {
+        id: "item_1".into(),
+        name: "hilt".into(),
+        gender: Gender::Neutral,
+        is_plural: false,
+        is_proper_noun: false,
+    };
+
+    let cache = TemplateCache::new(100);
+    let ctx = RenderContext::new("char_2")
+        .with_entity("source", &player)
+        .with_entity("target", &hilt);
+
+    // 1. Literal chained possessives!
+    // The parser intelligently isolates `source` as the dynamic owner, and safely absorbs `sword's` into the adjectives string.
+    let t1 = cache
+        .get_or_compile("{*A:source's sword's target:obj}.")
+        .unwrap();
+    assert_eq!(
+        PerspectiveEngine::render(&t1, &ctx).unwrap(),
+        "Aldran's sword's hilt."
+    );
+
+    // 2. Drop the entire chain!
+    // If the target is the active viewer, the engine gracefully drops the owner AND all possessive adjectives!
+    let ctx_viewer = RenderContext::new("item_1")
+        .with_entity("source", &player)
+        .with_entity("target", &hilt);
+    assert_eq!(PerspectiveEngine::render(&t1, &ctx_viewer).unwrap(), "You.");
+
+    // 3. Anaphora Pronoun Drop
+    // If the target resolves to a pronoun, the entire double-possessive chain drops.
+    let ctx_anaphora = ctx.with_last_mentioned("target");
+    let t2 = cache
+        .get_or_compile("{*A:source:subj} grabs {source's sword's target:obj}.")
+        .unwrap();
+    assert_eq!(
+        PerspectiveEngine::render(&t2, &ctx_anaphora).unwrap(),
+        "Aldran grabs it."
+    );
+}
+
+#[test]
+fn test_unified_possessives_isolated_ordinals() {
+    let goblin = MockEntity {
+        id: "g1".into(),
+        name: "goblin".into(),
+        gender: Gender::Neutral,
+        is_plural: false,
+        is_proper_noun: false,
+    };
+    let player = MockEntity {
+        id: "char_1".into(),
+        name: "Aldran".into(),
+        gender: Gender::Male,
+        is_plural: false,
+        is_proper_noun: true,
+    };
+    let s1 = MockEntity {
+        id: "s1".into(),
+        name: "sword".into(),
+        gender: Gender::Neutral,
+        is_plural: false,
+        is_proper_noun: false,
+    };
+    let s2 = MockEntity {
+        id: "s2".into(),
+        name: "sword".into(),
+        gender: Gender::Neutral,
+        is_plural: false,
+        is_proper_noun: false,
+    };
+    let s3 = MockEntity {
+        id: "s3".into(),
+        name: "sword".into(),
+        gender: Gender::Neutral,
+        is_plural: false,
+        is_proper_noun: false,
+    };
+
+    let cache = TemplateCache::new(100);
+    let ctx = RenderContext::new("char_1")
+        .with_entity("g", &goblin)
+        .with_entity("p", &player)
+        .with_entity("s1", &s1)
+        .with_entity("s2", &s2)
+        .with_entity("s3", &s3)
+        .with_lookahead(true);
+
+    // 1. Separate owners -> Namespaced successfully, neither prints an ordinal string!
+    let t1 = cache
+        .get_or_compile("{*A:g:subj} [g:grab] {g's s1:obj} and you grab {p's s2:obj}.")
+        .unwrap();
+    assert_eq!(
+        PerspectiveEngine::render(&t1, &ctx).unwrap(),
+        "A goblin grabs its sword and you grab your sword."
+    );
+
+    ctx.clear_anaphora();
+
+    // 2. Same owner -> Both share the `g::sword` namespace bucket. Triggers ordinals!
+    let t2 = cache
+        .get_or_compile("{*A:g:subj} [g:grab] {g's s1:obj} and {g's s3:obj}.")
+        .unwrap();
+    assert_eq!(
+        PerspectiveEngine::render(&t2, &ctx).unwrap(),
+        "A goblin grabs its sword and its second sword."
+    );
+}
+
+#[test]
+fn test_unified_possessives_with_target_ordinals() {
+    let s1 = MockEntity {
+        id: "s1".into(),
+        name: "sword".into(),
+        gender: Gender::Neutral,
+        is_plural: false,
+        is_proper_noun: false,
+    };
+    let s2 = MockEntity {
+        id: "s2".into(),
+        name: "sword".into(),
+        gender: Gender::Neutral,
+        is_plural: false,
+        is_proper_noun: false,
+    };
+    let player = MockEntity {
+        id: "char_1".into(),
+        name: "Aldran".into(),
+        gender: Gender::Male,
+        is_plural: false,
+        is_proper_noun: true,
+    };
+
+    let cache = TemplateCache::new(100);
+    let ctx = RenderContext::new("char_2")
+        .with_entity("source", &player)
+        .with_entity("s1", &s1)
+        .with_entity("s2", &s2)
+        .with_lookahead(true); // Enable lookahead so ordinals are seeded immediately
+
+    // Both swords collide on the name "sword", triggering ordinals 1 and 2.
+    let t1 = cache
+        .get_or_compile("{*A:source:subj} grabs {source's s1:obj} and {source's s2:obj}.")
+        .unwrap();
+
+    assert_eq!(
+        PerspectiveEngine::render(&t1, &ctx).unwrap(),
+        "Aldran grabs his sword and his second sword."
+    );
+}
+#[test]
+fn test_unified_possessives_with_independent_modifiers() {
+    let player = MockEntity {
+        id: "char_1".into(),
+        name: "Aldran".into(),
+        gender: Gender::Male,
+        is_plural: false,
+        is_proper_noun: true,
+    };
+    let sword = MockEntity {
+        id: "item_1".into(),
+        name: "sword".into(),
+        gender: Gender::Neutral,
+        is_plural: false,
+        is_proper_noun: false,
+    };
+
+    let cache = TemplateCache::new(100);
+    let ctx = RenderContext::new("char_1") // Player is viewer!
+        .with_entity("source", &player)
+        .with_entity("target", &sword)
+        .with_last_mentioned("target"); // Target is in memory, naturally resolves to "it"
+
+    // 1. Normal unified possessive (Owner is viewer -> "your", target in memory -> drops owner -> "it")
+    let t1 = cache.get_or_compile("{A:source's target:obj}.").unwrap();
+    assert_eq!(PerspectiveEngine::render(&t1, &ctx).unwrap(), "It.");
+
+    // 2. Modifiers: `+` on owner (forces "Aldran's"), `*` on target (forces noun "sword", keeps owner!)
+    let t2 = cache.get_or_compile("{*A:+source's *target:obj}.").unwrap();
+    assert_eq!(
+        PerspectiveEngine::render(&t2, &ctx).unwrap(),
+        "Aldran's sword."
+    );
+}
+
+#[test]
+fn test_unified_possessives_with_ordinals() {
+    let goblin1 = MockEntity {
+        id: "mob_1".into(),
+        name: "goblin".into(),
+        gender: Gender::Neutral,
+        is_plural: false,
+        is_proper_noun: false,
+    };
+    let goblin2 = MockEntity {
+        id: "mob_2".into(),
+        name: "goblin".into(),
+        gender: Gender::Neutral,
+        is_plural: false,
+        is_proper_noun: false,
+    };
+    let sword = MockEntity {
+        id: "item_1".into(),
+        name: "sword".into(),
+        gender: Gender::Neutral,
+        is_plural: false,
+        is_proper_noun: false,
+    };
+
+    let cache = TemplateCache::new(100);
+    let ctx = RenderContext::new("viewer")
+        .with_entity("g1", &goblin1)
+        .with_entity("g2", &goblin2)
+        .with_entity("sword", &sword);
+
+    // Seed ordinals so g1 becomes "the first goblin"
+    let _ = PerspectiveEngine::render(
+        &cache
+            .get_or_compile("{*A:g1:subj} and {*a:g2:subj} arrive.")
+            .unwrap(),
+        &ctx,
+    )
+    .unwrap();
+
+    // The `{A:...}` article naturally bounds to the owner `g1`, pulling its ordinal state
+    // to output "The first goblin's", while natively suppressing the article for "sword".
+    let t1 = cache.get_or_compile("{*A:g1's sword:obj}.").unwrap();
+    assert_eq!(
+        PerspectiveEngine::render(&t1, &ctx).unwrap(),
+        "The first goblin's sword."
+    );
+}
+
+#[test]
+fn test_unified_possessives_multiple_adjectives() {
+    let player = MockEntity {
+        id: "char_1".into(),
+        name: "Aldran".into(),
+        gender: Gender::Male,
+        is_plural: false,
+        is_proper_noun: true,
+    };
+    let sword = MockEntity {
+        id: "item_1".into(),
+        name: "sword".into(),
+        gender: Gender::Neutral,
+        is_plural: false,
+        is_proper_noun: false,
+    };
+
+    let cache = TemplateCache::new(100);
+    let ctx = RenderContext::new("viewer")
+        .with_entity("source", &player)
+        .with_entity("target", &sword);
+
+    // Multiple adjectives should be cleanly parsed and preserved
+    let t1 = cache
+        .get_or_compile("{A:source's big red glowing target:obj}.")
+        .unwrap();
+    assert_eq!(
+        PerspectiveEngine::render(&t1, &ctx).unwrap(),
+        "Aldran's big red glowing sword."
+    );
+
+    // If the target drops the owner (e.g., pronoun fallback), it must drop ALL adjectives
+    let ctx2 = ctx.with_last_mentioned("target");
+    assert_eq!(PerspectiveEngine::render(&t1, &ctx2).unwrap(), "It.");
+}
+
+#[test]
+fn test_demarcated_adjectives_unified() {
+    let player = MockEntity {
+        id: "char_1".into(),
+        name: "Aldran".into(),
+        gender: Gender::Male,
+        is_plural: false,
+        is_proper_noun: true,
+    };
+    let sword = MockEntity {
+        id: "item_1".into(),
+        name: "sword".into(),
+        gender: Gender::Neutral,
+        is_plural: false,
+        is_proper_noun: false,
+    };
+
+    let cache = TemplateCache::new(100);
+    let ctx = RenderContext::new("viewer")
+        .with_entity("source", &player)
+        .with_entity("iron sword", &sword);
+
+    // By using the explicit `:` separator, the engine unambiguously bounds the target key
+    // to exactly "iron sword" and safely isolates "big red" as the adjectives!
+    let t1 = cache
+        .get_or_compile("{*A:source's big red:iron sword:obj}.")
+        .unwrap();
+    assert_eq!(
+        PerspectiveEngine::render(&t1, &ctx).unwrap(),
+        "Aldran's big red sword."
     );
 }
 

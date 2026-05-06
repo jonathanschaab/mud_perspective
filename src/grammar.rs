@@ -714,7 +714,9 @@ fn try_resolve_ordinal_article(
         };
         applies = ord > 2;
     } else if article.eq_ignore_ascii_case("another") {
-        applies = flags.contains(ArticleFlags::IS_PLURAL) || ord > 2;
+        applies = flags.contains(ArticleFlags::IS_PLURAL)
+            || ord > 2
+            || flags.contains(ArticleFlags::AFTER_POSSESSIVE);
     } else if article.eq_ignore_ascii_case("the") {
         base = "the";
     } else if article.eq_ignore_ascii_case("this") {

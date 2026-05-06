@@ -1,5 +1,5 @@
 use crate::grammar::{conjugate_verb, resolve_article, resolve_pronoun};
-use crate::models::{NULL_VIEWER, RenderContext, TemplateEntity};
+use crate::models::{NULL_VIEWER, RenderContext, TemplateEntity, is_same_entity};
 use crate::parser::{MOD_POSSESSIVE, TAG_PROPERTY_SEP};
 pub use crate::parser::{TagFlags, Template, Token};
 use crate::typography::{
@@ -14,6 +14,9 @@ struct EntityRefParams<'a> {
     key: &'a str,
     article: Option<&'a str>,
     p_type: Option<&'a str>,
+    owner_key: Option<&'a str>,
+    owner_flags: TagFlags,
+    adjectives: Option<&'a str>,
     flags: TagFlags,
     ordinal: Option<usize>,
 }
@@ -115,6 +118,9 @@ impl PerspectiveEngine {
                     key,
                     article,
                     p_type,
+                    owner_key,
+                    owner_flags,
+                    adjectives,
                     flags,
                 } => {
                     all_caps = flags.contains(TagFlags::ALL_CAPS);
@@ -125,6 +131,9 @@ impl PerspectiveEngine {
                             key,
                             article: article.as_deref(),
                             p_type: p_type.as_deref(),
+                            owner_key: owner_key.as_deref(),
+                            owner_flags: *owner_flags,
+                            adjectives: adjectives.as_deref(),
                             flags: *flags,
                             ordinal: None,
                         },
@@ -249,16 +258,15 @@ impl PerspectiveEngine {
     fn resolve_display_name<'a>(
         ctx: &'a RenderContext,
         entity: &'a dyn TemplateEntity,
-        key: &str,
+        params: &EntityRefParams<'_>,
         effective_viewer: &str,
-        no_smart: bool,
         future_keys: &[&str],
         pre_resolved: &HashMap<&str, &'a dyn TemplateEntity>,
     ) -> (std::borrow::Cow<'a, str>, Option<usize>) {
         let mut name = entity.display_name_for(effective_viewer);
         let mut name_collision = false;
 
-        if !no_smart {
+        if !params.flags.no_smart() {
             let mut short_collisions = 0;
             let mut unresolved_short_collisions = 0;
             let recent_borrow = ctx.recent_entities.borrow();
@@ -268,7 +276,9 @@ impl PerspectiveEngine {
             // catch entities that were just introduced in this template, maintaining strict
             // left-to-right chronological accuracy.
             let mut check_collision = |other_key: &str, other_entity: &'a dyn TemplateEntity| {
-                if other_key != key && other_entity.display_name_for(effective_viewer) == name {
+                if other_key != params.key
+                    && other_entity.display_name_for(effective_viewer) == name
+                {
                     short_collisions += 1;
 
                     // Determine if this other entity will vacate the short name by using its own long name
@@ -313,7 +323,7 @@ impl PerspectiveEngine {
 
                 // Verify how many times the long name collides
                 let mut check_long = |other_key: &str, other_entity: &'a dyn TemplateEntity| {
-                    if other_key != key {
+                    if other_key != params.key {
                         let other_short = other_entity.display_name_for(effective_viewer);
                         // Only consider the other entity's long name if its short name is in the
                         // exact same collision group as our entity's short name (preventing phantoms).
@@ -352,8 +362,18 @@ impl PerspectiveEngine {
 
         let mut ordinal = None;
 
-        if !no_smart {
-            ordinal = Self::assign_ordinal(ctx, name.as_ref(), key, name_collision);
+        if !params.flags.no_smart() {
+            let namespace = params
+                .owner_key
+                .or_else(|| params.key.rsplit_once(TAG_PROPERTY_SEP).map(|(p, _)| p));
+            let ordinal_group_name = if let Some(ns) = namespace {
+                std::borrow::Cow::Owned(format!("{ns}::{name}"))
+            } else {
+                std::borrow::Cow::Borrowed(name.as_ref())
+            };
+
+            ordinal =
+                Self::assign_ordinal(ctx, ordinal_group_name.as_ref(), params.key, name_collision);
         }
 
         (name, ordinal)
@@ -410,6 +430,205 @@ impl PerspectiveEngine {
 
         let effective_viewer = effective_viewer_id(ctx, params.flags.force_3rd_person());
 
+        if let Some(owner_key) = params.owner_key {
+            return Self::render_narrative_possessive(
+                ctx,
+                raw_output,
+                params,
+                entity,
+                effective_viewer,
+                owner_key,
+                future_keys,
+                pre_resolved,
+            );
+        }
+
+        Self::render_target_entity(
+            ctx,
+            raw_output,
+            params,
+            entity,
+            effective_viewer,
+            false,
+            future_keys,
+            pre_resolved,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_narrative_possessive<'a>(
+        ctx: &'a RenderContext,
+        raw_output: &mut String,
+        params: &EntityRefParams<'_>,
+        entity: &'a dyn TemplateEntity,
+        effective_viewer: &str,
+        owner_key: &str,
+        future_keys: &[&str],
+        pre_resolved: &HashMap<&str, &'a dyn TemplateEntity>,
+    ) -> Result<(), String> {
+        let mut target_params = EntityRefParams {
+            article: None,
+            owner_flags: TagFlags::empty(),
+            flags: params.flags,
+            ..*params
+        };
+        target_params.flags.remove(TagFlags::ARTICLE_CAPITALIZED);
+        target_params.flags.remove(TagFlags::ARTICLE_INDEFINITE);
+        target_params.flags.remove(TagFlags::FORCE_ARTICLE);
+
+        // Evaluate the target FIRST. If the target naturally evaluates to a pronoun (like "you"
+        // or "it" from anaphora memory), we gracefully drop the owner and adjectives entirely.
+        let (mut target_active_flags, actual_target_p_type, target_article) =
+            match Self::try_render_pronoun(
+                ctx,
+                raw_output,
+                &target_params,
+                entity,
+                effective_viewer,
+                pre_resolved,
+            )? {
+                PronounResult::Rendered => return Ok(()),
+                PronounResult::Fallback {
+                    active_flags,
+                    actual_p_type,
+                    article_to_use,
+                } => (active_flags, actual_p_type, article_to_use),
+            };
+
+        // If it's a proper noun and the @ override is present, drop the possessive owner!
+        if entity.is_proper_noun_for(effective_viewer) && params.flags.drop_possessive() {
+            let mut dropped_owner_flags = target_active_flags;
+            if params.flags.article_capitalized() {
+                dropped_owner_flags.insert(TagFlags::ARTICLE_CAPITALIZED);
+            }
+            if params.flags.article_indefinite() {
+                dropped_owner_flags.insert(TagFlags::ARTICLE_INDEFINITE);
+            }
+            if params.flags.force_article() {
+                dropped_owner_flags.insert(TagFlags::FORCE_ARTICLE);
+            }
+
+            Self::render_resolved_entity(
+                ctx,
+                raw_output,
+                params,
+                entity,
+                effective_viewer,
+                params.article,
+                actual_target_p_type,
+                dropped_owner_flags,
+                false,
+                future_keys,
+                pre_resolved,
+            );
+            return Ok(());
+        }
+
+        Self::render_narrative_owner(
+            ctx,
+            raw_output,
+            params,
+            owner_key,
+            future_keys,
+            pre_resolved,
+        )?;
+
+        // The target article is unconditionally suppressed because it follows the possessive owner
+        target_active_flags.remove(TagFlags::FORCE_ARTICLE);
+
+        Self::render_resolved_entity(
+            ctx,
+            raw_output,
+            &target_params,
+            entity,
+            effective_viewer,
+            target_article, // Pass the fallback article so target ordinals can generate
+            actual_target_p_type,
+            target_active_flags,
+            true, // after_possessive = true
+            future_keys,
+            pre_resolved,
+        );
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_narrative_owner<'a>(
+        ctx: &'a RenderContext,
+        raw_output: &mut String,
+        params: &EntityRefParams<'_>,
+        owner_key: &str,
+        future_keys: &[&str],
+        pre_resolved: &HashMap<&str, &'a dyn TemplateEntity>,
+    ) -> Result<(), String> {
+        let owner_entity = pre_resolved
+            .get(owner_key)
+            .copied()
+            .map_or_else(|| Self::get_entity(ctx, owner_key), Ok)?;
+
+        let owner_viewer = effective_viewer_id(ctx, params.owner_flags.force_3rd_person());
+
+        let mut o_flags = params.owner_flags;
+        o_flags.set(
+            TagFlags::ALL_CAPS,
+            params.flags.contains(TagFlags::ALL_CAPS),
+        );
+        if params.flags.article_capitalized() {
+            o_flags.set(TagFlags::PRONOUN_CAPITALIZED, true);
+        }
+        if params.flags.force_article() {
+            o_flags.set(TagFlags::FORCE_ARTICLE, true);
+        }
+        if params.flags.article_indefinite() {
+            o_flags.set(TagFlags::ARTICLE_INDEFINITE, true);
+        }
+
+        let owner_params = EntityRefParams {
+            key: owner_key,
+            article: params.article, // Pass the root article directly to the owner!
+            p_type: Some("poss"),
+            owner_key: None,
+            owner_flags: TagFlags::empty(),
+            adjectives: None,
+            flags: o_flags,
+            ordinal: None,
+        };
+
+        Self::render_target_entity(
+            ctx,
+            raw_output,
+            &owner_params,
+            owner_entity,
+            owner_viewer,
+            false,
+            future_keys,
+            pre_resolved,
+        )?;
+
+        raw_output.push(' ');
+
+        if let Some(adj) = params.adjectives {
+            if params.flags.contains(TagFlags::ALL_CAPS) {
+                apply_all_caps(adj, raw_output);
+            } else {
+                raw_output.push_str(adj);
+            }
+        }
+
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_target_entity<'a>(
+        ctx: &'a RenderContext,
+        raw_output: &mut String,
+        params: &EntityRefParams<'_>,
+        entity: &'a dyn TemplateEntity,
+        effective_viewer: &str,
+        after_possessive: bool,
+        future_keys: &[&str],
+        pre_resolved: &HashMap<&str, &'a dyn TemplateEntity>,
+    ) -> Result<(), String> {
         let (article_to_use, active_flags, actual_p_type) = match Self::try_render_pronoun(
             ctx,
             raw_output,
@@ -435,6 +654,7 @@ impl PerspectiveEngine {
             article_to_use,
             actual_p_type,
             active_flags,
+            after_possessive,
             future_keys,
             pre_resolved,
         );
@@ -534,7 +754,7 @@ impl PerspectiveEngine {
         if can_use_pronoun {
             if !already_seen {
                 update_memory(&ctx.last_mentioned, params.key);
-                track_recent_entity(ctx, params.key, entity);
+                track_recent_entity(ctx, params.key, entity, params.adjectives);
             }
             let pronoun = resolve_pronoun(
                 effective_gender,
@@ -623,51 +843,6 @@ impl PerspectiveEngine {
     }
 
     #[inline]
-    fn is_after_possessive(output: &str) -> bool {
-        #[cfg(not(any(feature = "mxp", feature = "msp", feature = "ansi")))]
-        {
-            Self::check_possessive_str(output)
-        }
-
-        #[cfg(any(feature = "mxp", feature = "msp", feature = "ansi"))]
-        {
-            if !has_protocol_tags(output) {
-                return Self::check_possessive_str(output);
-            }
-
-            let mut stripped = String::with_capacity(output.len());
-            let mut chars = output.char_indices().peekable();
-
-            while let Some(&(i, c)) = chars.peek() {
-                let remainder = output.get(i..).unwrap_or_default();
-                if skip_protocol_tags(&mut chars, remainder, i).is_some() {
-                    continue;
-                }
-                stripped.push(c);
-                chars.next();
-            }
-
-            Self::check_possessive_str(&stripped)
-        }
-    }
-
-    #[inline]
-    fn check_possessive_str(s: &str) -> bool {
-        let trimmed = s.trim_end();
-        if trimmed.ends_with("'s") || trimmed.ends_with('\'') || trimmed.ends_with('’') {
-            return true;
-        }
-        let last_word = trimmed
-            .rsplit(|c: char| !c.is_alphabetic())
-            .next()
-            .unwrap_or("");
-        matches!(
-            last_word.to_ascii_lowercase().as_str(),
-            "my" | "your" | "his" | "her" | "its" | "our" | "their" | "whose"
-        )
-    }
-
-    #[inline]
     #[allow(clippy::too_many_arguments)]
     fn render_resolved_entity<'a>(
         ctx: &'a RenderContext,
@@ -678,15 +853,15 @@ impl PerspectiveEngine {
         mut article_to_use: Option<&'a str>,
         actual_p_type: Option<&'a str>,
         active_flags: TagFlags,
+        after_possessive: bool,
         future_keys: &[&str],
         pre_resolved: &HashMap<&str, &'a dyn TemplateEntity>,
     ) {
         let (name, ordinal) = Self::resolve_display_name(
             ctx,
             entity,
-            params.key,
+            params,
             effective_viewer,
-            params.flags.no_smart(),
             future_keys,
             pre_resolved,
         );
@@ -717,14 +892,15 @@ impl PerspectiveEngine {
         }
 
         update_memory(&ctx.last_mentioned, params.key);
-        track_recent_entity(ctx, params.key, entity);
-
-        let after_possessive = Self::is_after_possessive(raw_output);
+        track_recent_entity(ctx, params.key, entity, params.adjectives);
 
         let active_params = EntityRefParams {
             key: params.key,
             article: article_to_use,
             p_type: actual_p_type,
+            owner_key: None,
+            owner_flags: TagFlags::empty(),
+            adjectives: None,
             flags: active_flags,
             ordinal,
         };
@@ -820,13 +996,12 @@ impl PerspectiveEngine {
             article_printed = true;
         }
 
-        let should_cap_noun = if article_printed {
-            active_params.flags.is_capitalized()
-        } else if after_possessive && !active_params.flags.force_article() {
-            false
-        } else {
-            cap_whole
-        };
+        let should_cap_noun =
+            if article_printed || (after_possessive && !active_params.flags.force_article()) {
+                active_params.flags.is_capitalized()
+            } else {
+                cap_whole
+            };
 
         let name_cow = capitalize_cow(name, should_cap_noun);
         let name_str = name_cow.as_ref();
@@ -909,7 +1084,7 @@ impl PerspectiveEngine {
             };
 
             let member_is_active_subj =
-                active_subject_entity.is_some_and(|active| std::ptr::addr_eq(active, member));
+                active_subject_entity.is_some_and(|active| is_same_entity(active, member));
 
             let mut flags = GroupMemberFlags::empty();
             flags.set(GroupMemberFlags::AFTER_POSSESSIVE, after_possessive);
@@ -1219,7 +1394,7 @@ impl PerspectiveEngine {
             if is_sub_property_path(active_key, key) || is_sub_property_path(key, active_key) {
                 return false;
             }
-            return std::ptr::addr_eq(entity, active_entity);
+            return is_same_entity(entity, active_entity);
         }
         false
     }
@@ -1288,7 +1463,7 @@ impl PerspectiveEngine {
             let effective_viewer = effective_viewer_id(ctx, flags.force_3rd_person());
             update_memory(&ctx.active_subject, key);
             update_memory(&ctx.last_mentioned, key);
-            track_recent_entity(ctx, key, entity);
+            track_recent_entity(ctx, key, entity, None);
             (
                 entity.contains_viewer(effective_viewer),
                 entity.is_plural(),
@@ -1375,12 +1550,33 @@ fn push_capitalized_if(output: &mut String, text: &str, should_capitalize: bool)
 }
 
 #[inline]
-fn track_recent_entity(ctx: &RenderContext<'_>, key: &str, entity: &dyn TemplateEntity) {
+fn track_recent_entity(
+    ctx: &RenderContext<'_>,
+    key: &str,
+    entity: &dyn TemplateEntity,
+    adjectives: Option<&str>,
+) {
     let mut recents = ctx.recent_entities.borrow_mut();
+
+    let mut new_adjs = Vec::new();
+    if let Some(adj_str) = adjectives {
+        let stripped = crate::typography::strip_all_protocol_tags(adj_str);
+        for word in stripped.split_whitespace() {
+            let clean = word.trim().to_lowercase();
+            if !clean.is_empty() {
+                new_adjs.push(clean);
+            }
+        }
+    }
 
     // Move to the back to represent the most recently used (LRU)
     if let Some(pos) = recents.iter().position(|r| r.key == key) {
-        let item = recents.remove(pos);
+        let mut item = recents.remove(pos);
+        for adj in new_adjs {
+            if !item.adjectives.contains(&adj) {
+                item.adjectives.push(adj);
+            }
+        }
         recents.push(item);
     } else {
         let mut flags = crate::models::RecentEntityFlags::empty();
@@ -1401,6 +1597,7 @@ fn track_recent_entity(ctx: &RenderContext<'_>, key: &str, entity: &dyn Template
             key: key.to_string(),
             gender: entity.gender(),
             flags,
+            adjectives: new_adjs,
         });
     }
 
