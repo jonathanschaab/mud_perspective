@@ -325,17 +325,9 @@ impl Template {
         let mut working_key = raw_key;
 
         if let Some(owner_part) = raw_owner {
-            let owner_idx_3 = owner_part
-                .find("'s ")
-                .or_else(|| owner_part.find("'S "))
-                .or_else(|| owner_part.find("’s "))
-                .or_else(|| owner_part.find("’S "));
-            let owner_idx_2 = owner_part.find("' ").or_else(|| owner_part.find("’ "));
-
-            let (owner_str, adj_str) = if let Some(idx) = owner_idx_3 {
-                (&owner_part[..idx], &owner_part[idx + 3..])
-            } else if let Some(idx) = owner_idx_2 {
-                (&owner_part[..idx], &owner_part[idx + 2..])
+            let (owner_str, adj_str) = if let Some((idx, len)) = find_spaced_possessive(owner_part)
+            {
+                (&owner_part[..idx], &owner_part[idx + len..])
             } else if let Some(stripped) = owner_part
                 .strip_suffix(MOD_POSSESSIVE)
                 .or_else(|| owner_part.strip_suffix("'S"))
@@ -362,44 +354,20 @@ impl Template {
             if !adj.is_empty() {
                 adjectives = Some(format!("{adj} "));
             }
-        } else {
-            let owner_idx_3 = working_key
-                .find("'s ")
-                .or_else(|| working_key.find("'S "))
-                .or_else(|| working_key.find("’s "))
-                .or_else(|| working_key.find("’S "));
-            let owner_idx_2 = working_key.find("' ").or_else(|| working_key.find("’ "));
+        } else if let Some((idx, len)) = find_spaced_possessive(working_key) {
+            let owner_part = &working_key[..idx];
+            let (clean_owner, mut o_flags) = parse_stance_prefixes(owner_part);
+            let clean_owner = clean_owner.trim();
+            o_flags.set(TagFlags::IS_CAPITALIZED, is_capitalized(clean_owner));
+            owner_key = Some(clean_owner.to_lowercase());
+            owner_flags = o_flags;
 
-            if let Some(idx) = owner_idx_3 {
-                let owner_part = &working_key[..idx];
-                let (clean_owner, mut o_flags) = parse_stance_prefixes(owner_part);
-                let clean_owner = clean_owner.trim();
-                o_flags.set(TagFlags::IS_CAPITALIZED, is_capitalized(clean_owner));
-                owner_key = Some(clean_owner.to_lowercase());
-                owner_flags = o_flags;
-
-                let remainder = &working_key[idx + 3..];
-                if let Some(space_idx) = remainder.rfind(' ') {
-                    adjectives = Some(remainder[..=space_idx].to_string());
-                    working_key = &remainder[space_idx + 1..];
-                } else {
-                    working_key = remainder;
-                }
-            } else if let Some(idx) = owner_idx_2 {
-                let owner_part = &working_key[..idx];
-                let (clean_owner, mut o_flags) = parse_stance_prefixes(owner_part);
-                let clean_owner = clean_owner.trim();
-                o_flags.set(TagFlags::IS_CAPITALIZED, is_capitalized(clean_owner));
-                owner_key = Some(clean_owner.to_lowercase());
-                owner_flags = o_flags;
-
-                let remainder = &working_key[idx + 2..];
-                if let Some(space_idx) = remainder.rfind(' ') {
-                    adjectives = Some(remainder[..=space_idx].to_string());
-                    working_key = &remainder[space_idx + 1..];
-                } else {
-                    working_key = remainder;
-                }
+            let remainder = &working_key[idx + len..];
+            if let Some(space_idx) = remainder.rfind(' ') {
+                adjectives = Some(remainder[..=space_idx].to_string());
+                working_key = &remainder[space_idx + 1..];
+            } else {
+                working_key = remainder;
             }
         }
 
@@ -795,18 +763,7 @@ pub(crate) fn is_p_type(s: &str) -> bool {
 pub(crate) fn is_owner_part(s: &str) -> bool {
     let (clean, _) = parse_stance_prefixes(s);
     let clean = clean.trim();
-    clean.contains("'s ")
-        || clean.contains("'S ")
-        || clean.contains("’s ")
-        || clean.contains("’S ")
-        || clean.contains("' ")
-        || clean.contains("’ ")
-        || clean.ends_with("'s")
-        || clean.ends_with("'S")
-        || clean.ends_with("’s")
-        || clean.ends_with("’S")
-        || clean.ends_with('\'')
-        || clean.ends_with('’')
+    parse_possessive_suffix(clean).1 || find_spaced_possessive(clean).is_some()
 }
 
 #[inline]
@@ -1052,5 +1009,23 @@ pub(crate) fn parse_possessive_suffix(s: &str) -> (&str, bool) {
         (stripped, true)
     } else {
         (s, false)
+    }
+}
+
+/// Finds a possessive suffix with a trailing space, returning the index and the byte length of the match.
+#[inline]
+pub(crate) fn find_spaced_possessive(s: &str) -> Option<(usize, usize)> {
+    if let Some(idx) = s.find("'s ") {
+        Some((idx, 3))
+    } else if let Some(idx) = s.find("'S ") {
+        Some((idx, 3))
+    } else if let Some(idx) = s.find("’s ") {
+        Some((idx, 5))
+    } else if let Some(idx) = s.find("’S ") {
+        Some((idx, 5))
+    } else if let Some(idx) = s.find("' ") {
+        Some((idx, 2))
+    } else {
+        s.find("’ ").map(|idx| (idx, 4))
     }
 }

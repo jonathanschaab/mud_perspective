@@ -239,12 +239,7 @@ fn main() {
 
     for (key, subset) in common_defaults {
         if !cli_bindings.contains_key(key) {
-            let is_valid = if let Some(payload) = custom_payload.as_ref() {
-                payload.subsets.contains_key(subset)
-                    || payload.entities.iter().any(|e| e.subset == subset)
-            } else {
-                true
-            };
+            let is_valid = custom_payload.as_ref().is_none_or(|p| p.has_subset(subset));
             if is_valid {
                 cli_bindings.insert(key.to_string(), subset.to_string());
             }
@@ -272,6 +267,7 @@ fn main() {
         let stdin = io::stdin();
         let mut stdout = io::stdout();
         let mut persistent_bindings = cli_bindings.clone();
+        let mut cached_subsets: Option<Vec<String>> = None;
 
         loop {
             print!("> ");
@@ -313,12 +309,7 @@ fn main() {
                 let rest = rest.trim();
                 if let Some((k, v)) = rest.split_once('=') {
                     let subset = v.trim();
-                    let is_valid = if let Some(payload) = custom_payload.as_ref() {
-                        payload.subsets.contains_key(subset)
-                            || payload.entities.iter().any(|e| e.subset == subset)
-                    } else {
-                        true
-                    };
+                    let is_valid = custom_payload.as_ref().is_none_or(|p| p.has_subset(subset));
 
                     if is_valid {
                         persistent_bindings.insert(k.trim().to_string(), subset.to_string());
@@ -346,20 +337,24 @@ fn main() {
 
             if input.eq_ignore_ascii_case("sets") {
                 if let Some(payload) = custom_payload.as_ref() {
-                    let mut all_subsets = std::collections::HashSet::new();
-                    for key in payload.subsets.keys() {
-                        all_subsets.insert(key.clone());
-                    }
-                    for entity in &payload.entities {
-                        all_subsets.insert(entity.subset.clone());
-                    }
-                    if all_subsets.is_empty() {
+                    let sorted_subsets = cached_subsets.get_or_insert_with(|| {
+                        let mut all_subsets = std::collections::HashSet::new();
+                        for key in payload.subsets.keys() {
+                            all_subsets.insert(key.clone());
+                        }
+                        for entity in &payload.entities {
+                            all_subsets.insert(entity.subset.clone());
+                        }
+                        let mut sorted: Vec<_> = all_subsets.into_iter().collect();
+                        sorted.sort();
+                        sorted
+                    });
+
+                    if sorted_subsets.is_empty() {
                         println!("No subsets defined.");
                     } else {
                         println!("Subsets:");
-                        let mut sorted: Vec<_> = all_subsets.iter().collect();
-                        sorted.sort();
-                        for subset in sorted {
+                        for subset in sorted_subsets {
                             println!("  {}", subset);
                         }
                     }
@@ -428,6 +423,7 @@ fn main() {
                             is_proper_noun,
                             subset,
                         });
+                        cached_subsets = None;
                         println!("Entity added.");
                     }
                 } else {
@@ -442,6 +438,7 @@ fn main() {
                     let initial_len = payload.entities.len();
                     payload.entities.retain(|e| e.id != id);
                     if payload.entities.len() < initial_len {
+                        cached_subsets = None;
                         println!("Entity '{}' removed.", id);
                     } else {
                         println!("Entity '{}' not found.", id);
@@ -483,12 +480,9 @@ fn main() {
                             input.to_string()
                         };
 
-                        let is_valid = if let Some(payload) = custom_payload.as_ref() {
-                            payload.subsets.contains_key(&subset)
-                                || payload.entities.iter().any(|e| e.subset == subset)
-                        } else {
-                            true
-                        };
+                        let is_valid = custom_payload
+                            .as_ref()
+                            .is_none_or(|p| p.has_subset(&subset));
 
                         if is_valid {
                             persistent_bindings.insert(key.clone(), subset);

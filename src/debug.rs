@@ -43,6 +43,15 @@ pub struct EntitiesPayload {
     pub entities: Vec<DebugEntity>,
 }
 
+impl EntitiesPayload {
+    /// Checks if a given subset name is valid either by explicit configuration or entity presence.
+    #[must_use]
+    pub fn has_subset(&self, subset_name: &str) -> bool {
+        self.subsets.contains_key(subset_name)
+            || self.entities.iter().any(|e| e.subset == subset_name)
+    }
+}
+
 fn default_subset() -> String {
     "actors".to_string()
 }
@@ -160,10 +169,8 @@ pub fn standard_test_entities() -> Vec<DebugEntity> {
 /// * `template` - The compiled template to test.
 ///
 /// # Errors
-/// Returns an error if the template requires too many combinations to render safely.
-///
-/// # Panics
-/// Panics if the internal standard test entities list is modified to contain fewer than 3 entities.
+/// Returns an error if the template requires too many combinations to render safely, or if the
+/// internal standard test entities list is modified to contain fewer than 3 entities.
 pub fn test_template_with_standard_entities<S: std::hash::BuildHasher>(
     template: &Template,
     bindings: &std::collections::HashMap<String, String, S>,
