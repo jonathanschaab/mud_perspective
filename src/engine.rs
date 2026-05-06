@@ -1,4 +1,6 @@
-use crate::grammar::{conjugate_verb, resolve_article, resolve_pronoun};
+use crate::grammar::{
+    capitalize_cow, conjugate_verb, push_capitalized_if, resolve_article, resolve_pronoun,
+};
 use crate::models::{NULL_VIEWER, RenderContext, TemplateEntity, is_same_entity};
 use crate::parser::{MOD_POSSESSIVE, TAG_PROPERTY_SEP};
 pub use crate::parser::{TagFlags, Template, Token};
@@ -1537,19 +1539,6 @@ fn update_memory(memory: &std::cell::RefCell<Option<String>>, key: &str) {
 }
 
 #[inline]
-fn push_capitalized_if(output: &mut String, text: &str, should_capitalize: bool) {
-    if should_capitalize && text.chars().next().is_some_and(char::is_lowercase) {
-        let mut c = text.chars();
-        if let Some(f) = c.next() {
-            output.extend(f.to_uppercase());
-            output.push_str(c.as_str());
-        }
-    } else {
-        output.push_str(text);
-    }
-}
-
-#[inline]
 fn track_recent_entity(
     ctx: &RenderContext<'_>,
     key: &str,
@@ -1572,6 +1561,22 @@ fn track_recent_entity(
     // Move to the back to represent the most recently used (LRU)
     if let Some(pos) = recents.iter().position(|r| r.key == key) {
         let mut item = recents.remove(pos);
+
+        // Refresh grammatical properties in case the underlying entity mutated (e.g., GroupEntities)
+        item.gender = entity.gender();
+        item.flags.set(
+            crate::models::RecentEntityFlags::IS_PLURAL,
+            entity.is_plural(),
+        );
+        item.flags.set(
+            crate::models::RecentEntityFlags::IS_VIEWER_NORMAL,
+            entity.contains_viewer(ctx.viewer_id),
+        );
+        item.flags.set(
+            crate::models::RecentEntityFlags::IS_VIEWER_FORCED,
+            entity.contains_viewer(crate::models::NULL_VIEWER),
+        );
+
         for adj in new_adjs {
             if !item.adjectives.contains(&adj) {
                 item.adjectives.push(adj);
@@ -1610,18 +1615,6 @@ fn track_recent_entity(
         &mut last_mentioned,
         &mut active_subject,
     );
-}
-
-#[inline]
-fn capitalize_cow(
-    text: std::borrow::Cow<'_, str>,
-    should_capitalize: bool,
-) -> std::borrow::Cow<'_, str> {
-    if should_capitalize && text.chars().next().is_some_and(char::is_lowercase) {
-        std::borrow::Cow::Owned(crate::grammar::capitalize_first(&text))
-    } else {
-        text
-    }
 }
 
 #[inline]

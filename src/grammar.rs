@@ -408,6 +408,30 @@ pub fn capitalize_first(s: &str) -> String {
     }
 }
 
+/// Conditionally pushes a string to an output buffer, capitalizing the first letter if requested.
+#[inline]
+pub(crate) fn push_capitalized_if(output: &mut String, text: &str, should_capitalize: bool) {
+    if should_capitalize && text.chars().next().is_some_and(char::is_lowercase) {
+        let mut c = text.chars();
+        if let Some(f) = c.next() {
+            output.extend(f.to_uppercase());
+            output.push_str(c.as_str());
+        }
+    } else {
+        output.push_str(text);
+    }
+}
+
+/// Conditionally capitalizes the first letter of a `Cow<str>`, returning a new `Cow`.
+#[inline]
+pub(crate) fn capitalize_cow(text: Cow<'_, str>, should_capitalize: bool) -> Cow<'_, str> {
+    if should_capitalize && text.chars().next().is_some_and(char::is_lowercase) {
+        Cow::Owned(capitalize_first(&text))
+    } else {
+        text
+    }
+}
+
 fn is_vowel_before_y(verb: &str) -> bool {
     matches!(verb.chars().rev().nth(1), Some('a' | 'e' | 'i' | 'o' | 'u'))
 }

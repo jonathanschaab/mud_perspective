@@ -781,7 +781,18 @@ impl<'a> RenderContext<'a> {
 
             // Refresh position if already present (LRU)
             if let Some(pos) = recents.iter().position(|r| r.key == key) {
-                let item = recents.remove(pos);
+                let mut item = recents.remove(pos);
+                item.gender = entity.gender();
+                item.flags
+                    .set(RecentEntityFlags::IS_PLURAL, entity.is_plural());
+                item.flags.set(
+                    RecentEntityFlags::IS_VIEWER_NORMAL,
+                    entity.contains_viewer(self.viewer_id),
+                );
+                item.flags.set(
+                    RecentEntityFlags::IS_VIEWER_FORCED,
+                    entity.contains_viewer(NULL_VIEWER),
+                );
                 recents.push(item);
             } else {
                 let mut flags = RecentEntityFlags::empty();
@@ -865,6 +876,17 @@ impl<'a> RenderContext<'a> {
             if let Some(pos) = recents.iter().position(|r| r.key == key) {
                 let mut item = recents.remove(pos);
                 item.flags |= RecentEntityFlags::IS_PINNED;
+                item.gender = entity.gender();
+                item.flags
+                    .set(RecentEntityFlags::IS_PLURAL, entity.is_plural());
+                item.flags.set(
+                    RecentEntityFlags::IS_VIEWER_NORMAL,
+                    entity.contains_viewer(self.viewer_id),
+                );
+                item.flags.set(
+                    RecentEntityFlags::IS_VIEWER_FORCED,
+                    entity.contains_viewer(NULL_VIEWER),
+                );
                 recents.push(item);
             } else {
                 let mut flags = RecentEntityFlags::IS_PINNED;

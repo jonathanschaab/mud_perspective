@@ -353,6 +353,7 @@ impl Template {
             };
 
             let (clean_owner, mut o_flags) = parse_stance_prefixes(owner_str);
+            let clean_owner = clean_owner.trim();
             o_flags.set(TagFlags::IS_CAPITALIZED, is_capitalized(clean_owner));
             owner_key = Some(clean_owner.to_lowercase());
             owner_flags = o_flags;
@@ -372,6 +373,7 @@ impl Template {
             if let Some(idx) = owner_idx_3 {
                 let owner_part = &working_key[..idx];
                 let (clean_owner, mut o_flags) = parse_stance_prefixes(owner_part);
+                let clean_owner = clean_owner.trim();
                 o_flags.set(TagFlags::IS_CAPITALIZED, is_capitalized(clean_owner));
                 owner_key = Some(clean_owner.to_lowercase());
                 owner_flags = o_flags;
@@ -386,6 +388,7 @@ impl Template {
             } else if let Some(idx) = owner_idx_2 {
                 let owner_part = &working_key[..idx];
                 let (clean_owner, mut o_flags) = parse_stance_prefixes(owner_part);
+                let clean_owner = clean_owner.trim();
                 o_flags.set(TagFlags::IS_CAPITALIZED, is_capitalized(clean_owner));
                 owner_key = Some(clean_owner.to_lowercase());
                 owner_flags = o_flags;

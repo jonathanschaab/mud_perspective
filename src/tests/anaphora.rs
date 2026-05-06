@@ -1139,3 +1139,108 @@ fn test_first_person_objective_anaphora_fallback() {
         "The trap strikes a goblin!"
     );
 }
+
+#[test]
+fn test_anaphora_dynamic_entity_mutation() {
+    let singular_wolf = MockEntity {
+        id: "mob_1".into(),
+        name: "wolf".into(),
+        gender: Gender::Neutral,
+        is_plural: false,
+        is_proper_noun: false,
+    };
+
+    // Mimics the same entity transforming, or a GroupEntity gaining a member
+    let plural_wolves = MockEntity {
+        id: "mob_1".into(),
+        name: "wolves".into(),
+        gender: Gender::Plural,
+        is_plural: true,
+        is_proper_noun: false,
+    };
+
+    let cache = TemplateCache::new(100);
+
+    // 1. Initial State: Singular
+    let ctx = RenderContext::new("viewer").with_entity("target", &singular_wolf);
+
+    // Introduce the entity to memory
+    let t1 = cache
+        .get_or_compile("{*A:target:subj} [target:howl].")
+        .unwrap();
+    assert_eq!(
+        PerspectiveEngine::render(&t1, &ctx).unwrap(),
+        "A wolf howls."
+    );
+
+    // Verify it evaluates as a singular pronoun
+    let t2 = cache
+        .get_or_compile("{A:target:Subj} [target:bite].")
+        .unwrap();
+    assert_eq!(PerspectiveEngine::render(&t2, &ctx).unwrap(), "It bites.");
+
+    // 2. Mutate State: Replace the entity with its plural version
+    // We do NOT clear the anaphora memory!
+    let ctx_mutated = ctx.with_entity("target", &plural_wolves);
+
+    // The anaphora memory should refresh the cached grammatical flags (Singular -> Plural)
+    // upon the next interaction, dynamically switching the pronoun and verb conjugation!
+    assert_eq!(
+        PerspectiveEngine::render(&t2, &ctx_mutated).unwrap(),
+        "They bite."
+    );
+}
+
+#[test]
+fn test_anaphora_dynamic_epistemological_mutation() {
+    let known_aldran = MockEntity {
+        id: "char_1".into(),
+        name: "Aldran".into(),
+        gender: Gender::Male,
+        is_plural: false,
+        is_proper_noun: true,
+    };
+
+    let disguised_aldran = MockEntity {
+        id: "char_1".into(),
+        name: "tall man".into(),
+        gender: Gender::Male,
+        is_plural: false,
+        is_proper_noun: false, // No longer a proper noun!
+    };
+
+    let cache = TemplateCache::new(100);
+
+    // 1. Initial State: Known Identity
+    let ctx = RenderContext::new("viewer").with_entity("target", &known_aldran);
+
+    // First mention: evaluates to proper noun (suppresses article)
+    let t1 = cache
+        .get_or_compile("{*a:target:subj} [target:smile].")
+        .unwrap();
+    assert_eq!(
+        PerspectiveEngine::render(&t1, &ctx).unwrap(),
+        "Aldran smiles."
+    );
+
+    // Second mention: uses pronoun
+    let t2 = cache
+        .get_or_compile("{a:target:Subj} [target:wave].")
+        .unwrap();
+    assert_eq!(PerspectiveEngine::render(&t2, &ctx).unwrap(), "He waves.");
+
+    // 2. Mutate State: Don a disguise!
+    // We replace the entity with the disguised version, BUT keep the anaphora memory intact.
+    let ctx_disguised = ctx.with_entity("target", &disguised_aldran);
+
+    // Force a noun fallback (using the `*` "prefer noun" modifier to bypass the pronoun).
+    // Since it's still in memory, the indefinite article should safely upgrade to "The",
+    // and it should dynamically query the new live name ("tall man")!
+    let t3 = cache
+        .get_or_compile("{*a:target:subj} [target:flee].")
+        .unwrap();
+    assert_eq!(
+        PerspectiveEngine::render(&t3, &ctx_disguised).unwrap(),
+        "The tall man flees."
+    );
+}

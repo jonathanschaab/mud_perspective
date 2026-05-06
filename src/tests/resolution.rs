@@ -812,6 +812,65 @@ fn test_resolve_target_inline_adjectives_cleared_on_reset() {
 }
 
 #[test]
+fn test_resolve_target_dynamic_adjective_mutation() {
+    struct Wolf {
+        name: &'static str,
+        adjectives: &'static [&'static str],
+    }
+    impl TemplateEntity for Wolf {
+        fn contains_viewer(&self, _: &str) -> bool {
+            false
+        }
+        fn gender(&self) -> Gender {
+            Gender::Neutral
+        }
+        fn is_plural(&self) -> bool {
+            false
+        }
+        fn is_proper_noun_for(&self, _: &str) -> bool {
+            false
+        }
+        fn display_name_for<'a>(&'a self, _: &str) -> Cow<'a, str> {
+            Cow::Borrowed(self.name)
+        }
+        fn adjectives(&self) -> Option<&[&str]> {
+            Some(self.adjectives)
+        }
+    }
+
+    let healthy_wolf = Wolf {
+        name: "wolf",
+        adjectives: &["angry"],
+    };
+
+    let injured_wolf = Wolf {
+        name: "wolf",
+        adjectives: &["angry", "three-legged"],
+    };
+
+    let cache = TemplateCache::new(100);
+    let ctx = RenderContext::new("viewer").with_entity("target", &healthy_wolf);
+
+    // Seed the anaphora memory
+    let t = cache
+        .get_or_compile("{*A:target:subj} [target:growl].")
+        .unwrap();
+    PerspectiveEngine::render(&t, &ctx).unwrap();
+
+    // 1. Initial state: "three-legged" is not a valid adjective yet.
+    assert_eq!(ctx.resolve_target("three-legged wolf").len(), 0);
+    assert_eq!(ctx.resolve_target("angry wolf").len(), 1);
+
+    // 2. Mutate state: The wolf loses a leg!
+    let ctx_injured = ctx.with_entity("target", &injured_wolf);
+
+    // Without clearing anaphora, target resolution should instantly recognize the new data-driven adjective!
+    let m1 = ctx_injured.resolve_target("three-legged wolf");
+    assert_eq!(m1.len(), 1);
+    assert_eq!(m1[0].key, "target");
+}
+
+#[test]
 fn test_resolve_target_ambiguous_multiple_matches() {
     struct GuardActor {
         name: &'static str,
