@@ -290,9 +290,7 @@ impl PerspectiveEngine {
                 .iter()
                 .filter(|other| {
                     if let Some(other_adjs) = other.adjectives() {
-                        let other_adjs_set: std::collections::HashSet<&str> =
-                            other_adjs.iter().copied().collect();
-                        subset.iter().all(|&adj| other_adjs_set.contains(adj))
+                        subset.iter().all(|&adj| other_adjs.contains(&adj))
                     } else {
                         false
                     }
@@ -1657,7 +1655,7 @@ fn track_recent_entity(
     adjectives: Option<&str>,
 ) {
     let mut recents = ctx.recent_entities.borrow_mut();
-        ctx.clear_target_cache();
+    ctx.clear_target_cache();
 
     let mut new_adjs = Vec::new();
     if let Some(adj_str) = adjectives {
