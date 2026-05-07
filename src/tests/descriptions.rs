@@ -501,14 +501,14 @@ fn test_adjective_disambiguation() {
     let cache = TemplateCache::new(100);
     let t = cache
         .get_or_compile("{*A:w1:subj} and {*a:w2:subj} arrive.")
-        .unwrap();
+        .expect("Failed to compile template");
     let ctx = RenderContext::new("viewer")
         .with_entity("w1", &w1)
         .with_entity("w2", &w2)
         .with_lookahead(true);
 
     assert_eq!(
-        PerspectiveEngine::render(&t, &ctx).unwrap(),
+        PerspectiveEngine::render(&t, &ctx).expect("Failed to render template"),
         "A red wolf and a brown wolf arrive."
     );
 }
@@ -560,7 +560,7 @@ fn test_adjective_disambiguation_complex() {
     let cache = TemplateCache::new(100);
     let t = cache
         .get_or_compile("{*A:w1:subj}, {*a:w2:subj}, {*a:w3:subj}, and {*a:w4:subj} arrive.")
-        .unwrap();
+        .expect("Failed to compile template");
     let ctx = RenderContext::new("viewer")
         .with_entity("w1", &w1)
         .with_entity("w2", &w2)
@@ -569,7 +569,7 @@ fn test_adjective_disambiguation_complex() {
         .with_lookahead(true);
 
     assert_eq!(
-        PerspectiveEngine::render(&t, &ctx).unwrap(),
+        PerspectiveEngine::render(&t, &ctx).expect("Failed to render template"),
         "A grey large wolf, a large red wolf, a grey small wolf, and a red small wolf arrive."
     );
 }
@@ -617,7 +617,7 @@ fn test_adjective_disambiguation_partial_collision() {
     let cache = TemplateCache::new(100);
     let t1 = cache
         .get_or_compile("{*A:w1:subj}, {*a:w2:subj}, and {*a:w3:subj} arrive.")
-        .unwrap();
+        .expect("Failed to compile template");
     let ctx = RenderContext::new("viewer")
         .with_entity("w1", &w1)
         .with_entity("w2", &w2)
@@ -628,16 +628,16 @@ fn test_adjective_disambiguation_partial_collision() {
     // "red" distinguishes w1/w2 from w3, so it is used, but w1 and w2 still collide on "red",
     // receiving standard ordinals for the new "red wolf" group.
     assert_eq!(
-        PerspectiveEngine::render(&t1, &ctx).unwrap(),
+        PerspectiveEngine::render(&t1, &ctx).expect("Failed to render template"),
         "A red wolf, another red wolf, and a brown wolf arrive."
     );
 
     // Verify subsequent references use the ordinals correctly
     let t2 = cache
         .get_or_compile("{a:w1:Subj} [w1:howl]. {a:w2:Subj} [w2:growl]. {a:w3:Subj} [w3:bark].")
-        .unwrap();
+        .expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t2, &ctx).unwrap(),
+        PerspectiveEngine::render(&t2, &ctx).expect("Failed to render template"),
         "The first red wolf howls. The second red wolf growls. The brown wolf barks."
     );
 }
@@ -685,7 +685,7 @@ fn test_adjective_disambiguation_identical_with_plain_entity() {
     let cache = TemplateCache::new(100);
     let t1 = cache
         .get_or_compile("{*A:w1:subj}, {*a:w2:subj}, and {*a:w3:subj} arrive.")
-        .unwrap();
+        .expect("Failed to compile template");
     let ctx = RenderContext::new("viewer")
         .with_entity("w1", &w1)
         .with_entity("w2", &w2)
@@ -693,15 +693,15 @@ fn test_adjective_disambiguation_identical_with_plain_entity() {
         .with_lookahead(true);
 
     assert_eq!(
-        PerspectiveEngine::render(&t1, &ctx).unwrap(),
+        PerspectiveEngine::render(&t1, &ctx).expect("Failed to render template"),
         "A wolf, a large wolf, and another large wolf arrive."
     );
 
     let t2 = cache
         .get_or_compile("{*The:w1:subj} howls. {*The:w2:subj} growls. {*The:w3:subj} barks.")
-        .unwrap();
+        .expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t2, &ctx).unwrap(),
+        PerspectiveEngine::render(&t2, &ctx).expect("Failed to render template"),
         "The first wolf howls. The first large wolf growls. The second large wolf barks."
     );
 }
@@ -751,7 +751,7 @@ fn test_adjective_synonyms_ignored_for_disambiguation() {
     let cache = TemplateCache::new(100);
     let t = cache
         .get_or_compile("{*A:w1:subj} and {*a:w2:subj} arrive.")
-        .unwrap();
+        .expect("Failed to compile template");
     let ctx = RenderContext::new("viewer")
         .with_entity("w1", &w1)
         .with_entity("w2", &w2)
@@ -761,7 +761,7 @@ fn test_adjective_synonyms_ignored_for_disambiguation() {
     // disambiguation, completely ignoring the synonyms ("big", "tiny", etc.) to prevent
     // outputs like "A big wolf and a little wolf arrive."
     assert_eq!(
-        PerspectiveEngine::render(&t, &ctx).unwrap(),
+        PerspectiveEngine::render(&t, &ctx).expect("Failed to render template"),
         "A large wolf and a small wolf arrive."
     );
 }
@@ -900,7 +900,7 @@ fn test_adjective_disambiguation_limit() {
     let cache = TemplateCache::new(100);
     let t1 = cache
         .get_or_compile("{*A:w1:subj}, {*a:w2:subj}, and {*a:w3:subj} arrive.")
-        .unwrap();
+        .expect("Failed to compile template");
 
     // 1. With limit = 2
     // All three wolves only evaluate combinations from `["large", "red"]`.
@@ -915,7 +915,7 @@ fn test_adjective_disambiguation_limit() {
         .with_auto_clear(true);
 
     assert_eq!(
-        PerspectiveEngine::render(&t1, &ctx_limit_2).unwrap(),
+        PerspectiveEngine::render(&t1, &ctx_limit_2).expect("Failed to render template"),
         "A wolf, another wolf, and a third wolf arrive."
     );
 
@@ -925,7 +925,7 @@ fn test_adjective_disambiguation_limit() {
     let ctx_limit_3 = ctx_limit_2.with_adjective_disambiguation_limit(3);
 
     assert_eq!(
-        PerspectiveEngine::render(&t1, &ctx_limit_3).unwrap(),
+        PerspectiveEngine::render(&t1, &ctx_limit_3).expect("Failed to render template"),
         "A wolf, a fluffy wolf, and an angry wolf arrive."
     );
 
@@ -946,14 +946,14 @@ fn test_adjective_disambiguation_limit() {
         .with_adjective_disambiguation_limit(2);
     let t2 = cache
         .get_or_compile("{*A:w4:subj} and {*a:w5:subj} stare.")
-        .unwrap();
+        .expect("Failed to compile template");
 
     // w4 evaluates `fluffy` and `white`.
     // Even though w5's limit is 2 (so it only searches `large` and `black` for itself),
     // w4 checking w5 for uniqueness correctly sees w5's 3rd adjective `fluffy`.
     // Thus, w4 realizes `fluffy` is not unique, and correctly chooses `white`!
     assert_eq!(
-        PerspectiveEngine::render(&t2, &ctx_check_all).unwrap(),
+        PerspectiveEngine::render(&t2, &ctx_check_all).expect("Failed to render template"),
         "A white wolf and a large wolf stare."
     );
 }

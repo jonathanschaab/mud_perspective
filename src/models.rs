@@ -711,20 +711,45 @@ impl<'a> RenderContext<'a> {
         false
     }
 
+    // --- Private Setters for Cache Invalidation ---
+
+    fn set_viewer_id(&mut self, viewer_id: &'a str) {
+        self.viewer_id = viewer_id;
+        self.clear_target_cache();
+    }
+
+    fn set_stance(&mut self, stance: ActorStance) {
+        self.stance = stance;
+        self.clear_target_cache();
+    }
+
+    fn set_ordinal_word_threshold(&mut self, threshold: usize) {
+        self.ordinal_word_threshold = threshold;
+        self.clear_target_cache();
+    }
+
+    fn set_strict_diacritics(&mut self, strict: bool) {
+        self.strict_diacritics = strict;
+        self.clear_target_cache();
+    }
+
+    fn add_entity(&mut self, key: &'a str, entity: &'a dyn TemplateEntity) {
+        self.entities.insert(key, entity);
+        self.clear_target_cache();
+    }
+
     /// Configures the viewer ID for the rendering context.
     /// This is particularly useful when cloning a base context to render the same event for multiple observers.
     #[must_use]
     pub fn with_viewer(mut self, viewer_id: &'a str) -> Self {
-        self.viewer_id = viewer_id;
-        self.clear_target_cache();
+        self.set_viewer_id(viewer_id);
         self
     }
 
     /// Configures the actor stance for the rendering context.
     #[must_use]
     pub fn with_stance(mut self, stance: ActorStance) -> Self {
-        self.stance = stance;
-        self.clear_target_cache();
+        self.set_stance(stance);
         self
     }
 
@@ -747,8 +772,7 @@ impl<'a> RenderContext<'a> {
     /// Defaults to 999. Set to 0 to always use integer form.
     #[must_use]
     pub fn with_ordinal_word_threshold(mut self, threshold: usize) -> Self {
-        self.ordinal_word_threshold = threshold;
-        self.clear_target_cache();
+        self.set_ordinal_word_threshold(threshold);
         self
     }
 
@@ -757,8 +781,7 @@ impl<'a> RenderContext<'a> {
     /// If `false` (default), the engine transliterates Unicode to ASCII for fuzzy matching (e.g., "Ängry" matches "angry").
     #[must_use]
     pub fn with_strict_diacritics(mut self, strict: bool) -> Self {
-        self.strict_diacritics = strict;
-        self.clear_target_cache();
+        self.set_strict_diacritics(strict);
         self
     }
 
@@ -793,8 +816,7 @@ impl<'a> RenderContext<'a> {
     /// * `entity` - A reference to the game object implementing `TemplateEntity`.
     #[must_use]
     pub fn with_entity(mut self, key: &'a str, entity: &'a dyn TemplateEntity) -> Self {
-        self.entities.insert(key, entity);
-        self.clear_target_cache();
+        self.add_entity(key, entity);
         self
     }
 

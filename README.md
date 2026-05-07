@@ -445,7 +445,7 @@ let ctx = RenderContext::new("char_1").with_strict_diacritics(true);
 
 #### Target Memoization & Caching
 
-The `RenderContext` includes an internal memoization cache for target resolution. If a complex script or combat loop requests `ctx.resolve_target("the goblin")` multiple times in a single server tick, the engine will perform the string parsing and matching once and instantly return O(1) cached results for subsequent calls.
+The `RenderContext` includes an internal memoization cache for target resolution. If a complex script or combat loop requests `ctx.resolve_target("the goblin")` multiple times in a single server tick, the engine will perform the string parsing and matching once and return *O(1)* cached results for subsequent calls. 
 
 The engine automatically invalidates this cache whenever the narrative state shifts (e.g., adding an entity, changing the stance, or updating the anaphora memory). However, if you mutate an entity's internal properties (like its name or adjectives) using interior mutability while the context is still alive, you should manually call `ctx.clear_target_cache()` to ensure the player's next input resolves against the new data.
 

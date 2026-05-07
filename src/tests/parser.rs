@@ -23,7 +23,7 @@ fn test_template_caching() {
         .get_or_compile(raw_text)
         .expect("Failed to compile template");
 
-    // Second call - CACHE HIT. The engine instantly returns the pre-compiled AST.
+    // Second call - CACHE HIT. The engine returns the pre-compiled AST.
     let template_2 = cache
         .get_or_compile(raw_text)
         .expect("Failed to compile template");

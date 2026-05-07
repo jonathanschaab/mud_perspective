@@ -864,7 +864,7 @@ fn test_resolve_target_dynamic_adjective_mutation() {
     // 2. Mutate state: The wolf loses a leg!
     let ctx_injured = ctx.with_entity("target", &injured_wolf);
 
-    // Without clearing anaphora, target resolution should instantly recognize the new data-driven adjective!
+    // Without clearing anaphora, target resolution should recognize the new data-driven adjective.
     let m1 = ctx_injured.resolve_target("three-legged wolf");
     assert_eq!(m1.len(), 1);
     assert_eq!(m1[0].key, "target");
@@ -2338,8 +2338,8 @@ fn test_resolve_target_adjective_partial_disambiguation() {
     let cache = TemplateCache::new(100);
     let t = cache
         .get_or_compile("{*A:w1:subj}, {*a:w2:subj}, and {*a:w3:subj} arrive.")
-        .unwrap();
-    PerspectiveEngine::render(&t, &ctx).unwrap();
+        .expect("Failed to compile template");
+    PerspectiveEngine::render(&t, &ctx).expect("Failed to render template");
 
     assert_eq!(ctx.resolve_target("the first red wolf").len(), 1);
     assert_eq!(ctx.resolve_target("the first red wolf")[0].key, "w1");

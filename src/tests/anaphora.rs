@@ -777,7 +777,7 @@ fn test_with_last_mentioned_preserves_pinned_status() {
     .expect("Failed to render template");
 
     // If `with_last_mentioned` accidentally cleared Bob's flags, he would have been evicted as the oldest.
-    // Because his IS_PINNED flag was preserved, Tom (the newest but unpinned) is instantly evicted instead!
+    // Because his IS_PINNED flag was preserved, Tom (the newest but unpinned) is evicted instead.
     assert_eq!(ctx.recent_entities.borrow()[0].key, "bob");
 }
 
