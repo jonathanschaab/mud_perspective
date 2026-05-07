@@ -217,21 +217,14 @@ impl Template {
             [p1, p2, p3] => {
                 let (p1_clean, _) = parse_stance_prefixes(p1);
                 if p1_clean.is_empty() || is_article(p1_clean) {
-                    let (p2_clean, _) = parse_stance_prefixes(p2);
                     let article = if p1.is_empty() { None } else { Some(*p1) };
 
-                    if is_owner_part(p2_clean) && !is_p_type(p3) {
-                        Ok((article, Some(*p2), *p3, None))
-                    } else if is_p_type(p3) || p3.is_empty() {
+                    if is_p_type(p3) || p3.is_empty() {
                         Ok((article, None, *p2, Some(*p3)))
                     } else {
-                        Err(validation_error(
-                            "Malformed entity tag",
-                            content,
-                            TAG_ENTITY_OPEN,
-                        ))
+                        Ok((article, Some(*p2), *p3, None))
                     }
-                } else if is_owner_part(p1_clean) && (is_p_type(p3) || p3.is_empty()) {
+                } else if is_p_type(p3) || p3.is_empty() {
                     Ok((None, Some(*p1), *p2, Some(*p3)))
                 } else {
                     Err(validation_error(
@@ -249,17 +242,11 @@ impl Template {
                     Ok((article, None, *p2, None))
                 } else if is_p_type(p2) || p2.is_empty() {
                     Ok((None, None, *p1, Some(*p2)))
-                } else if is_owner_part(p1_clean) {
-                    Ok((None, Some(*p1), *p2, None))
                 } else if p1_clean.is_empty() {
                     let article = if p1.is_empty() { None } else { Some(*p1) };
                     Ok((article, None, *p2, None))
                 } else {
-                    Err(validation_error(
-                        "Malformed entity tag",
-                        content,
-                        TAG_ENTITY_OPEN,
-                    ))
+                    Ok((None, Some(*p1), *p2, None))
                 }
             }
             [p1] => Ok((None, None, *p1, None)),
@@ -341,14 +328,16 @@ impl Template {
             {
                 (stripped, "")
             } else {
-                (owner_part, "")
+                ("", owner_part)
             };
 
-            let (clean_owner, mut o_flags) = parse_stance_prefixes(owner_str);
-            let clean_owner = clean_owner.trim();
-            o_flags.set(TagFlags::IS_CAPITALIZED, is_capitalized(clean_owner));
-            owner_key = Some(clean_owner.to_lowercase());
-            owner_flags = o_flags;
+            if !owner_str.is_empty() {
+                let (clean_owner, mut o_flags) = parse_stance_prefixes(owner_str);
+                let clean_owner = clean_owner.trim();
+                o_flags.set(TagFlags::IS_CAPITALIZED, is_capitalized(clean_owner));
+                owner_key = Some(clean_owner.to_lowercase());
+                owner_flags = o_flags;
+            }
 
             let adj = adj_str.trim();
             if !adj.is_empty() {
@@ -757,13 +746,6 @@ pub(crate) fn is_p_type(s: &str) -> bool {
         lower.as_str(),
         "subj" | "obj" | "poss" | "abs_poss" | "reflex"
     )
-}
-
-#[inline]
-pub(crate) fn is_owner_part(s: &str) -> bool {
-    let (clean, _) = parse_stance_prefixes(s);
-    let clean = clean.trim();
-    parse_possessive_suffix(clean).1 || find_spaced_possessive(clean).is_some()
 }
 
 #[inline]

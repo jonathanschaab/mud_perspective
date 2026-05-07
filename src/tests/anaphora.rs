@@ -439,6 +439,7 @@ fn test_in_place_anaphora_mutations() {
     let ctx = RenderContext::new("viewer").with_entity("bob", &m1);
 
     let ctx = ctx.with_last_mentioned("bob");
+    assert!(!ctx.is_entity_pinned("bob"));
     assert!(
         !ctx.recent_entities
             .borrow()
@@ -449,6 +450,7 @@ fn test_in_place_anaphora_mutations() {
     );
 
     ctx.pin_anaphora("bob");
+    assert!(ctx.is_entity_pinned("bob"));
     assert!(
         ctx.recent_entities
             .borrow()
@@ -459,6 +461,7 @@ fn test_in_place_anaphora_mutations() {
     );
 
     ctx.unpin_anaphora("bob");
+    assert!(!ctx.is_entity_pinned("bob"));
     assert!(
         !ctx.recent_entities
             .borrow()
@@ -777,7 +780,7 @@ fn test_with_last_mentioned_preserves_pinned_status() {
     .expect("Failed to render template");
 
     // If `with_last_mentioned` accidentally cleared Bob's flags, he would have been evicted as the oldest.
-    // Because his IS_PINNED flag was preserved, Tom (the newest but unpinned) is instantly evicted instead!
+    // Because his IS_PINNED flag was preserved, Tom (the newest but unpinned) is evicted instead.
     assert_eq!(ctx.recent_entities.borrow()[0].key, "bob");
 }
 
@@ -1243,4 +1246,71 @@ fn test_anaphora_dynamic_epistemological_mutation() {
         PerspectiveEngine::render(&t3, &ctx_disguised).unwrap(),
         "The tall man flees."
     );
+}
+
+#[test]
+fn test_active_subject_tracking() {
+    let player = MockEntity {
+        id: "char_1".to_string(),
+        name: "Aldran".to_string(),
+        gender: Gender::Male,
+        is_plural: false,
+        is_proper_noun: true,
+    };
+    let goblin = MockEntity {
+        id: "mob_1".to_string(),
+        name: "goblin".to_string(),
+        gender: Gender::Neutral,
+        is_plural: false,
+        is_proper_noun: false,
+    };
+
+    let cache = TemplateCache::new(100);
+    let ctx = RenderContext::new("char_2")
+        .with_entity("source", &player)
+        .with_entity("target", &goblin);
+
+    assert_eq!(ctx.active_subject(), None);
+
+    let t1 = cache
+        .get_or_compile("{*A:source:subj} [source:hit] {*the:target:obj}.")
+        .expect("Failed to compile template");
+    PerspectiveEngine::render(&t1, &ctx).expect("Failed to render template");
+
+    assert_eq!(ctx.active_subject().as_deref(), Some("source"));
+
+    let t2 = cache
+        .get_or_compile("{a:target:Subj} [target:retaliate]!")
+        .expect("Failed to compile template");
+    PerspectiveEngine::render(&t2, &ctx).expect("Failed to render template");
+
+    assert_eq!(ctx.active_subject().as_deref(), Some("target"));
+}
+
+#[test]
+fn test_has_seen_entity() {
+    let goblin = MockEntity {
+        id: "mob_1".to_string(),
+        name: "goblin".to_string(),
+        gender: Gender::Neutral,
+        is_plural: false,
+        is_proper_noun: false,
+    };
+
+    let cache = TemplateCache::new(100);
+    let ctx = RenderContext::new("viewer").with_entity("target", &goblin);
+
+    assert!(!ctx.has_seen_entity("target"));
+
+    let t = cache
+        .get_or_compile("{*A:target:subj} [target:arrive].")
+        .expect("Failed to compile template");
+    PerspectiveEngine::render(&t, &ctx).expect("Failed to render template");
+
+    assert!(ctx.has_seen_entity("target"));
+    assert!(ctx.extract_anaphora().has_seen_entity("target"));
+
+    ctx.clear_anaphora();
+
+    assert!(!ctx.has_seen_entity("target"));
 }

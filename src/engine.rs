@@ -163,6 +163,10 @@ impl PerspectiveEngine {
             }
         }
 
+        if ctx.auto_clear {
+            ctx.clear_anaphora();
+        }
+
         // 2. Pass the fully assembled base-case string to the typography post-processor
         Ok(post_process_typography(&raw_output))
     }
@@ -256,6 +260,142 @@ impl PerspectiveEngine {
         false
     }
 
+    fn try_adjective_disambiguation<'a>(
+        entity: &dyn TemplateEntity,
+        colliders: &[&dyn TemplateEntity],
+        base_name: &str,
+        limit: usize,
+    ) -> Option<(std::borrow::Cow<'a, str>, bool)> {
+        let entity_adjs = entity.adjectives().filter(|adjs| !adjs.is_empty())?;
+
+        // Prevent bitshift overflow by capping the limit to the bit-width of our counter
+        let safe_limit = limit.min((u64::BITS - 1) as usize);
+        if safe_limit == 0 {
+            return None;
+        }
+
+        // Filter out adjectives that are shared by ALL colliders, as they provide zero disambiguation value.
+        let mut searchable_adjs = Vec::with_capacity(entity_adjs.len().min(safe_limit));
+        for &adj in entity_adjs {
+            let shared_by_all = colliders.iter().all(|other| {
+                other
+                    .adjectives()
+                    .is_some_and(|other_adjs| other_adjs.contains(&adj))
+            });
+
+            if !shared_by_all {
+                searchable_adjs.push(adj);
+                if searchable_adjs.len() == safe_limit {
+                    break;
+                }
+            }
+        }
+
+        if searchable_adjs.is_empty() {
+            return None;
+        }
+
+        let mut best_combo: Option<Vec<&str>> = None;
+        let mut min_colliders = colliders.len();
+
+        let mut subset = Vec::with_capacity(searchable_adjs.len());
+
+        // Iterate through all non-empty subsets of the entity's adjectives to find the smallest set
+        // that minimizes the number of colliders sharing those adjectives.
+        for i in 1_u64..(1_u64 << searchable_adjs.len()) {
+            subset.clear();
+            for (j, &adj) in searchable_adjs.iter().enumerate() {
+                if (i >> j) & 1 == 1 {
+                    subset.push(adj);
+                }
+            }
+
+            let current_colliders = colliders
+                .iter()
+                .filter(|other| {
+                    if let Some(other_adjs) = other.adjectives() {
+                        subset.iter().all(|&adj| other_adjs.contains(&adj))
+                    } else {
+                        false
+                    }
+                })
+                .count();
+
+            if current_colliders < min_colliders {
+                min_colliders = current_colliders;
+                best_combo = Some(subset.clone());
+            } else if current_colliders == min_colliders {
+                // Prefer the smaller subset if it yields the same number of colliders.
+                if let Some(best) = &best_combo
+                    && subset.len() < best.len()
+                {
+                    best_combo = Some(subset.clone());
+                }
+            }
+        }
+
+        if let Some(combo) = best_combo {
+            // To maintain a stable order, we sort the adjectives before joining.
+            let mut sorted_combo = combo;
+            sorted_combo.sort_unstable();
+            let prefix = sorted_combo.join(" ");
+            Some((
+                std::borrow::Cow::Owned(format!("{prefix} {base_name}")),
+                min_colliders > 0,
+            ))
+        } else {
+            None
+        }
+    }
+
+    #[inline]
+    #[allow(clippy::too_many_arguments)]
+    fn count_long_name_collisions(
+        ctx: &RenderContext,
+        effective_viewer: &str,
+        recent_borrow: &[crate::models::RecentEntity],
+        future_keys: &[&str],
+        pre_resolved: &HashMap<&str, &dyn TemplateEntity>,
+        params_key: &str,
+        short_name: &str,
+        long_name: &str,
+    ) -> usize {
+        let mut long_collisions = 0;
+
+        // Verify how many times the long name collides
+        let mut check_long = |other_key: &str, other_entity: &dyn TemplateEntity| {
+            if other_key != params_key {
+                let other_short = other_entity.display_name_for(effective_viewer);
+                // Only consider the other entity's long name if its short name is in the
+                // exact same collision group as our entity's short name (preventing phantoms).
+                if other_short == long_name
+                    || (other_short == short_name
+                        && other_entity
+                            .long_display_name_for(effective_viewer)
+                            .as_deref()
+                            == Some(long_name))
+                {
+                    long_collisions += 1;
+                }
+            }
+        };
+
+        for r in recent_borrow {
+            if let Ok(other_entity) = Self::get_entity(ctx, &r.key) {
+                check_long(&r.key, other_entity);
+            }
+        }
+        for &fk in future_keys {
+            if !recent_borrow.iter().any(|r| r.key == fk)
+                && let Some(&other_entity) = pre_resolved.get(fk)
+            {
+                check_long(fk, other_entity);
+            }
+        }
+
+        long_collisions
+    }
+
     #[inline]
     fn resolve_display_name<'a>(
         ctx: &'a RenderContext,
@@ -270,7 +410,7 @@ impl PerspectiveEngine {
 
         if !params.flags.no_smart() {
             let mut short_collisions = 0;
-            let mut unresolved_short_collisions = 0;
+            let mut unresolved_colliders: Vec<&'a dyn TemplateEntity> = Vec::new();
             let recent_borrow = ctx.recent_entities.borrow();
 
             // We use a closure here to iterate over the live `recent_borrow` and `future_keys`.
@@ -281,7 +421,7 @@ impl PerspectiveEngine {
                 if other_key != params.key
                     && other_entity.display_name_for(effective_viewer) == name
                 {
-                    short_collisions += 1;
+                    short_collisions += 1; // This counts all collisions, even those that will be resolved by long names.
 
                     // Determine if this other entity will vacate the short name by using its own long name
                     if !Self::check_will_vacate(
@@ -297,7 +437,7 @@ impl PerspectiveEngine {
                         // proved they are identical, saving us from binding a temporary variable.
                         name.as_ref(),
                     ) {
-                        unresolved_short_collisions += 1;
+                        unresolved_colliders.push(other_entity);
                     }
                 }
             };
@@ -315,50 +455,42 @@ impl PerspectiveEngine {
                 }
             }
 
-            name_collision = unresolved_short_collisions > 0;
+            name_collision = !unresolved_colliders.is_empty();
 
             if short_collisions > 0
                 && let Some(long_name) = entity.long_display_name_for(effective_viewer)
                 && long_name != name
             {
-                let mut long_collisions = 0;
-
-                // Verify how many times the long name collides
-                let mut check_long = |other_key: &str, other_entity: &'a dyn TemplateEntity| {
-                    if other_key != params.key {
-                        let other_short = other_entity.display_name_for(effective_viewer);
-                        // Only consider the other entity's long name if its short name is in the
-                        // exact same collision group as our entity's short name (preventing phantoms).
-                        if other_short == long_name
-                            || (other_short == name
-                                && other_entity
-                                    .long_display_name_for(effective_viewer)
-                                    .as_deref()
-                                    == Some(long_name.as_ref()))
-                        {
-                            long_collisions += 1;
-                        }
-                    }
-                };
-
-                for r in recent_borrow.iter() {
-                    if let Ok(other_entity) = Self::get_entity(ctx, &r.key) {
-                        check_long(&r.key, other_entity);
-                    }
-                }
-                for &fk in future_keys {
-                    if !recent_borrow.iter().any(|r| r.key == fk)
-                        && let Some(&other_entity) = pre_resolved.get(fk)
-                    {
-                        check_long(fk, other_entity);
-                    }
-                }
+                let long_collisions = Self::count_long_name_collisions(
+                    ctx,
+                    effective_viewer,
+                    &recent_borrow,
+                    future_keys,
+                    pre_resolved,
+                    params.key,
+                    name.as_ref(),
+                    long_name.as_ref(),
+                );
 
                 // If the long name is strictly more specific (has fewer collisions), use it!
                 if long_collisions < short_collisions {
                     name = long_name;
                     name_collision = long_collisions > 0;
                 }
+            }
+
+            // If a collision still exists, try to disambiguate by prepending unique adjectives.
+            if name_collision
+                && !entity.is_proper_noun_for(effective_viewer)
+                && let Some((adj_name, still_collides)) = Self::try_adjective_disambiguation(
+                    entity,
+                    &unresolved_colliders,
+                    &name,
+                    ctx.adjective_disambiguation_limit,
+                )
+            {
+                name = adj_name;
+                name_collision = still_collides;
             }
         }
 
@@ -389,6 +521,7 @@ impl PerspectiveEngine {
         name_collision: bool,
     ) -> Option<usize> {
         let mut ordinals = ctx.ordinals.borrow_mut();
+        ctx.clear_target_cache();
         if !ordinals.contains_key(name) {
             ordinals.insert(
                 name.to_string(),
@@ -609,14 +742,6 @@ impl PerspectiveEngine {
 
         raw_output.push(' ');
 
-        if let Some(adj) = params.adjectives {
-            if params.flags.contains(TagFlags::ALL_CAPS) {
-                apply_all_caps(adj, raw_output);
-            } else {
-                raw_output.push_str(adj);
-            }
-        }
-
         Ok(())
     }
 
@@ -756,7 +881,7 @@ impl PerspectiveEngine {
         if can_use_pronoun {
             if !already_seen {
                 update_memory(&ctx.last_mentioned, params.key);
-                track_recent_entity(ctx, params.key, entity, params.adjectives);
+                track_recent_entity(ctx, params.key, entity, params.adjectives, None);
             }
             let pronoun = resolve_pronoun(
                 effective_gender,
@@ -894,7 +1019,13 @@ impl PerspectiveEngine {
         }
 
         update_memory(&ctx.last_mentioned, params.key);
-        track_recent_entity(ctx, params.key, entity, params.adjectives);
+        track_recent_entity(
+            ctx,
+            params.key,
+            entity,
+            params.adjectives,
+            Some(name.as_ref()),
+        );
 
         let active_params = EntityRefParams {
             key: params.key,
@@ -902,7 +1033,7 @@ impl PerspectiveEngine {
             p_type: actual_p_type,
             owner_key: None,
             owner_flags: TagFlags::empty(),
-            adjectives: None,
+            adjectives: params.adjectives, // Pass the adjectives to the print functions
             flags: active_flags,
             ordinal,
         };
@@ -998,12 +1129,31 @@ impl PerspectiveEngine {
             article_printed = true;
         }
 
-        let should_cap_noun =
-            if article_printed || (after_possessive && !active_params.flags.force_article()) {
-                active_params.flags.is_capitalized()
+        let mut adj_printed = false;
+        if let Some(adj) = active_params.adjectives {
+            let mut formatted_adj = String::new();
+            if active_params.flags.contains(TagFlags::ALL_CAPS) {
+                crate::typography::apply_all_caps(adj, &mut formatted_adj);
             } else {
-                cap_whole
-            };
+                formatted_adj.push_str(adj);
+            }
+
+            if !article_printed && cap_whole && !after_possessive {
+                raw_output.push_str(&crate::grammar::capitalize_first(&formatted_adj));
+            } else {
+                raw_output.push_str(&formatted_adj);
+            }
+            adj_printed = true;
+        }
+
+        let should_cap_noun = if article_printed
+            || adj_printed
+            || (after_possessive && !active_params.flags.force_article())
+        {
+            active_params.flags.is_capitalized()
+        } else {
+            cap_whole
+        };
 
         let name_cow = capitalize_cow(name, should_cap_noun);
         let name_str = name_cow.as_ref();
@@ -1305,6 +1455,15 @@ impl PerspectiveEngine {
             params.flags.article_capitalized() && first_visible_item,
         );
 
+        let mut adj_prefix = String::new();
+        if first_visible_item && let Some(adj) = params.adjectives {
+            if params.flags.contains(TagFlags::ALL_CAPS) {
+                crate::typography::apply_all_caps(adj, &mut adj_prefix);
+            } else {
+                adj_prefix.push_str(adj);
+            }
+        }
+
         let mut final_name = if let Some(resolved_art) = config.article_to_use.and_then(|art| {
             resolve_article(
                 art,
@@ -1315,7 +1474,14 @@ impl PerspectiveEngine {
                 article_flags,
             )
         }) {
-            std::borrow::Cow::Owned(format!("{}{name}", resolved_art.as_ref()))
+            std::borrow::Cow::Owned(format!("{}{adj_prefix}{name}", resolved_art.as_ref()))
+        } else if !adj_prefix.is_empty() {
+            let cap_adj = if params.flags.article_capitalized() && first_visible_item {
+                crate::grammar::capitalize_first(&adj_prefix)
+            } else {
+                adj_prefix
+            };
+            std::borrow::Cow::Owned(format!("{cap_adj}{name}"))
         } else {
             name
         };
@@ -1465,7 +1631,7 @@ impl PerspectiveEngine {
             let effective_viewer = effective_viewer_id(ctx, flags.force_3rd_person());
             update_memory(&ctx.active_subject, key);
             update_memory(&ctx.last_mentioned, key);
-            track_recent_entity(ctx, key, entity, None);
+            track_recent_entity(ctx, key, entity, None, None);
             (
                 entity.contains_viewer(effective_viewer),
                 entity.is_plural(),
@@ -1544,8 +1710,10 @@ fn track_recent_entity(
     key: &str,
     entity: &dyn TemplateEntity,
     adjectives: Option<&str>,
+    resolved_name: Option<&str>,
 ) {
     let mut recents = ctx.recent_entities.borrow_mut();
+    ctx.clear_target_cache();
 
     let mut new_adjs = Vec::new();
     if let Some(adj_str) = adjectives {
@@ -1582,6 +1750,9 @@ fn track_recent_entity(
                 item.adjectives.push(adj);
             }
         }
+        if let Some(rn) = resolved_name {
+            item.resolved_name = Some(rn.to_string());
+        }
         recents.push(item);
     } else {
         let mut flags = crate::models::RecentEntityFlags::empty();
@@ -1603,6 +1774,7 @@ fn track_recent_entity(
             gender: entity.gender(),
             flags,
             adjectives: new_adjs,
+            resolved_name: resolved_name.map(ToString::to_string),
         });
     }
 
