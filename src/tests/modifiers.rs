@@ -410,18 +410,22 @@ fn test_explicit_capitalization_after_possessive() {
         .with_entity("sword", &sword);
 
     // 1. Uncapitalized explicit noun after possessive
-    let t_normal = cache.get_or_compile("{player's sword}.").unwrap();
+    let t_normal = cache
+        .get_or_compile("{player's sword}.")
+        .expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t_normal, &ctx).unwrap(),
+        PerspectiveEngine::render(&t_normal, &ctx).expect("Failed to render template"),
         "Aldran's sword."
     );
 
     // 2. Explicitly capitalized noun {Sword} after possessive
     // Clear the anaphora memory so it evaluates capitalization instead of falling back to a pronoun
     ctx.clear_anaphora();
-    let t_cap = cache.get_or_compile("{player's Sword}.").unwrap();
+    let t_cap = cache
+        .get_or_compile("{player's Sword}.")
+        .expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t_cap, &ctx).unwrap(),
+        PerspectiveEngine::render(&t_cap, &ctx).expect("Failed to render template"),
         "Aldran's Sword."
     );
 }
@@ -451,17 +455,20 @@ fn test_possessive_drops_owner_for_viewer() {
     // 1. Without adjectives
     let t1 = cache
         .get_or_compile("{*The:source:subj} swings {source's target:obj}!")
-        .unwrap();
+        .expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t1, &ctx).unwrap(),
+        PerspectiveEngine::render(&t1, &ctx).expect("Failed to render template"),
         "The goblin swings you!"
     );
 
     // 2. With adjectives
     let t2 = cache
         .get_or_compile("{*The:source's glowing target:subj} [target:fall].")
-        .unwrap();
-    assert_eq!(PerspectiveEngine::render(&t2, &ctx).unwrap(), "You fall.");
+        .expect("Failed to compile template");
+    assert_eq!(
+        PerspectiveEngine::render(&t2, &ctx).expect("Failed to render template"),
+        "You fall."
+    );
 }
 
 #[test]
@@ -489,9 +496,9 @@ fn test_possessive_drops_owner_for_anaphora_pronoun() {
     // First mention: The target hasn't been seen, so it renders as the noun "sword" with the owner "his".
     let t1 = cache
         .get_or_compile("{*A:source:subj} draws {source's target:obj}.")
-        .unwrap();
+        .expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t1, &ctx).unwrap(),
+        PerspectiveEngine::render(&t1, &ctx).expect("Failed to render template"),
         "Aldran draws his sword."
     );
 
@@ -499,9 +506,9 @@ fn test_possessive_drops_owner_for_anaphora_pronoun() {
     // The owner and any adjectives are completely dropped!
     let t2 = cache
         .get_or_compile("{*A:source:subj} swings {source's glowing target:obj}!")
-        .unwrap();
+        .expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t2, &ctx).unwrap(),
+        PerspectiveEngine::render(&t2, &ctx).expect("Failed to render template"),
         "Aldran swings it!"
     );
 }

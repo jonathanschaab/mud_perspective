@@ -528,7 +528,7 @@ impl PerspectiveEngine {
         let entity_adjs = entity.adjectives().filter(|adjs| !adjs.is_empty())?;
 
         // Prevent bitshift overflow by capping the limit to the bit-width of our counter
-        let safe_limit = limit.min((u128::BITS - 1) as usize);
+        let safe_limit = limit.min((u64::BITS - 1) as usize);
         if safe_limit == 0 {
             return None;
         }
@@ -561,7 +561,7 @@ impl PerspectiveEngine {
 
         // Iterate through all non-empty subsets of the entity's adjectives to find the smallest set
         // that minimizes the number of colliders sharing those adjectives.
-        for i in 1_u128..(1_u128 << searchable_adjs.len()) {
+        for i in 1_u64..(1_u64 << searchable_adjs.len()) {
             subset.clear();
             for (j, &adj) in searchable_adjs.iter().enumerate() {
                 if (i >> j) & 1 == 1 {

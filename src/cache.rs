@@ -9,6 +9,7 @@ use std::sync::Arc;
 /// read and render the same compiled template simultaneously without lock contention on cache hits.
 pub struct TemplateCache {
     inner: Cache<String, Arc<Template>>,
+    max_depth: usize,
 }
 
 impl TemplateCache {
@@ -23,7 +24,16 @@ impl TemplateCache {
             inner: Cache::builder()
                 .max_capacity(capacity.max(1) as u64)
                 .build(),
+            max_depth: crate::parser::DEFAULT_MAX_DEPTH,
         }
+    }
+
+    /// Configures the maximum allowed nesting depth for conditionals and boolean expressions
+    /// during template compilation to prevent stack overflows.
+    #[must_use]
+    pub fn with_max_depth(mut self, max_depth: usize) -> Self {
+        self.max_depth = max_depth;
+        self
     }
 
     /// Retrieves a compiled template from the cache, or compiles it on the fly if missing.
@@ -46,7 +56,7 @@ impl TemplateCache {
         self.inner
             .try_get_with(raw.to_string(), || {
                 tracing::debug!("Cache miss: Compiling AST for template.");
-                Template::compile(raw).map(Arc::new)
+                Template::compile_with_depth(raw, self.max_depth).map(Arc::new)
             })
             .map_err(|e| (*e).clone())
     }

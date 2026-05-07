@@ -676,21 +676,21 @@ fn test_conditional_and_comment_parsing() {
 #[test]
 fn test_line_continuation() {
     // 1. Unix style (\n)
-    let t1 = Template::compile("Hello \\\n    world!").unwrap();
+    let t1 = Template::compile("Hello \\\n    world!").expect("Failed to compile template");
     assert_eq!(t1.tokens.len(), 1);
     if let Token::Literal(ref l) = t1.tokens[0] {
         assert_eq!(l, "Hello world!");
     }
 
     // 2. Windows style with tabs (\r\n)
-    let t2 = Template::compile("Hello \\\r\n\tworld!").unwrap();
+    let t2 = Template::compile("Hello \\\r\n\tworld!").expect("Failed to compile template");
     assert_eq!(t2.tokens.len(), 1);
     if let Token::Literal(ref l) = t2.tokens[0] {
         assert_eq!(l, "Hello world!");
     }
 
     // 3. Trailing backslash shouldn't panic
-    let t3 = Template::compile("Trailing slash\\").unwrap();
+    let t3 = Template::compile("Trailing slash\\").expect("Failed to compile template");
     if let Token::Literal(ref l) = t3.tokens[0] {
         assert_eq!(l, "Trailing slash\\");
     }

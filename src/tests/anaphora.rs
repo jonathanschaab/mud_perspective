@@ -1024,10 +1024,10 @@ fn test_pronoun_fallback_article_upgrade() {
     // The wolf hasn't been introduced, so the pronoun falls back to "A wolf".
     let t1 = cache
         .get_or_compile("{a:source:Subj} [source:howl].")
-        .unwrap();
+        .expect("Failed to compile template");
     let ctx1 = RenderContext::new("char_1").with_entity("source", &wolf1);
     assert_eq!(
-        PerspectiveEngine::render(&t1, &ctx1).unwrap(),
+        PerspectiveEngine::render(&t1, &ctx1).expect("Failed to render template"),
         "A wolf howls."
     );
 
@@ -1037,12 +1037,12 @@ fn test_pronoun_fallback_article_upgrade() {
         .get_or_compile(
             "{*A:source:subj} and {*a:slime:subj} arrive. {a:source:Subj} [source:howl].",
         )
-        .unwrap();
+        .expect("Failed to compile template");
     let ctx2 = RenderContext::new("char_1")
         .with_entity("source", &wolf1)
         .with_entity("slime", &slime);
     assert_eq!(
-        PerspectiveEngine::render(&t2, &ctx2).unwrap(),
+        PerspectiveEngine::render(&t2, &ctx2).expect("Failed to render template"),
         "A wolf and a slime arrive. The wolf howls."
     );
 
@@ -1052,12 +1052,12 @@ fn test_pronoun_fallback_article_upgrade() {
         .get_or_compile(
             "{*a:source:subj} and {*a:other:subj} arrive. {a:source:Subj} [source:howl].",
         )
-        .unwrap();
+        .expect("Failed to compile template");
     let ctx3 = RenderContext::new("char_1")
         .with_entity("source", &wolf1)
         .with_entity("other", &wolf2);
     assert_eq!(
-        PerspectiveEngine::render(&t3, &ctx3).unwrap(),
+        PerspectiveEngine::render(&t3, &ctx3).expect("Failed to render template"),
         "A wolf and another wolf arrive. The first wolf howls."
     );
 }
@@ -1078,7 +1078,7 @@ fn test_auto_reflexive_pronoun_upgrade() {
     // But because `target` is the active subject (source = target), it should upgrade to "myself" / "himself".
     let template = cache
         .get_or_compile("{*A:source:subj} [source:hit] {a:target:obj} with {a:source:poss} sword and {a:target:subj} [target:scream]!")
-        .unwrap();
+        .expect("Failed to compile template");
 
     let ctx_actor = RenderContext::new("char_1")
         .with_stance(crate::models::ActorStance::FirstPerson)
@@ -1086,7 +1086,7 @@ fn test_auto_reflexive_pronoun_upgrade() {
         .with_entity("target", &player);
 
     assert_eq!(
-        PerspectiveEngine::render(&template, &ctx_actor).unwrap(),
+        PerspectiveEngine::render(&template, &ctx_actor).expect("Failed to render template"),
         "I hit myself with my sword and I scream!"
     );
 
@@ -1095,7 +1095,7 @@ fn test_auto_reflexive_pronoun_upgrade() {
         .with_entity("target", &player);
 
     assert_eq!(
-        PerspectiveEngine::render(&template, &ctx_director).unwrap(),
+        PerspectiveEngine::render(&template, &ctx_director).expect("Failed to render template"),
         "Aldran hits himself with his sword and he screams!"
     );
 }
@@ -1120,7 +1120,7 @@ fn test_first_person_objective_anaphora_fallback() {
     let cache = TemplateCache::new(100);
     let template = cache
         .get_or_compile("The trap [strike] {a:target:obj}!")
-        .unwrap();
+        .expect("Failed to compile template");
 
     // 1. Viewer is the target -> engine natively resolves to the objective pronoun
     let ctx_viewer = RenderContext::new("char_1")
@@ -1128,7 +1128,7 @@ fn test_first_person_objective_anaphora_fallback() {
         .with_entity("target", &player);
 
     assert_eq!(
-        PerspectiveEngine::render(&template, &ctx_viewer).unwrap(),
+        PerspectiveEngine::render(&template, &ctx_viewer).expect("Failed to render template"),
         "The trap strikes me!"
     );
 
@@ -1138,7 +1138,7 @@ fn test_first_person_objective_anaphora_fallback() {
         .with_entity("target", &goblin);
 
     assert_eq!(
-        PerspectiveEngine::render(&template, &ctx_npc).unwrap(),
+        PerspectiveEngine::render(&template, &ctx_npc).expect("Failed to render template"),
         "The trap strikes a goblin!"
     );
 }
@@ -1170,17 +1170,20 @@ fn test_anaphora_dynamic_entity_mutation() {
     // Introduce the entity to memory
     let t1 = cache
         .get_or_compile("{*A:target:subj} [target:howl].")
-        .unwrap();
+        .expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t1, &ctx).unwrap(),
+        PerspectiveEngine::render(&t1, &ctx).expect("Failed to render template"),
         "A wolf howls."
     );
 
     // Verify it evaluates as a singular pronoun
     let t2 = cache
         .get_or_compile("{A:target:Subj} [target:bite].")
-        .unwrap();
-    assert_eq!(PerspectiveEngine::render(&t2, &ctx).unwrap(), "It bites.");
+        .expect("Failed to compile template");
+    assert_eq!(
+        PerspectiveEngine::render(&t2, &ctx).expect("Failed to render template"),
+        "It bites."
+    );
 
     // 2. Mutate State: Replace the entity with its plural version
     // We do NOT clear the anaphora memory!
@@ -1189,7 +1192,7 @@ fn test_anaphora_dynamic_entity_mutation() {
     // The anaphora memory should refresh the cached grammatical flags (Singular -> Plural)
     // upon the next interaction, dynamically switching the pronoun and verb conjugation!
     assert_eq!(
-        PerspectiveEngine::render(&t2, &ctx_mutated).unwrap(),
+        PerspectiveEngine::render(&t2, &ctx_mutated).expect("Failed to render template"),
         "They bite."
     );
 }
@@ -1220,17 +1223,20 @@ fn test_anaphora_dynamic_epistemological_mutation() {
     // First mention: evaluates to proper noun (suppresses article)
     let t1 = cache
         .get_or_compile("{*a:target:subj} [target:smile].")
-        .unwrap();
+        .expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t1, &ctx).unwrap(),
+        PerspectiveEngine::render(&t1, &ctx).expect("Failed to render template"),
         "Aldran smiles."
     );
 
     // Second mention: uses pronoun
     let t2 = cache
         .get_or_compile("{a:target:Subj} [target:wave].")
-        .unwrap();
-    assert_eq!(PerspectiveEngine::render(&t2, &ctx).unwrap(), "He waves.");
+        .expect("Failed to compile template");
+    assert_eq!(
+        PerspectiveEngine::render(&t2, &ctx).expect("Failed to render template"),
+        "He waves."
+    );
 
     // 2. Mutate State: Don a disguise!
     // We replace the entity with the disguised version, BUT keep the anaphora memory intact.
@@ -1241,9 +1247,9 @@ fn test_anaphora_dynamic_epistemological_mutation() {
     // and it should dynamically query the new live name ("tall man")!
     let t3 = cache
         .get_or_compile("{*a:target:subj} [target:flee].")
-        .unwrap();
+        .expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t3, &ctx_disguised).unwrap(),
+        PerspectiveEngine::render(&t3, &ctx_disguised).expect("Failed to render template"),
         "The tall man flees."
     );
 }

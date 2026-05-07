@@ -154,22 +154,26 @@ fn test_disguised_plural_proper_nouns() {
 
     let template_a = cache
         .get_or_compile("{*a:source:subj} [source:arrive].")
-        .unwrap();
+        .expect("Failed to compile template");
     let template_the = cache
         .get_or_compile("{*the:source:subj} [source:arrive].")
-        .unwrap();
+        .expect("Failed to compile template");
 
     // 1. Friend's perspective (knows they are The Avengers)
-    let out_friend_a = render_msg!("char_2", &template_a, "source" => &avengers).unwrap();
-    let out_friend_the = render_msg!("char_2", &template_the, "source" => &avengers).unwrap();
+    let out_friend_a = render_msg!("char_2", &template_a, "source" => &avengers)
+        .expect("Failed to render template");
+    let out_friend_the = render_msg!("char_2", &template_the, "source" => &avengers)
+        .expect("Failed to render template");
 
     // Suppresses articles natively because they are recognized as a proper noun
     assert_eq!(out_friend_a, "The Avengers arrive.");
     assert_eq!(out_friend_the, "The Avengers arrive.");
 
     // 2. Stranger's perspective (sees "masked heroes")
-    let out_stranger_a = render_msg!("stranger_1", &template_a, "source" => &avengers).unwrap();
-    let out_stranger_the = render_msg!("stranger_1", &template_the, "source" => &avengers).unwrap();
+    let out_stranger_a = render_msg!("stranger_1", &template_a, "source" => &avengers)
+        .expect("Failed to render template");
+    let out_stranger_the = render_msg!("stranger_1", &template_the, "source" => &avengers)
+        .expect("Failed to render template");
 
     // Evaluates as a common plural noun, meaning `{a:source}` maps to "Some", and `{the:source}` maps to "The"
     assert_eq!(out_stranger_a, "Some masked heroes arrive.");
@@ -1036,7 +1040,7 @@ fn test_long_description_mutual_exclusion_fallback() {
         .get_or_compile(
             "{*A:w1:subj} and {*a:w2:subj} arrive. {a:w1:Subj} [w1:growl]. {a:w2:Subj} [w2:bark].",
         )
-        .unwrap();
+        .expect("Failed to compile template");
     let ctx = RenderContext::new("viewer")
         .with_entity("w1", &w1)
         .with_entity("w2", &w2);
@@ -1044,7 +1048,7 @@ fn test_long_description_mutual_exclusion_fallback() {
     // Because w2 vacates the "wolf" namespace to become "large wolf", w1 correctly
     // realizes it is unique, resolving its pronoun fallback to "The wolf" rather than "A wolf"!
     assert_eq!(
-        PerspectiveEngine::render(&t, &ctx).unwrap(),
+        PerspectiveEngine::render(&t, &ctx).expect("Failed to render template"),
         "A wolf and a large wolf arrive. The wolf growls. The large wolf barks."
     );
 }
@@ -1073,7 +1077,7 @@ fn test_long_description_identical_to_unrelated_short() {
     let cache = TemplateCache::new(100);
     let t = cache
         .get_or_compile("{*A:w1:subj}, {*a:d1:subj}, and {*a:w2:subj} arrive.")
-        .unwrap();
+        .expect("Failed to compile template");
     let ctx = RenderContext::new("viewer")
         .with_entity("w1", &w1)
         .with_entity("w2", &w2)
@@ -1083,7 +1087,7 @@ fn test_long_description_identical_to_unrelated_short() {
     // Its short name ("wolf") also causes 1 collision (with w1).
     // Since the long name does not strictly DECREASE collisions (1 is not less than 1), it stays "wolf".
     assert_eq!(
-        PerspectiveEngine::render(&t, &ctx).unwrap(),
+        PerspectiveEngine::render(&t, &ctx).expect("Failed to render template"),
         "A wolf, a dire wolf, and another wolf arrive."
     );
 }
@@ -1106,7 +1110,7 @@ fn test_long_description_identical_long_names() {
     let cache = TemplateCache::new(100);
     let t = cache
         .get_or_compile("{*A:w2:subj} and {*a:w3:subj} arrive.")
-        .unwrap();
+        .expect("Failed to compile template");
     let ctx = RenderContext::new("viewer")
         .with_entity("w2", &w2)
         .with_entity("w3", &w3);
@@ -1114,7 +1118,7 @@ fn test_long_description_identical_long_names() {
     // Both have the same short name (1 collision). Both have the same long name (1 collision).
     // Because 1 is not less than 1, neither uses their long name!
     assert_eq!(
-        PerspectiveEngine::render(&t, &ctx).unwrap(),
+        PerspectiveEngine::render(&t, &ctx).expect("Failed to render template"),
         "A wolf and another wolf arrive."
     );
 }
@@ -1137,7 +1141,7 @@ fn test_long_description_empty_or_same() {
     let cache = TemplateCache::new(100);
     let t = cache
         .get_or_compile("{*A:w1:subj} and {*a:w2:subj} arrive.")
-        .unwrap();
+        .expect("Failed to compile template");
     let ctx = RenderContext::new("viewer")
         .with_entity("w1", &w1)
         .with_entity("w2", &w2);
@@ -1145,7 +1149,7 @@ fn test_long_description_empty_or_same() {
     // w2's long name is exactly the same as its short name. The engine should bypass
     // evaluation entirely and output "another wolf".
     assert_eq!(
-        PerspectiveEngine::render(&t, &ctx).unwrap(),
+        PerspectiveEngine::render(&t, &ctx).expect("Failed to render template"),
         "A wolf and another wolf arrive."
     );
 }
@@ -1331,18 +1335,20 @@ fn test_ordinals_and_resets() {
     // First encounter
     let t1 = cache
         .get_or_compile("{*A:w1:subj} walks in. {*A:w2:subj} walks in. {*The:w1:subj} howls. {*The:w2:subj} grins.")
-        .unwrap();
+        .expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t1, &ctx).unwrap(),
+        PerspectiveEngine::render(&t1, &ctx).expect("Failed to render template"),
         "A wolf walks in. Another wolf walks in. The first wolf howls. The second wolf grins."
     );
 
     // Forget w2. Now only w1 is in the scene. The engine gracefully drops the ordinals for the lone entity!
     ctx.forget_anaphora("w2");
 
-    let t2 = cache.get_or_compile("{*The:w1:subj} sighs.").unwrap();
+    let t2 = cache
+        .get_or_compile("{*The:w1:subj} sighs.")
+        .expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t2, &ctx).unwrap(),
+        PerspectiveEngine::render(&t2, &ctx).expect("Failed to render template"),
         "The wolf sighs."
     );
 
@@ -1383,13 +1389,15 @@ fn test_lookahead_prevents_silent_bob() {
         .with_lookahead(true);
 
     // However, the template ONLY mentions w1.
-    let t = cache.get_or_compile("{*A:w1:subj} howls.").unwrap();
+    let t = cache
+        .get_or_compile("{*A:w1:subj} howls.")
+        .expect("Failed to compile template");
 
     // If the lookahead blindly evaluated the entire context map, it would panic about the invisible w2
     // and inappropriately force w1 to use its long name ("A large wolf howls.").
     // By scoping strictly to the AST Pre-Pass, it safely ignores w2!
     assert_eq!(
-        PerspectiveEngine::render(&t, &ctx).unwrap(),
+        PerspectiveEngine::render(&t, &ctx).expect("Failed to render template"),
         "A wolf howls."
     );
 }

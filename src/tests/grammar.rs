@@ -1778,22 +1778,25 @@ fn test_absolute_possessive_pronouns() {
     let cache = TemplateCache::new(100);
     let template = cache
         .get_or_compile("The victory is {:source:abs_poss}!")
-        .unwrap();
+        .expect("Failed to compile template");
 
-    let out_actor = render_msg!("char_1", &template, "source" => &player).unwrap();
+    let out_actor =
+        render_msg!("char_1", &template, "source" => &player).expect("Failed to render template");
     assert_eq!(out_actor, "The victory is yours!");
 
     // Seed the anaphora memory so it evaluates the pronoun instead of falling back to "Aldran's"
     let ctx_director = RenderContext::new("char_2")
         .with_entity("source", &player)
         .with_last_mentioned("source");
-    let out_director = PerspectiveEngine::render(&template, &ctx_director).unwrap();
+    let out_director =
+        PerspectiveEngine::render(&template, &ctx_director).expect("Failed to render template");
     assert_eq!(out_director, "The victory is his!");
 
     let ctx_plural = RenderContext::new("char_2")
         .with_entity("source", &wolves)
         .with_last_mentioned("source");
-    let out_plural = PerspectiveEngine::render(&template, &ctx_plural).unwrap();
+    let out_plural =
+        PerspectiveEngine::render(&template, &ctx_plural).expect("Failed to render template");
     assert_eq!(out_plural, "The victory is theirs!");
 }
 
@@ -1837,37 +1840,43 @@ fn test_dynamic_possessive_nouns() {
     let cache = TemplateCache::new(100);
     let template = cache
         .get_or_compile("You take {*the:target's:poss} gold.")
-        .unwrap();
+        .expect("Failed to compile template");
 
     // 1. Viewer
-    let out_viewer = render_msg!("char_1", &template, "target" => &player).unwrap();
+    let out_viewer =
+        render_msg!("char_1", &template, "target" => &player).expect("Failed to render template");
     assert_eq!(out_viewer, "You take your gold.");
 
     // 2. Singular Proper Noun
-    let out_proper = render_msg!("char_2", &template, "target" => &player).unwrap();
+    let out_proper =
+        render_msg!("char_2", &template, "target" => &player).expect("Failed to render template");
     assert_eq!(out_proper, "You take Aldran's gold.");
 
     // 3. Plural common noun ending in 's'
-    let out_plural = render_msg!("char_2", &template, "target" => &wolves).unwrap();
+    let out_plural =
+        render_msg!("char_2", &template, "target" => &wolves).expect("Failed to render template");
     assert_eq!(out_plural, "You take the wolves' gold.");
 
     // 4. Singular common noun ending in 's'
-    let out_boss = render_msg!("char_2", &template, "target" => &boss).unwrap();
+    let out_boss =
+        render_msg!("char_2", &template, "target" => &boss).expect("Failed to render template");
     assert_eq!(out_boss, "You take the boss's gold.");
 
     // 5. Group Entities with possessive suffixes
     // English attaches joint possessives to the final noun. The engine natively looks
     // at the end of the formatted list to determine if it should use 's or just '.
     let wolf_party = GroupEntity::new(vec![&player, &wolves]);
-    let out_wolf_party = render_msg!("char_2", &template, "target" => &wolf_party).unwrap();
+    let out_wolf_party = render_msg!("char_2", &template, "target" => &wolf_party)
+        .expect("Failed to render template");
     assert_eq!(out_wolf_party, "You take Aldran and the wolves' gold.");
 
     // 6. Forced Director Stance with Possessive Suffixes
     let template_forced = cache
         .get_or_compile("You take {*a:+target's:poss} gold.")
-        .unwrap();
+        .expect("Failed to compile template");
     // Even though the viewer is char_1 (the player), the + prefix overrides "your" to "Aldran's"
-    let out_forced = render_msg!("char_1", &template_forced, "target" => &player).unwrap();
+    let out_forced = render_msg!("char_1", &template_forced, "target" => &player)
+        .expect("Failed to render template");
     assert_eq!(out_forced, "You take Aldran's gold.");
 }
 

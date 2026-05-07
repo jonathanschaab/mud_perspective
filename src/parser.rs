@@ -27,6 +27,9 @@ pub(crate) const MOD_DROP_POSSESSIVE: char = '@';
 pub(crate) const CTRL_SENTENCE_BREAK: &str = "SB";
 pub(crate) const CTRL_NO_SENTENCE_BREAK: &str = "NO_SB";
 
+/// The default maximum nesting depth for conditionals and boolean expressions to prevent stack overflow.
+pub const DEFAULT_MAX_DEPTH: usize = 64;
+
 /// A segment of a tag that can either be a static literal or a dynamic variable.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TagSegment {
@@ -106,9 +109,9 @@ pub enum Condition {
 }
 
 impl Condition {
-    pub(crate) fn parse(s: &str) -> Result<Self, String> {
+    pub(crate) fn parse(s: &str, max_depth: usize) -> Result<Self, String> {
         let tokens = tokenize_expr(s)?;
-        ExprParser::parse(&tokens)
+        ExprParser::parse(&tokens, max_depth)
     }
 }
 
@@ -248,11 +251,18 @@ fn tokenize_expr(s: &str) -> Result<Vec<ExprToken>, String> {
 struct ExprParser<'a> {
     tokens: &'a [ExprToken],
     pos: usize,
+    depth: usize,
+    max_depth: usize,
 }
 
 impl<'a> ExprParser<'a> {
-    fn parse(tokens: &'a [ExprToken]) -> Result<Condition, String> {
-        let mut parser = Self { tokens, pos: 0 };
+    fn parse(tokens: &'a [ExprToken], max_depth: usize) -> Result<Condition, String> {
+        let mut parser = Self {
+            tokens,
+            pos: 0,
+            depth: 0,
+            max_depth,
+        };
         let expr = parser.parse_or()?;
         if parser.pos < parser.tokens.len() {
             return Err("Unexpected trailing tokens in expression".into());
@@ -269,24 +279,47 @@ impl<'a> ExprParser<'a> {
     }
 
     fn parse_or(&mut self) -> Result<Condition, String> {
+        self.depth += 1;
+        if self.depth > self.max_depth {
+            return Err(format!(
+                "Maximum expression nesting depth of {} exceeded",
+                self.max_depth
+            ));
+        }
         let mut left = self.parse_and()?;
         while let Some(ExprToken::Or) = self.peek() {
             self.consume();
             left = Condition::Or(Box::new(left), Box::new(self.parse_and()?));
         }
+        self.depth -= 1;
         Ok(left)
     }
     fn parse_and(&mut self) -> Result<Condition, String> {
+        self.depth += 1;
+        if self.depth > self.max_depth {
+            return Err(format!(
+                "Maximum expression nesting depth of {} exceeded",
+                self.max_depth
+            ));
+        }
         let mut left = self.parse_comparison()?;
         while let Some(ExprToken::And) = self.peek() {
             self.consume();
             left = Condition::And(Box::new(left), Box::new(self.parse_comparison()?));
         }
+        self.depth -= 1;
         Ok(left)
     }
     fn parse_comparison(&mut self) -> Result<Condition, String> {
+        self.depth += 1;
+        if self.depth > self.max_depth {
+            return Err(format!(
+                "Maximum expression nesting depth of {} exceeded",
+                self.max_depth
+            ));
+        }
         let left_expr = self.parse_unary()?;
-        match self.peek() {
+        let res = match self.peek() {
             Some(
                 op @ (ExprToken::Eq
                 | ExprToken::NotEq
@@ -314,10 +347,19 @@ impl<'a> ExprParser<'a> {
                 })
             }
             _ => Ok(left_expr),
-        }
+        };
+        self.depth -= 1;
+        res
     }
     fn parse_unary(&mut self) -> Result<Condition, String> {
-        if let Some(ExprToken::Not) = self.peek() {
+        self.depth += 1;
+        if self.depth > self.max_depth {
+            return Err(format!(
+                "Maximum expression nesting depth of {} exceeded",
+                self.max_depth
+            ));
+        }
+        let res = if let Some(ExprToken::Not) = self.peek() {
             self.consume();
             Ok(Condition::Not(Box::new(self.parse_unary()?)))
         } else {
@@ -333,7 +375,9 @@ impl<'a> ExprParser<'a> {
                 }
                 _ => Err("Expected expression or value".into()),
             }
-        }
+        };
+        self.depth -= 1;
+        res
     }
 }
 
@@ -454,8 +498,20 @@ impl Template {
     ///
     /// # Errors
     /// Returns a `String` describing the syntax error if the template is malformed.
-    #[allow(clippy::too_many_lines)]
     pub fn compile(raw: &str) -> Result<Self, String> {
+        Self::compile_with_depth(raw, DEFAULT_MAX_DEPTH)
+    }
+
+    /// Compiles a raw text string into a `Template` AST with a specific maximum nesting depth.
+    ///
+    /// # Arguments
+    /// * `raw` - The raw template string containing markup tags.
+    /// * `max_depth` - The maximum allowed nesting depth for conditionals and boolean expressions.
+    ///
+    /// # Errors
+    /// Returns a `String` describing the syntax error if the template is malformed or exceeds the maximum depth.
+    #[allow(clippy::too_many_lines)]
+    pub fn compile_with_depth(raw: &str, max_depth: usize) -> Result<Self, String> {
         enum Frame {
             Root(Vec<Token>),
             If {
@@ -576,14 +632,19 @@ impl Template {
                             let content = raw[next_i + 1..end_idx].trim();
 
                             if let Some(cond_str) = content.strip_prefix("if ") {
-                                let condition = Condition::parse(cond_str)?;
+                                if stack.len() > max_depth {
+                                    return Err(format!(
+                                        "Maximum template nesting depth of {max_depth} exceeded"
+                                    ));
+                                }
+                                let condition = Condition::parse(cond_str, max_depth)?;
                                 stack.push(Frame::If {
                                     condition,
                                     branches: Vec::new(),
                                     current_body: Vec::new(),
                                 });
                             } else if let Some(cond_str) = content.strip_prefix("elif ") {
-                                let condition = Condition::parse(cond_str)?;
+                                let condition = Condition::parse(cond_str, max_depth)?;
                                 let last = stack.last_mut().ok_or_else(|| {
                                     "Unexpected {% elif %} without an open {% if %}".to_string()
                                 })?;
