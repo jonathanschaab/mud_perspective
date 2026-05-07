@@ -8,9 +8,10 @@
     clippy::missing_panics_doc,
     clippy::must_use_candidate,
     clippy::doc_markdown,
-    clippy::unwrap_used,
+    clippy::unreachable,
     clippy::indexing_slicing
 )]
+#![deny(clippy::unwrap_used, clippy::expect_used)]
 #![allow(
     // module_name_repetitions will complain if a struct is named `TemplateCache` inside the `cache` module.
     // It is highly subjective, and usually fine to disable.
@@ -21,14 +22,20 @@
 
 /// Thread-safe caching for compiled templates.
 pub mod cache;
+/// Utilities for testing and debugging templates.
+pub mod debug;
 /// The core AST and template rendering engine.
 pub mod engine;
 /// Grammar rules and NLP helpers for English.
 pub mod grammar;
 /// Core data structures and traits for perspective rendering.
 pub mod models;
+/// Parsing engine and AST representation for templates.
+pub mod parser;
+/// String post-processing and MUD protocol tag management.
+pub mod typography;
 
-/// Renders a perspective-aware message ergonomically by abstracting the context initialization.
+/// Conveniently renders a perspective-aware message by abstracting the context initialization.
 ///
 /// This declarative macro transforms the verbose builder pattern into a clean,
 /// single-line function call, allowing developers to inject entity mappings as
@@ -67,7 +74,7 @@ macro_rules! render_msg {
     }};
 }
 
-/// Ergonomically registers multiple custom irregular verbs into the runtime dictionary at once.
+/// Conveniently registers multiple custom irregular verbs into the runtime dictionary at once.
 ///
 /// This macro is useful during server initialization for injecting a large
 /// number of custom or lore-specific verbs. It silently overwrites any existing

@@ -408,6 +408,30 @@ pub fn capitalize_first(s: &str) -> String {
     }
 }
 
+/// Conditionally pushes a string to an output buffer, capitalizing the first letter if requested.
+#[inline]
+pub(crate) fn push_capitalized_if(output: &mut String, text: &str, should_capitalize: bool) {
+    if should_capitalize && text.chars().next().is_some_and(char::is_lowercase) {
+        let mut c = text.chars();
+        if let Some(f) = c.next() {
+            output.extend(f.to_uppercase());
+            output.push_str(c.as_str());
+        }
+    } else {
+        output.push_str(text);
+    }
+}
+
+/// Conditionally capitalizes the first letter of a `Cow<str>`, returning a new `Cow`.
+#[inline]
+pub(crate) fn capitalize_cow(text: Cow<'_, str>, should_capitalize: bool) -> Cow<'_, str> {
+    if should_capitalize && text.chars().next().is_some_and(char::is_lowercase) {
+        Cow::Owned(capitalize_first(&text))
+    } else {
+        text
+    }
+}
+
 fn is_vowel_before_y(verb: &str) -> bool {
     matches!(verb.chars().rev().nth(1), Some('a' | 'e' | 'i' | 'o' | 'u'))
 }
@@ -629,18 +653,40 @@ pub fn number_to_ordinal_word(n: usize, threshold: usize) -> String {
     parts.join(" ")
 }
 
+bitflags::bitflags! {
+    /// Flags to configure article resolution rules.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct ArticleFlags: u8 {
+        /// The entity is a proper noun (normally suppresses articles).
+        const IS_PROPER_NOUN = 1 << 0;
+        /// The entity is plural (modifies indefinite articles).
+        const IS_PLURAL = 1 << 1;
+        /// The builder explicitly forced the article to render.
+        const FORCE_ARTICLE = 1 << 2;
+        /// The article directly follows a possessive word (normally suppresses articles).
+        const AFTER_POSSESSIVE = 1 << 3;
+        /// Internal flag indicating the article should be capitalized.
+        const IS_CAPITALIZED = 1 << 4;
+    }
+}
+
 #[inline]
 fn apply_ordinal_article(
     base: &str,
     ord: usize,
-    is_capitalized: bool,
-    is_plural: bool,
     collective_noun: Option<&str>,
     current_threshold: usize,
+    flags: ArticleFlags,
 ) -> Cow<'static, str> {
     let ord_word = number_to_ordinal_word(ord, current_threshold);
     let group_word = collective_noun.unwrap_or("set");
-    let prefix = if is_plural {
+    let prefix = if flags.contains(ArticleFlags::AFTER_POSSESSIVE) {
+        if flags.contains(ArticleFlags::IS_PLURAL) {
+            format!("{ord_word} {group_word} of ")
+        } else {
+            format!("{ord_word} ")
+        }
+    } else if flags.contains(ArticleFlags::IS_PLURAL) {
         if base.eq_ignore_ascii_case("some") || base.is_empty() {
             let a_or_an = get_indefinite_article(&ord_word);
             format!("{a_or_an} {ord_word} {group_word} of ")
@@ -662,30 +708,39 @@ fn apply_ordinal_article(
     } else {
         format!("{base} {ord_word} ")
     };
-    Cow::Owned(if is_capitalized {
-        capitalize_first(&prefix)
-    } else {
-        prefix
-    })
+    Cow::Owned(
+        if flags.contains(ArticleFlags::IS_CAPITALIZED)
+            && !flags.contains(ArticleFlags::AFTER_POSSESSIVE)
+        {
+            capitalize_first(&prefix)
+        } else {
+            prefix
+        },
+    )
 }
 
 #[inline]
 fn try_resolve_ordinal_article(
     article: &str,
     ord: usize,
-    is_capitalized: bool,
-    is_plural: bool,
     collective_noun: Option<&str>,
     current_threshold: usize, // Renamed to avoid shadowing
+    flags: ArticleFlags,
 ) -> Option<Cow<'static, str>> {
     let mut base = "";
     let mut applies = true;
 
     if article.eq_ignore_ascii_case("a") || article.eq_ignore_ascii_case("an") {
-        base = if is_plural { "some" } else { "" };
+        base = if flags.contains(ArticleFlags::IS_PLURAL) {
+            "some"
+        } else {
+            ""
+        };
         applies = ord > 2;
     } else if article.eq_ignore_ascii_case("another") {
-        applies = is_plural || ord > 2;
+        applies = flags.contains(ArticleFlags::IS_PLURAL)
+            || ord > 2
+            || flags.contains(ArticleFlags::AFTER_POSSESSIVE);
     } else if article.eq_ignore_ascii_case("the") {
         base = "the";
     } else if article.eq_ignore_ascii_case("this") {
@@ -706,10 +761,9 @@ fn try_resolve_ordinal_article(
         Some(apply_ordinal_article(
             base,
             ord,
-            is_capitalized,
-            is_plural,
             collective_noun,
             current_threshold,
+            flags,
         ))
     } else {
         None
@@ -721,41 +775,46 @@ fn try_resolve_ordinal_article(
 ///
 /// **Note:** The returned string includes a trailing space (e.g., `"The "`, `"a "`) to ensure
 /// correct formatting when appended directly before the entity name.
-#[allow(clippy::too_many_arguments)]
 #[must_use]
 pub fn resolve_article(
     article: &str,
     entity_name: &str,
-    is_proper_noun: bool,
-    is_plural: bool,
-    force_article: bool,
     ordinal: Option<usize>,
     collective_noun: Option<&str>,
     current_threshold: usize, // Renamed to avoid shadowing
+    mut flags: ArticleFlags,
 ) -> Option<Cow<'static, str>> {
     // Suppress articles for proper nouns unless the builder explicitly forced it
-    if is_proper_noun && !force_article {
+    if flags.contains(ArticleFlags::IS_PROPER_NOUN) && !flags.contains(ArticleFlags::FORCE_ARTICLE)
+    {
         return None;
     }
 
-    let is_capitalized = article.starts_with(char::is_uppercase);
+    // If force_article is set, it overrides the after_possessive suppression logic.
+    if flags.contains(ArticleFlags::FORCE_ARTICLE) {
+        flags.remove(ArticleFlags::AFTER_POSSESSIVE);
+    }
+
+    let mut is_capitalized = flags.contains(ArticleFlags::IS_CAPITALIZED);
+    if article.starts_with(char::is_uppercase) {
+        is_capitalized = true;
+        flags.set(ArticleFlags::IS_CAPITALIZED, true);
+    }
 
     // Fast-path for ordinals to avoid duplicating logic across all article types
     if let Some(ord) = ordinal
-        && let Some(resolved) = try_resolve_ordinal_article(
-            article,
-            ord,
-            is_capitalized,
-            is_plural,
-            collective_noun,
-            current_threshold,
-        )
+        && let Some(resolved) =
+            try_resolve_ordinal_article(article, ord, collective_noun, current_threshold, flags)
     {
         return Some(resolved);
     }
 
+    if flags.contains(ArticleFlags::AFTER_POSSESSIVE) {
+        return None;
+    }
+
     if article.eq_ignore_ascii_case("a") || article.eq_ignore_ascii_case("an") {
-        if is_plural {
+        if flags.contains(ArticleFlags::IS_PLURAL) {
             Some(Cow::Borrowed(if is_capitalized {
                 "Some "
             } else {
@@ -772,7 +831,7 @@ pub fn resolve_article(
     } else if article.eq_ignore_ascii_case("the") {
         Some(Cow::Borrowed(if is_capitalized { "The " } else { "the " }))
     } else if article.eq_ignore_ascii_case("this") {
-        if is_plural {
+        if flags.contains(ArticleFlags::IS_PLURAL) {
             Some(Cow::Borrowed(if is_capitalized {
                 "These "
             } else {
@@ -786,7 +845,7 @@ pub fn resolve_article(
             }))
         }
     } else if article.eq_ignore_ascii_case("that") {
-        if is_plural {
+        if flags.contains(ArticleFlags::IS_PLURAL) {
             Some(Cow::Borrowed(if is_capitalized {
                 "Those "
             } else {
@@ -800,7 +859,7 @@ pub fn resolve_article(
             }))
         }
     } else if article.eq_ignore_ascii_case("another") {
-        if is_plural {
+        if flags.contains(ArticleFlags::IS_PLURAL) {
             Some(Cow::Borrowed(if is_capitalized {
                 "Other "
             } else {
@@ -834,18 +893,18 @@ pub fn resolve_article(
 
 /// Formats a list of strings into an Oxford comma-separated string.
 #[must_use]
-pub fn format_oxford_list(mut items: Vec<Cow<'_, str>>) -> Cow<'_, str> {
+pub fn format_oxford_list<'a>(mut items: Vec<Cow<'a, str>>, conjunction: &str) -> Cow<'a, str> {
     match items.len() {
         0 => Cow::Borrowed(""),
         1 => items.pop().unwrap_or_default(),
         2 => {
             let second = items.pop().unwrap_or_default();
             let first = items.pop().unwrap_or_default();
-            Cow::Owned(format!("{first} and {second}"))
+            Cow::Owned(format!("{first} {conjunction} {second}"))
         }
         _ => {
             let last = items.pop().unwrap_or_default();
-            Cow::Owned(format!("{}, and {}", items.join(", "), last))
+            Cow::Owned(format!("{}, {conjunction} {}", items.join(", "), last))
         }
     }
 }

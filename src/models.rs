@@ -1,7 +1,6 @@
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::collections::HashSet;
 
 /// The unique sentinel string used by the engine to temporarily force the Director Stance.
 pub const NULL_VIEWER: &str = "\0__MUD_PERSPECTIVE_NULL_VIEWER__\0";
@@ -26,7 +25,7 @@ static VIEWER_PRONOUNS: phf::Set<&'static str> = phf::phf_set! {
 ///
 /// The `Plural` variant is critical for supporting both literal swarms (e.g., "a pack of wolves")
 /// and singular entities that utilize non-binary they/them pronouns.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
 pub enum Gender {
     /// Male grammatical gender (he/him).
     Male,
@@ -39,7 +38,7 @@ pub enum Gender {
 }
 
 /// The grammatical stance used to refer to the viewing entity.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize)]
 pub enum ActorStance {
     /// Refers to the viewer in the first person ("I", "me", "my").
     FirstPerson,
@@ -51,7 +50,7 @@ pub enum ActorStance {
 }
 
 /// The grammatical tense used to render the template.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize)]
 pub enum Tense {
     /// Renders verbs in the present tense (e.g., "walks").
     #[default]
@@ -123,12 +122,21 @@ pub trait TemplateEntity {
         None
     }
 
+    /// Returns an optional list of adjectives that describe this entity.
+    /// Used by `RenderContext::resolve_target` to allow players to target entities
+    /// using descriptive adjectives (e.g., "large" in "large wolf") without
+    /// treating the adjectives as independent noun aliases.
+    fn adjectives(&self) -> Option<&[&str]> {
+        None
+    }
+
     /// Determines if the entity's current identity is a proper noun.
     ///
     /// If `true`, the rendering engine will automatically suppress indefinite (`a/an`)
-    /// and definite (`the`) articles. This must be perspective-aware to account for
-    /// situations where a stranger sees a common noun ("a tall man") while a friend
-    /// sees a proper noun ("Aldran").
+    /// and definite (`the`) articles. It is also used by the `@` drop-possessive modifier
+    /// to determine if a narrative owner should be dropped (e.g., `"Aldran wields Excalibur"`).
+    /// This must be perspective-aware to account for situations where a stranger sees a
+    /// common noun ("a tall man") while a friend sees a proper noun ("Aldran").
     ///
     /// # Arguments
     /// * `viewer_id` - The unique identifier of the observing entity.
@@ -145,7 +153,7 @@ pub trait TemplateEntity {
 
     /// Retrieves a nested sub-entity or property by name.
     ///
-    /// This enables dot-notation in templates (e.g., `{source.left_arm}`) so that
+    /// This enables dot-notation in templates (e.g., `{source.weapon}` or `{source's @target.weapon}`) so that
     /// body parts, equipped items, or targets can be resolved dynamically and
     /// provide their own names, pronouns, and pluralities.
     #[must_use]
@@ -231,6 +239,8 @@ pub struct RecentEntity {
     pub gender: Gender,
     /// The cached boolean flags for this entity.
     pub flags: RecentEntityFlags,
+    /// Dynamic inline adjectives injected during rendering.
+    pub adjectives: Vec<String>,
 }
 
 /// A snapshot of the engine's anaphora resolution memory.
@@ -337,24 +347,91 @@ impl<'a> RenderContext<'a> {
     pub fn resolve_target(&self, description: &str) -> Vec<TargetMatch<'a>> {
         let (base_desc, sub_element_desc) = parse_target_description(description);
 
-        let matches = self
-            .resolve_pronoun_targets(&base_desc)
-            .unwrap_or_else(|| self.resolve_name_targets(&base_desc));
+        let clean_full_desc_owned = description.to_lowercase().replace('’', "'");
+        let clean_full_desc = clean_full_desc_owned
+            .trim()
+            .trim_end_matches(['.', '!', '?', ',', ';', ':']);
+
+        // 1. Try to resolve the whole description as a flat entity FIRST.
+        // If the user mapped "Aldran's sword" directly to an alias, it will catch it here.
+        let raw_matches = self
+            .resolve_pronoun_targets(clean_full_desc)
+            .unwrap_or_else(|| self.resolve_name_targets(clean_full_desc));
+
+        let mut deep_matches = Vec::new();
+        let mut fallback_matches = Vec::new();
+
+        if let Some(ref path) = sub_element_desc {
+            let base_matches = self
+                .resolve_pronoun_targets(&base_desc)
+                .unwrap_or_else(|| self.resolve_name_targets(&base_desc));
+
+            for (base_key, base_entity) in base_matches {
+                let path_matches = self.resolve_name_targets(path);
+                let mut found_deep = false;
+
+                for (path_key, path_entity) in path_matches {
+                    // Check structural match (e.g., base_key = "source", path_key = "source.weapon")
+                    if path_key.starts_with(&format!("{base_key}.")) {
+                        deep_matches.push((path_key, path_entity));
+                        found_deep = true;
+                    } else {
+                        // Check narrative match via ordinals (e.g., base_key = "g1", path_key = "s2" inside "g1::sword")
+                        let name = path_entity.display_name_for(self.viewer_id);
+                        let ns_key = format!("{base_key}::{name}");
+                        if let Some(state) = self.ordinals.borrow().get(&ns_key)
+                            && state.members.contains_key(&path_key)
+                        {
+                            deep_matches.push((path_key, path_entity));
+                            found_deep = true;
+                        }
+                    }
+                }
+
+                if !found_deep {
+                    fallback_matches.push((base_key, base_entity, path.clone()));
+                }
+            }
+        }
 
         let mut unique_matches = Vec::new();
-        let mut seen = HashSet::new();
-        for (key, entity) in matches {
-            if seen.insert(key.clone()) {
-                let path_uncertain = if let Some(ref path) = sub_element_desc {
-                    resolve_entity_path(entity, path).is_none()
-                } else {
-                    false
-                };
 
+        for (k, e) in raw_matches {
+            if !unique_matches
+                .iter()
+                .any(|m: &TargetMatch| is_same_entity(m.entity, e))
+            {
                 unique_matches.push(TargetMatch {
-                    key,
-                    entity,
-                    path: sub_element_desc.clone(),
+                    key: k,
+                    entity: e,
+                    path: None,
+                    path_uncertain: false,
+                });
+            }
+        }
+        for (k, e) in deep_matches {
+            if !unique_matches
+                .iter()
+                .any(|m: &TargetMatch| is_same_entity(m.entity, e))
+            {
+                unique_matches.push(TargetMatch {
+                    key: k,
+                    entity: e,
+                    path: None,
+                    path_uncertain: false,
+                });
+            }
+        }
+        for (k, e, p) in fallback_matches {
+            if !unique_matches
+                .iter()
+                .any(|m: &TargetMatch| is_same_entity(m.entity, e))
+            {
+                let path_uncertain = resolve_entity_path(e, &p).is_none();
+                unique_matches.push(TargetMatch {
+                    key: k,
+                    entity: e,
+                    path: Some(p),
                     path_uncertain,
                 });
             }
@@ -375,6 +452,20 @@ impl<'a> RenderContext<'a> {
             .collect()
     }
 
+    /// Retrieves an entity by its template key, supporting dot-notation traversal.
+    #[must_use]
+    pub fn get_entity(&self, key: &str) -> Option<&'a dyn TemplateEntity> {
+        if let Some(&entity) = self.entities.get(key) {
+            return Some(entity);
+        }
+        if let Some((root_key, remainder)) = key.split_once(crate::parser::TAG_PROPERTY_SEP)
+            && let Some(&current) = self.entities.get(root_key)
+        {
+            return resolve_entity_path(current, remainder);
+        }
+        None
+    }
+
     fn resolve_pronoun_targets(
         &self,
         base_desc: &str,
@@ -385,7 +476,7 @@ impl<'a> RenderContext<'a> {
 
         let mut matches = Vec::new();
         for recent in self.recent_entities.borrow().iter() {
-            if let Some(&entity) = self.entities.get(recent.key.as_str()) {
+            if let Some(entity) = self.get_entity(recent.key.as_str()) {
                 let is_plural = recent.flags.contains(RecentEntityFlags::IS_PLURAL);
                 let gender = recent.gender;
                 let is_viewer = recent.flags.contains(RecentEntityFlags::IS_VIEWER_NORMAL)
@@ -420,7 +511,7 @@ impl<'a> RenderContext<'a> {
         let clean_desc = strip_articles(base_desc);
         let mut name_matches = Vec::new();
         for recent in self.recent_entities.borrow().iter() {
-            if let Some(&entity) = self.entities.get(recent.key.as_str())
+            if let Some(entity) = self.get_entity(recent.key.as_str())
                 && self.entity_matches_name(&recent.key, entity, clean_desc)
             {
                 name_matches.push((recent.key.clone(), entity));
@@ -443,6 +534,12 @@ impl<'a> RenderContext<'a> {
         entity: &dyn TemplateEntity,
         clean_desc: &str,
     ) -> bool {
+        let recents = self.recent_entities.borrow();
+        let inline_adjectives = recents
+            .iter()
+            .find(|r| r.key == key)
+            .map_or(&[][..], |r| r.adjectives.as_slice());
+
         let short_name = entity.display_name_for(self.viewer_id);
         let short_name_3rd = entity.display_name_for(NULL_VIEWER);
         let long_name = entity.long_display_name_for(self.viewer_id);
@@ -451,23 +548,24 @@ impl<'a> RenderContext<'a> {
         if let Some(ref ln) = long_name {
             names_to_check.push(ln.as_ref());
         }
+        if let Some(aliases) = entity.aliases() {
+            names_to_check.extend(aliases.iter().copied());
+        }
 
         for name in &names_to_check {
-            if eq_ignore_case(clean_desc, strip_articles(name), self.strict_diacritics) {
+            if check_phrase_match(
+                clean_desc,
+                name,
+                entity,
+                inline_adjectives,
+                self.strict_diacritics,
+            ) {
                 return true;
             }
         }
 
-        if let Some(aliases) = entity.aliases() {
-            for alias in aliases {
-                if eq_ignore_case(clean_desc, strip_articles(alias), self.strict_diacritics) {
-                    return true;
-                }
-            }
-        }
-
         for name in &names_to_check {
-            if self.check_ordinals(name, key, clean_desc, entity) {
+            if self.check_ordinals(name, key, clean_desc, entity, inline_adjectives) {
                 return true;
             }
         }
@@ -481,101 +579,107 @@ impl<'a> RenderContext<'a> {
         key: &str,
         clean_desc: &str,
         entity: &dyn TemplateEntity,
+        inline_adjectives: &[String],
     ) -> bool {
-        let ord = if let Some(ord_state) = self.ordinals.borrow().get(name_to_check) {
-            ord_state.members.get(key).copied()
-        } else {
-            None
-        };
+        let mut ords = Vec::new();
+        let suffix = format!("::{name_to_check}");
 
-        // If the entity has no ordinal assigned (e.g. it's the only one present), assume it is the first.
-        let ord = ord.unwrap_or(1);
-
-        let ord_word =
-            crate::grammar::number_to_ordinal_word(ord, self.ordinal_word_threshold).to_lowercase();
-        let ord_str = ord.to_string();
-
-        let clean_name = strip_articles(name_to_check);
-
-        let is_match = |remainder: &str| -> bool {
-            if eq_ignore_case(remainder, clean_name, self.strict_diacritics) {
-                return true;
-            }
-            if let Some(collective) = entity.collective_noun()
-                && starts_with_ignore_case(remainder, collective, self.strict_diacritics)
-                && ends_with_ignore_case(remainder, clean_name, self.strict_diacritics)
+        for (k, state) in self.ordinals.borrow().iter() {
+            if (k == name_to_check || k.ends_with(&suffix))
+                && let Some(&o) = state.members.get(key)
+                && !ords.contains(&o)
             {
-                return true;
-            }
-            false
-        };
-
-        let check_prefix = |variant_len: usize| -> bool {
-            if clean_desc.len() > variant_len
-                && clean_desc.as_bytes().get(variant_len) == Some(&b' ')
-            {
-                let remainder = clean_desc[variant_len + 1..].trim_start();
-                is_match(remainder)
-            } else {
-                false
-            }
-        };
-
-        // 1. Prefix: Ordinal Word
-        if clean_desc.starts_with(&ord_word) && check_prefix(ord_word.len()) {
-            return true;
-        }
-
-        // 2. Prefix: Numeric Ordinal
-        if clean_desc.starts_with(&ord_str) {
-            let after_num = &clean_desc[ord_str.len()..];
-            let has_suffix = after_num.starts_with("th")
-                || after_num.starts_with("st")
-                || after_num.starts_with("nd")
-                || after_num.starts_with("rd");
-
-            if has_suffix && check_prefix(ord_str.len() + 2) {
-                return true;
-            }
-            if check_prefix(ord_str.len()) {
-                return true;
+                ords.push(o);
             }
         }
 
-        let check_postfix = |variant_len: usize| -> bool {
-            if clean_desc.len() > variant_len
-                && clean_desc
-                    .as_bytes()
-                    .get(clean_desc.len() - variant_len - 1)
-                    == Some(&b' ')
-            {
-                let remainder = clean_desc[..clean_desc.len() - variant_len - 1].trim_end();
-                is_match(remainder)
-            } else {
-                false
-            }
-        };
-
-        // 3. Postfix: Ordinal Word
-        if clean_desc.ends_with(&ord_word) && check_postfix(ord_word.len()) {
-            return true;
+        if ords.is_empty() {
+            ords.push(1);
         }
 
-        // 4. Postfix: Numeric Ordinal
-        let has_suffix = clean_desc.ends_with("th")
-            || clean_desc.ends_with("st")
-            || clean_desc.ends_with("nd")
-            || clean_desc.ends_with("rd");
+        for ord in ords {
+            let ord_word = crate::grammar::number_to_ordinal_word(ord, self.ordinal_word_threshold)
+                .to_lowercase();
+            let ord_str = ord.to_string();
 
-        if has_suffix && clean_desc.len() >= 2 + ord_str.len() {
-            let num_end_idx = clean_desc.len() - 2;
-            if clean_desc[..num_end_idx].ends_with(&ord_str) && check_postfix(ord_str.len() + 2) {
+            let is_match = |remainder: &str| -> bool {
+                check_phrase_match(
+                    remainder,
+                    name_to_check,
+                    entity,
+                    inline_adjectives,
+                    self.strict_diacritics,
+                )
+            };
+
+            let check_prefix = |variant_len: usize| -> bool {
+                if clean_desc.len() > variant_len
+                    && clean_desc.as_bytes().get(variant_len) == Some(&b' ')
+                {
+                    let remainder = clean_desc[variant_len + 1..].trim_start();
+                    is_match(remainder)
+                } else {
+                    false
+                }
+            };
+
+            // 1. Prefix: Ordinal Word
+            if clean_desc.starts_with(&ord_word) && check_prefix(ord_word.len()) {
                 return true;
             }
-        }
 
-        if clean_desc.ends_with(&ord_str) && check_postfix(ord_str.len()) {
-            return true;
+            // 2. Prefix: Numeric Ordinal
+            if clean_desc.starts_with(&ord_str) {
+                let after_num = &clean_desc[ord_str.len()..];
+                let has_suffix = after_num.starts_with("th")
+                    || after_num.starts_with("st")
+                    || after_num.starts_with("nd")
+                    || after_num.starts_with("rd");
+
+                if has_suffix && check_prefix(ord_str.len() + 2) {
+                    return true;
+                }
+                if check_prefix(ord_str.len()) {
+                    return true;
+                }
+            }
+
+            let check_postfix = |variant_len: usize| -> bool {
+                if clean_desc.len() > variant_len
+                    && clean_desc
+                        .as_bytes()
+                        .get(clean_desc.len() - variant_len - 1)
+                        == Some(&b' ')
+                {
+                    let remainder = clean_desc[..clean_desc.len() - variant_len - 1].trim_end();
+                    is_match(remainder)
+                } else {
+                    false
+                }
+            };
+
+            // 3. Postfix: Ordinal Word
+            if clean_desc.ends_with(&ord_word) && check_postfix(ord_word.len()) {
+                return true;
+            }
+
+            // 4. Postfix: Numeric Ordinal
+            let has_suffix = clean_desc.ends_with("th")
+                || clean_desc.ends_with("st")
+                || clean_desc.ends_with("nd")
+                || clean_desc.ends_with("rd");
+
+            if has_suffix && clean_desc.len() >= 2 + ord_str.len() {
+                let num_end_idx = clean_desc.len() - 2;
+                if clean_desc[..num_end_idx].ends_with(&ord_str) && check_postfix(ord_str.len() + 2)
+                {
+                    return true;
+                }
+            }
+
+            if clean_desc.ends_with(&ord_str) && check_postfix(ord_str.len()) {
+                return true;
+            }
         }
 
         false
@@ -603,7 +707,7 @@ impl<'a> RenderContext<'a> {
         self
     }
 
-    /// Enables or disables the AST Pre-Pass to perfectly resolve name collisions ahead of time.
+    /// Enables or disables the AST Pre-Pass to resolve name collisions ahead of time.
     /// This is disabled by default to maximize performance, but can be enabled for critical narrative templates.
     #[must_use]
     pub fn with_lookahead(mut self, lookahead: bool) -> Self {
@@ -677,7 +781,18 @@ impl<'a> RenderContext<'a> {
 
             // Refresh position if already present (LRU)
             if let Some(pos) = recents.iter().position(|r| r.key == key) {
-                let item = recents.remove(pos);
+                let mut item = recents.remove(pos);
+                item.gender = entity.gender();
+                item.flags
+                    .set(RecentEntityFlags::IS_PLURAL, entity.is_plural());
+                item.flags.set(
+                    RecentEntityFlags::IS_VIEWER_NORMAL,
+                    entity.contains_viewer(self.viewer_id),
+                );
+                item.flags.set(
+                    RecentEntityFlags::IS_VIEWER_FORCED,
+                    entity.contains_viewer(NULL_VIEWER),
+                );
                 recents.push(item);
             } else {
                 let mut flags = RecentEntityFlags::empty();
@@ -695,6 +810,7 @@ impl<'a> RenderContext<'a> {
                     key: key.to_string(),
                     gender: entity.gender(),
                     flags,
+                    adjectives: Vec::new(),
                 });
             }
 
@@ -760,6 +876,17 @@ impl<'a> RenderContext<'a> {
             if let Some(pos) = recents.iter().position(|r| r.key == key) {
                 let mut item = recents.remove(pos);
                 item.flags |= RecentEntityFlags::IS_PINNED;
+                item.gender = entity.gender();
+                item.flags
+                    .set(RecentEntityFlags::IS_PLURAL, entity.is_plural());
+                item.flags.set(
+                    RecentEntityFlags::IS_VIEWER_NORMAL,
+                    entity.contains_viewer(self.viewer_id),
+                );
+                item.flags.set(
+                    RecentEntityFlags::IS_VIEWER_FORCED,
+                    entity.contains_viewer(NULL_VIEWER),
+                );
                 recents.push(item);
             } else {
                 let mut flags = RecentEntityFlags::IS_PINNED;
@@ -777,6 +904,7 @@ impl<'a> RenderContext<'a> {
                     key: key.to_string(),
                     gender: entity.gender(),
                     flags,
+                    adjectives: Vec::new(),
                 });
             }
             let mut last_mentioned = self.last_mentioned.borrow_mut();
@@ -855,6 +983,20 @@ pub(crate) fn flatten_group<'c>(
     }
 }
 
+/// Compares two `TemplateEntity` trait objects to determine if they point to the same underlying data.
+///
+/// Comparing trait objects directly using `std::ptr::eq` or `std::ptr::addr_eq` is unreliable
+/// because it compares both the data pointer and the vtable pointer. This casts them to `*const ()`
+/// first to strictly compare the data pointer, avoiding false negatives from duplicated vtables.
+#[inline]
+#[must_use]
+pub fn is_same_entity(a: &dyn TemplateEntity, b: &dyn TemplateEntity) -> bool {
+    std::ptr::eq(
+        std::ptr::from_ref(a).cast::<()>(),
+        std::ptr::from_ref(b).cast::<()>(),
+    )
+}
+
 fn strip_articles(mut s: &str) -> &str {
     let prefixes = [
         "the ",
@@ -902,54 +1044,61 @@ fn eq_ignore_case(lower_str: &str, mixed_str: &str, strict: bool) -> bool {
     }
 }
 
-#[inline]
-fn starts_with_ignore_case(lower_str: &str, mixed_prefix: &str, strict: bool) -> bool {
-    if lower_str.is_ascii() && mixed_prefix.is_ascii() {
-        lower_str.len() >= mixed_prefix.len()
-            && lower_str
-                .as_bytes()
-                .get(..mixed_prefix.len())
-                .is_some_and(|b| b.eq_ignore_ascii_case(mixed_prefix.as_bytes()))
-    } else if strict {
-        let mut s_iter = lower_str.chars();
-        for p in mixed_prefix.chars().flat_map(char::to_lowercase) {
-            if Some(p) != s_iter.next() {
-                return false;
-            }
-        }
-        true
-    } else {
-        deunicode::deunicode(lower_str)
-            .to_lowercase()
-            .starts_with(&deunicode::deunicode(mixed_prefix).to_lowercase())
-    }
-}
+fn check_phrase_match(
+    input: &str,
+    target_name: &str,
+    entity: &dyn TemplateEntity,
+    inline_adjectives: &[String],
+    strict_diacritics: bool,
+) -> bool {
+    let rem_words: Vec<&str> = strip_articles(input).split_whitespace().collect();
+    let name_words: Vec<&str> = strip_articles(target_name).split_whitespace().collect();
 
-#[inline]
-fn ends_with_ignore_case(lower_str: &str, mixed_suffix: &str, strict: bool) -> bool {
-    if lower_str.is_ascii() && mixed_suffix.is_ascii() {
-        lower_str.len() >= mixed_suffix.len()
-            && lower_str
-                .as_bytes()
-                .get(lower_str.len() - mixed_suffix.len()..)
-                .is_some_and(|b| b.eq_ignore_ascii_case(mixed_suffix.as_bytes()))
-    } else if strict {
-        let mut s_iter = lower_str.chars().rev();
-        for p in mixed_suffix
-            .chars()
-            .rev()
-            .flat_map(|c| c.to_lowercase().rev())
-        {
-            if Some(p) != s_iter.next() {
-                return false;
-            }
-        }
-        true
-    } else {
-        deunicode::deunicode(lower_str)
-            .to_lowercase()
-            .ends_with(&deunicode::deunicode(mixed_suffix).to_lowercase())
+    if name_words.is_empty() || rem_words.len() < name_words.len() {
+        return false;
     }
+
+    let validate_adjectives = |adj_words: &[&str]| -> bool {
+        adj_words.is_empty() || {
+            let valid_adjs = entity.adjectives().unwrap_or(&[]);
+            adj_words.iter().all(|i_adj| {
+                valid_adjs
+                    .iter()
+                    .any(|v_adj| eq_ignore_case(i_adj, v_adj, strict_diacritics))
+                    || inline_adjectives
+                        .iter()
+                        .any(|v_adj| eq_ignore_case(i_adj, v_adj, strict_diacritics))
+            })
+        }
+    };
+
+    if let Some(col) = entity.collective_noun()
+        && rem_words.len() >= name_words.len() + 2
+    {
+        let (prefix, suffix) = rem_words.split_at(rem_words.len() - name_words.len());
+        if let [adj_words @ .., col_word, of_word] = prefix
+            && eq_ignore_case(col_word, col, strict_diacritics)
+            && eq_ignore_case(of_word, "of", strict_diacritics)
+            && suffix
+                .iter()
+                .zip(name_words.iter())
+                .all(|(a, b)| eq_ignore_case(a, b, strict_diacritics))
+        {
+            return validate_adjectives(adj_words);
+        }
+    }
+
+    let (adj_words, trailing_words) = rem_words.split_at(rem_words.len() - name_words.len());
+    let matches_name = trailing_words
+        .iter()
+        .zip(name_words.iter())
+        .all(|(a, b)| eq_ignore_case(a, b, strict_diacritics));
+
+    if matches_name {
+        return validate_adjectives(adj_words);
+    }
+
+    false
 }
 
 fn parse_target_description(desc: &str) -> (String, Option<String>) {
@@ -971,11 +1120,20 @@ fn parse_target_description(desc: &str) -> (String, Option<String>) {
     }
 
     while !text.is_empty() {
-        let (owner, advance, add_s) = if let Some(idx) = text.find("'s ") {
+        let (owner, advance, add_s) = if let Some(idx) = text
+            .find("'s ")
+            .filter(|&i| i == 0 || text.as_bytes().get(i - 1) != Some(&b' '))
+        {
             (&text[..idx], idx + 3, false)
-        } else if let Some(idx) = text.find("s' ") {
+        } else if let Some(idx) = text
+            .find("s' ")
+            .filter(|&i| i == 0 || text.as_bytes().get(i - 1) != Some(&b' '))
+        {
             (&text[..idx], idx + 3, true)
-        } else if let Some(idx) = text.find("' ") {
+        } else if let Some(idx) = text
+            .find("' ")
+            .filter(|&i| i == 0 || text.as_bytes().get(i - 1) != Some(&b' '))
+        {
             (&text[..idx], idx + 2, false)
         } else {
             (text, text.len(), false)
@@ -1113,7 +1271,7 @@ impl TemplateEntity for GroupEntity<'_> {
             return names.pop().unwrap_or_default();
         }
 
-        crate::grammar::format_oxford_list(names)
+        crate::grammar::format_oxford_list(names, "and")
     }
 
     fn is_proper_noun_for(&self, viewer_id: &str) -> bool {

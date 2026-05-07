@@ -7,7 +7,6 @@ mud\_perspective is a Rust library designed to handle perspective-aware text gen
 The primary goal of this crate is to provide a thread-safe templating system for game servers. Its core objectives include:
 
 * **Stance Shifting:** Automatically transitioning between "Actor Stance" (addressing the viewer in the first/second person) and "Director Stance" (addressing the viewer in the third person).
-
 * **Subject-Verb Agreement:** Conjugating verbs correctly based on the grammatical number and person of the subject.  
 * **Irregular Verb Handling:** Utilizing a static dictionary to safely conjugate common irregular and modal verbs without relying strictly on algorithmic suffixes.  
 * **Epistemological Masking:** Allowing the underlying game logic to obscure entity names (e.g., using disguises or recognition systems) based on the specific observer viewing the text.
@@ -21,68 +20,68 @@ To use the engine, your game objects must implement the TemplateEntity trait. Th
 
 ```rust
 use mud_perspective::models::{TemplateEntity, Gender};
-
 use std::borrow::Cow;
 
 pub struct Character {
+    pub id: String,
+    pub name: String,
+    pub gender: Gender,
+    pub is_plural: bool,
+    pub is_proper_noun: bool,
+    pub equipped_weapon: Option<Weapon>,
+}
 
-pub id: String,
-
-pub name: String,
-
-pub gender: Gender,
-
-pub is_plural: bool,
-
-pub is_proper_noun: bool,
-
+// Assuming Weapon also implements TemplateEntity
+pub struct Weapon {
+    pub name: String,
 }
 
 impl TemplateEntity for Character {
-
-fn contains_viewer(&self, viewer_id: &str) -> bool {
-
-self.id == viewer_id
-
-}
-
-fn gender(&self) -> Gender { self.gender }
-
-fn is_plural(&self) -> bool { self.is_plural }
-
-fn is_proper_noun_for(&self, _viewer_id: &str) -> bool {   
-    self.is_proper_noun   
-}
-
-fn display_name_for<'a>(&'a self, viewer_id: &str) -> Cow<'a, str> {  
-    if self.contains_viewer(viewer_id) {
-        return Cow::Borrowed("you");
+    fn contains_viewer(&self, viewer_id: &str) -> bool {
+        self.id == viewer_id
     }
-    // You can implement disguise logic or recognition checks here  
-    Cow::Borrowed(&self.name)  
-}
 
-// Optional: Provide a more specific name to prevent "another" spam during collisions.
-// fn long_display_name_for<'a>(&'a self, _viewer_id: &str) -> Option<Cow<'a, str>> {
-//     // e.g., Some(Cow::Borrowed("large goblin"))
-//     None
-// }
+    fn gender(&self) -> Gender { self.gender }
 
-// Optional: Provide a collective noun for plural entities to improve ordinal phrasing.
-// fn collective_noun(&self) -> Option<&str> {
-//     if self.name == "wolves" { Some("pack") }
-//     else if self.name == "whales" { Some("pod") }
-//     else { None }
-// }
+    fn is_plural(&self) -> bool { self.is_plural }
 
-// Optional: Expose nested entities like body parts, targets, or equipment
-fn get_property(&self, property_name: &str) -> Option<&dyn TemplateEntity> {
-    match property_name {
-        "weapon" => self.equipped_weapon.as_ref().map(|w| w as &dyn TemplateEntity),
-        _ => None,
+    fn is_proper_noun_for(&self, _viewer_id: &str) -> bool {   
+        self.is_proper_noun   
     }
-}
 
+    fn display_name_for<'a>(&'a self, viewer_id: &str) -> Cow<'a, str> {  
+        if self.contains_viewer(viewer_id) {
+            return Cow::Borrowed("you");
+        }
+        // You can implement disguise logic or recognition checks here  
+        Cow::Borrowed(&self.name)  
+    }
+
+    // Optional: Provide a more specific name to prevent "another" spam during collisions.
+    // fn long_display_name_for<'a>(&'a self, _viewer_id: &str) -> Option<Cow<'a, str>> {
+    //     // e.g., Some(Cow::Borrowed("large goblin"))
+    //     None
+    // }
+
+    // Optional: Provide a collective noun for plural entities to improve ordinal phrasing.
+    // fn collective_noun(&self) -> Option<&str> {
+    //     if self.name == "wolves" { Some("pack") }
+    //     else if self.name == "whales" { Some("pod") }
+    //     else { None }
+    // }
+
+    // Optional: Provide a list of valid adjectives players can use to target this entity.
+    // fn adjectives(&self) -> Option<&[&str]> {
+    //     Some(&["large", "angry"])
+    // }
+
+    // Optional: Expose nested entities like body parts, targets, or equipment
+    fn get_property(&self, property_name: &str) -> Option<&dyn TemplateEntity> {
+        match property_name {
+            "weapon" => self.equipped_weapon.as_ref().map(|w| w as &dyn TemplateEntity),
+            _ => None,
+        }
+    }
 }
 ```
 
@@ -136,12 +135,20 @@ let ctx_third = RenderContext::new("char_1")
 
 ### **2.2 Custom Runtime Verbs**
 
-The engine allows developers to expand its vocabulary at runtime by injecting custom irregular verbs or dialect-specific forms. This allows developers to add new verbs dynamically without modifying the static core map.
+The engine allows developers to expand its vocabulary at runtime by injecting custom irregular verbs or dialect-specific forms. This allows developers to add new verbs dynamically without modifying the static core map. You can add verbs individually, or use the `register_custom_verbs!` macro to seamlessly inject multiple overrides at once (ideal for server initialization).
 
 ```rust
 use mud_perspective::grammar::{add_irregular_verb, remove_irregular_verb, clear_irregular_verbs};
+use mud_perspective::register_custom_verbs;
 
-if let Err(e) = add_irregular_verb("teleport", "teleports") {
+// Conveniently register multiple verbs at once
+register_custom_verbs! {
+    "yeet" => ("yeetses", "yeeted"),
+    "make do" => ("makes do", "made do"),
+};
+
+// Or add them individually
+if let Err(e) = add_irregular_verb("teleport", "teleports", "teleported") {
     eprintln!("Failed to add custom verb: {e}");
 }
 remove_irregular_verb("teleport");
@@ -190,7 +197,7 @@ Developers can extract the anaphora memory state to preserve pronoun continuity 
 use mud_perspective::{engine::PerspectiveEngine, models::RenderContext};
 
 let ctx = RenderContext::new("char_1").with_entity("source", &player).with_entity("target", &goblin);
-let template = cache.get_or_compile("{source} [source:attack] {target}. {target:Subj} [target:retreat].")?;
+let template = cache.get_or_compile("{The:source:subj} [source:attack] {the:target:obj}. {The:target:Subj} [target:retreat].")?;
 
 let output = PerspectiveEngine::render(&template, &ctx)?;
 // Output preserves pronoun continuity for the current evaluation.
@@ -203,6 +210,7 @@ let new_ctx = RenderContext::new("char_1")
     .with_entity("target", &goblin)
     .with_anaphora(state);
 ```
+
 ### **2.6 Omniscient Lookahead & Disambiguation**
 
 By default, the engine evaluates templates left-to-right sequentially, which can cause narrative "pop-in" where entities are introduced as "a goblin" and later upgraded to "another goblin" as more are discovered. For static room descriptions or pre-computed narratives, developers can opt into an AST Pre-Pass by calling `.with_lookahead(true)` on the `RenderContext`. This performs a full scan ahead of time to resolve all collisions and ordinals.
@@ -223,9 +231,16 @@ let output = PerspectiveEngine::render(&template, &ctx)?;
 
 ### **3. Handling Groups and Swarms**
 
-The library provides a built-in `GroupEntity` to represent dynamic groups of characters or objects. It automatically handles Oxford comma formatting, injects "you" if the viewer is in the group, and evaluates as plural so verbs and pronouns automatically conjugate correctly ("attack" instead of "attacks", "themselves", etc.).
+The library provides a built-in `GroupEntity` to represent dynamic groups of characters or objects. It automatically handles Oxford comma formatting, injects "you" if the viewer is in the group, and evaluates as plural (unless the group shrinks to a single member, in which case it dynamically reverts to singular grammar) so verbs and pronouns automatically conjugate correctly.
 
-Furthermore, the engine implements grammatical rules for mixed-person groups. If a group evaluates in the First Person alongside other entities, it decomposes and orders the pronouns (e.g., `"You, the goblin, and I"`). It also distributes joint possessive suffixes across the list if a possessive pronoun is involved (e.g., `"your, the goblin's, and my gold"`), and collapses mixed-group objective pronouns into `"us"`.
+Furthermore, the engine implements grammatical rules for mixed-person groups:
+* **Pronoun Decompounding:** If a group evaluates in the First Person alongside other entities, it decomposes and orders the pronouns (e.g., `"You, the goblin, and I"`). 
+* **Possessive Distribution:** It dynamically distributes joint possessive suffixes across the list if a possessive pronoun is involved (e.g., `"your, the goblin's, and my gold"`). 
+* **Objective Collapsing:** Mixed-group objective pronouns collapse into `"us"`. 
+* **Reflexive Overrides:** If a singular entity acts upon a group containing itself, the engine injects reflexive pronouns natively into the list (e.g., `"I slash the goblin and myself"`).
+* **Nested & Empty Groups:** Group entities can safely contain other `GroupEntity` instances. The engine automatically flattens them into a single cohesive list and completely ignores any empty groups.
+
+You can use the `^` modifier to extract an unspecified member from a group (e.g., `{^party:Subj}`). The engine will evaluate shared genders across the group or fall back to "It", and format the Oxford list using the "or" conjunction (e.g., `"You or Bob arrives"`). Additionally, you can use the `~` modifier (e.g., `{~party:Subj}`) to force the engine to permit an ambiguous "You" to refer to the whole party instead of triggering the engine's ambiguity safeguards.
 
 ```rust
 use mud_perspective::models::GroupEntity;
@@ -240,17 +255,27 @@ let template = cache.get_or_compile("{source} [source:open] the door.")?;
 
 ### **4. Syntax Reference**
 
-* **Entities:** {key} inserts the entity's display name. Use {Key} to force capitalization mid-sentence. Prepend a plus (`{+key}`) to force the engine to render the character's 3rd-person name (Director Stance) even if the viewer is that character.
-* **Nested Properties:** Use dot-notation (e.g., `{source.weapon}`) to dynamically traverse nested entities. The parent entity must implement `get_property`. Nested properties inherit all formatting rules for articles, pronouns, and possessive suffixes.
-* **Possessive Nouns:** Append `'s` or just a trailing apostrophe (`'`) to any entity tag (e.g., `{source's}` or `{wolves'}`) to dynamically generate the correct possessive noun suffix. If the entity is the viewer, it automatically renders as "your" or "my". Plural entities ending in "s" (like "wolves") will correctly render with just an apostrophe ("wolves'"). Group Entities distribute possessives across all members if mixed with a pronoun (e.g., "your and the goblin's"), or append to the final item (e.g., "Aldran and the goblin's").
-* **Articles / Demonstratives:** You can use `a`, `the`, `this`, `that`, `another`, `one`, `one of the`, and `some` in front of any key to automatically append the article. Indefinite articles ("a") automatically adapt to "some" for plural entities, and demonstratives automatically adapt to plural ("these", "those"). Use `{A:key}`, `{The:key}`, etc. to force capitalization mid-sentence. These are automatically suppressed if the entity evaluates to the viewer ("you") or is flagged as a proper noun. You can force an article to render for a proper noun by prepending a plus sign (e.g., `{+this:key}`). You can disable the automatic upgrade of "a" to "the" for previously seen entities by prepending an exclamation mark (e.g., `{!a:key}`).
-  * *Ordinals:* If multiple indistinguishable entities are introduced in the same context, the engine automatically upgrades "another" into ordinals ("a third", "a fourth"). You can reference them explicitly with definite articles (e.g. `{the:w1}` -> "the first wolf", `{the:w2}` -> "the second wolf"). Ordinals are stable, meaning they persist even if other entities leave the room, and reset automatically when the group drops to a single member. By default, ordinals are rendered as words up to 999, after which they switch to integer form ("1000th"). You can configure this threshold using `ctx.with_ordinal_word_threshold(20)`.
-* **Singular Overrides:** Prepend a minus sign (`{-source}`) to force a plural entity to be treated as singular for verbs and pronouns. This is useful when combined with the `one of the` article to target a specific individual in a swarm (e.g., `{One of the:wolves} [-wolves:howl]` -> "One of the wolves howls.").
-* **Pronouns:** {key:type}. Supported types include subj (he/she/it/they), obj (him/her/it/them), poss (his/her/their), abs_poss (his/hers/theirs), and reflex (himself/themselves). Capitalize the type (e.g., {key:Subj}) to force capitalization mid-sentence. Prepend a plus (`{+key:subj}`) to force a 3rd-person pronoun (e.g., he/she/it/they) even if the viewer is the entity. You can force a pronoun to render even if the engine detects it would be ambiguous by prepending an exclamation mark to the type (e.g., `{key:!subj}`). The engine features automatic Anaphora Resolution to prevent pronoun ambiguity (see Section 5).
-
-* **Verbs:** [key:verb] explicitly binds a base verb to a subject to ensure correct conjugation (including "be" -> "is"/"are" in the present tense, "was"/"were" in the past tense, and "will be" in the future tense). All verbs must be written in their base form (e.g. `[source:attack]`, not `[source:attacked]`) so the engine can shift between tenses. Capitalize the verb (e.g., [key:Verb]) to force capitalization mid-sentence. Prepend a plus (`[+key:verb]`) to force 3rd-person conjugation. You can also bypass conjugation across all perspectives by appending a pipe and the desired form (e.g., `[key:be|be]`). You can provide multiple pipe segments to explicitly define the forms for different perspectives: `[key:freak out|freak out|freaks out]` (base/plural and 3rd-person singular) or `[key:be|am|are|is]` (1st-person singular, 2nd-person/plural, and 3rd-person singular). To provide overrides for the past tense, append a semicolon `;` followed by the past tense forms (e.g., `[key:be|am|are|is;was|were|was]`). You can provide *only* past tense overrides by omitting the present tense segment entirely (e.g., `[key:run|;ran]`). If a tense is omitted, the engine will fall back to native automatic conjugation for that tense. Future tense is generated by prepending "will" to the base verb, and ignores all inline overrides. Phrasal verbs (e.g. `[key:pick up]`) are naturally supported; the engine isolates the first word to ensure `"pick up"` conjugates to `"picks up"`.
+* **Entity Tags:** The engine uses a flexible tag syntax that scales from one to four parts: `{article:owner_and_adjectives:target:case}` (e.g., `{the:source.weapon:obj}`). It attempts to evaluate the pronoun case first (outputting "him" or "you"). If the engine detects ambiguity or it's the first mention, it falls back to the noun using your explicitly provided article (outputting "the sword"). Because most segments are optional, a single tag scales from simple noun insertions to complex, context-aware pronouns:
+  * `{key}`: Inserts the entity's display name.
+  * `{key:case}`: Appends a pronoun case, defaulting to an indefinite article ("a") if the engine forces a noun fallback.
+  * `{article:key}`: Prepends a specific article directly to the noun.
+  * `{article:owner's adjectives:target:case}`: Demarcates multi-word target keys from dynamically injected adjectives.
+* **Key:** The core identifier for the entity. 
+  * *Capitalization:* Capitalize the first letter (`{Key}`) to force title-casing mid-sentence. 
+  * *Director Stance:* Prepend a plus (`{+key}` or `{+key:subj}`) to force the engine to render the character's 3rd-person name or pronoun even if the viewer is that character.
+  * *Nested Properties:* Use dot-notation (e.g., `{source.weapon}`) to dynamically traverse nested entities. The parent entity must implement `get_property`. Nested properties inherit all formatting rules for articles, pronouns, and possessive suffixes.
+* **Case:** Supported pronoun cases include `subj` (he/she/it/they), `obj` (him/her/it/them), `poss` (his/her/their), `abs_poss` (his/hers/theirs), and `reflex` (himself/themselves). 
+  * *Capitalization:* Capitalize the first letter (`{key:Subj}`) to force title-casing mid-sentence.
+  * *Forced Pronoun:* Prepend an exclamation mark (`{key:!subj}`) to force the pronoun to render even if the engine detects it would be ambiguous.
+* **ALL CAPS:** Emphasized yelling and dramatic formatting are supported natively. If the tag's elements are written in entirely uppercase letters (e.g., `{THE:TARGET:OBJ}`, `{SOURCE}`, `[TARGET:ATTACK]`), the engine activates ALL CAPS mode. It bypasses standard title-casing and fully uppercases the output, including fallback articles, nouns, possessive suffixes, and conjugated verbs!
+* **Possessive Nouns:** Append `'s` or just a trailing apostrophe (`'`) to any entity tag. This can be used standalone (`{source's}` -> "your" / "Aldran's") or combined with a target (`{source's target}`). When combined with a target, the engine natively bridges the grammatical relationship: it converts the owner to "your" or "my" if it's the viewer, naturally injects adjectives (e.g., `{source's glowing target}`), and suppresses the target's article. If your target key contains spaces, you can explicitly demarcate the adjectives from the target key using an additional colon (`{source's glowing:iron sword}`). Plural entities ending in "s" (like "wolves") will correctly render with just an apostrophe ("wolves' target"). 
+  * *Unique Proper Nouns:* If a named target is truly unique (like Excalibur), you can prepend the `@` modifier (`{source's @target}`) to force the engine to drop the possessive owner entirely, gracefully outputting "Excalibur" instead of "your Excalibur". If the target is a common noun, the `@` is ignored.
+* **Articles / Demonstratives:** You can use `a`, `the`, `this`, `that`, `another`, `one`, `one of the`, and `some` in front of any key to automatically append the article. Indefinite articles ("a") automatically adapt to "some" for plural entities, and demonstratives automatically adapt based on plurality ("this" becomes "these", "that" becomes "those"). Use `{A:key}`, `{The:key}`, etc., to force capitalization mid-sentence. These are automatically suppressed if the entity evaluates to the viewer ("you") or is flagged as a proper noun. You can force an article to render for a proper noun by prepending a plus sign (e.g., `{+this:key}`). You can disable the automatic upgrade of "a" to "the" for previously seen entities by prepending an exclamation mark (e.g., `{!a:key}`).
+  * *Best Practice for Plural Proper Nouns:* To represent factions or bands (e.g., "the Avengers", "the Smiths"), include "the" directly in the entity's base name and flag it as a proper noun. The engine will natively suppress any dynamic articles requested by the template, preventing redundant outputs like "the the Avengers".
+  * *Ordinals:* If multiple indistinguishable entities are introduced in the same context, the engine automatically upgrades "another" into ordinals ("a third", "a fourth"). For indistinguishable plural entities (e.g., multiple groups of wolves), the engine defaults to "a second set of wolves", but this can be customized by implementing `collective_noun()` on the entity to output natural phrasing like "a second pack of wolves". You can reference them explicitly with definite articles (e.g. `{the:w1}` -> "the first wolf", `{the:w2}` -> "the second wolf"). Ordinals are stable, meaning they persist even if other entities leave the room, and reset automatically when the group drops to a single member. By default, ordinals are rendered as words up to 999, after which they switch to integer form ("1000th"). You can configure this threshold using `ctx.with_ordinal_word_threshold(20)`.
+* **Singular Overrides:** Prepend a minus sign (`{-source}`) to force a plural entity to be treated as singular for verbs and pronouns. This is useful when combined with the `one of the` article to target a specific individual in a swarm (e.g., `{One of the:-wolves:Subj} [-wolves:howl]` -> "One of the wolves howls.").
+* **Verbs:** `[key:verb]` explicitly binds a base verb to a subject to ensure correct conjugation (including "be" -> "is"/"are" in the present tense, "was"/"were" in the past tense, and "will be" in the future tense). All verbs must be written in their base form (e.g., `[source:attack]`, not `[source:attacked]`) so the engine can shift between tenses. Capitalize the verb (e.g., `[key:Verb]`) to force title-casing mid-sentence. Fully uppercase it (`[key:VERB]`) to output in ALL CAPS. Prepend a plus (`[+key:verb]`) to force 3rd-person conjugation. You can omit the subject key entirely (e.g., `[loom]`); the engine natively parses this and defaults to a 3rd-person singular conjugation, which is convenient for environmental writing (e.g., `"A shadow [loom]."` -> `"A shadow looms."`). You can also bypass conjugation across all perspectives by appending a pipe and the desired form (e.g., `[key:be|be]`). You can provide multiple pipe segments to explicitly define the forms for different perspectives: `[key:freak out|freak out|freaks out]` (base/plural and 3rd-person singular) or `[key:be|am|are|is]` (1st-person singular, 2nd-person/plural, and 3rd-person singular). To provide overrides for the past tense, append a semicolon `;` followed by the past tense forms (e.g., `[key:be|am|are|is;was|were|was]`). You can provide *only* past tense overrides by omitting the present tense segment entirely (e.g., `[key:run|;ran]`). If a tense is omitted, the engine will fall back to native automatic conjugation for that tense. Future tense is generated by prepending "will" to the base verb, and ignores all inline overrides. Phrasal verbs (e.g., `[key:pick up]`) are naturally supported; the engine isolates the first word to ensure `"pick up"` conjugates to `"picks up"`.
 * **Colliding Verbs:** Some verbs share the same base form but have different past tense conjugations depending on their meaning (e.g., "to lie" -> *lay* vs *lied*). To guarantee the intended meaning when shifting to the past tense, annotate the base verb using parentheses: `[source:lie(lay)]` or `[source:lie(lied)]`. If you use an ambiguous base verb without annotation, the template compiler will emit a warning logging the available options, and default to the first dictionary entry.
-
 * **Escaping:** Use a backslash (`\`) to escape special characters if you need to output literal braces or brackets (e.g., `\{`, `\}`, `\[`, `\]`). You can also escape a backslash itself (`\\`).
 * **Sentence Boundaries:** To handle edge cases where the Unicode sentence segmenter might fail (e.g., with abbreviations), you can manually control capitalization. Use `[SB]` to force a sentence break (capitalizing the next word, e.g., `wait, [SB]what?` -> "Wait, What?"). Use `[NO_SB]` to prevent a sentence boundary from triggering capitalization (e.g., `vs.[NO_SB] the goblin`).
 
@@ -278,10 +303,12 @@ To fix this, annotate the verb as an auxiliary helper: `[source:do(aux)]`.
 
 ### **5. Smart Pronouns & Anaphora Resolution**
 
-The engine features an Anaphora Resolution system. It allows you to write templates almost entirely with pronouns (e.g., `{target:Subj} [target:look] at {target:reflex}.`), and dynamically decides when to introduce the full name ("The goblin looks at itself.") and when to use pronouns ("It looks at itself.").
+The engine features an Anaphora Resolution system. It allows you to write templates almost entirely with Entity Tags containing pronoun cases (e.g., `{target:Subj} [target:look] at {target:reflex}.`), and dynamically decides when to introduce the full name ("The goblin looks at itself.") and when to use pronouns ("It looks at itself.").
 
-* **How it Triggers:** Whenever the engine encounters a pronoun tag, it checks the context's memory. If the entity hasn't been introduced yet, it will expand the pronoun into a fully formatted noun (including definite articles or possessive suffixes, like `the goblin's`).
+* **How it Triggers:** Whenever the engine encounters a pronoun request on an Entity Tag, it checks the context's memory. If the entity hasn't been introduced yet, it will fall back to using the fully formatted noun and inject the requested article. If a possessive pronoun is requested, the engine parses an `'s` added to the key and appends it during the fallback (e.g., `{the:goblin's:poss}` natively evaluates to `"its"`, but dynamically falls back to `"the goblin's"`).
+  * *Standalone Verb Tracking:* Even if an entity is only introduced via a verb tag (e.g., `Bob [bob:attack]`), the engine intercepts the key and injects the entity into the anaphora memory so that subsequent pronouns resolve accurately.
 * **Ambiguity Detection:** In plain terms, the engine behaves like a reader. If a pronoun is requested for an entity that isn't the active subject, the engine evaluates the "cast" of recently mentioned characters. If any other recently mentioned character shares the exact same grammatical gender and plurality (e.g., two male characters in the same sentence), the engine recognizes that outputting "He" would confuse the reader. It falls back to the full name to ensure clarity.
+* **Auto-Reflexive Upgrades:** If a template uses a standard object pronoun (e.g., `{target:obj}`) and the target happens to be the same entity as the active subject, the engine automatically upgrades the pronoun to its reflexive form (e.g., "himself", "itself", "myself"). This means you don't need to write separate templates for self-inflicted actions!
 * **Cross-Context Memory:** The anaphora memory lives inside the `RenderContext`. 
   * **Chaining:** You can render multiple templates in a row using the same context, and the engine will maintain narrative continuity across the templates.
   * **Game Ticks:** If your game loop spans across multiple server ticks or async events, you can extract the full narrative state using `let state = ctx.extract_anaphora()` and inject it into a brand new context later using `RenderContext::new(...).with_anaphora(state)`. This ensures ambiguity detection carries over.
@@ -294,20 +321,38 @@ The engine features an Anaphora Resolution system. It allows you to write templa
   * At the start of a new, unrelated combat round or distinct paragraph.
   * *Why?* If you don't clear the memory between independent events, a template might output "He arrives." instead of "Aldran arrives." just because Aldran was the active subject of a completely unrelated event 5 minutes ago!
 
+#### **Long Display Names & Collision Preemption**
+
+When two entities share the exact same short name (e.g., two entities named "wolf"), the engine automatically checks if either provides a `long_display_name_for` (e.g., "large wolf" or "dire wolf"). If one does, the engine dynamically upgrades the description to disambiguate them before resorting to numbered ordinals (preventing "the first wolf and the second wolf"). 
+
+If you enable the Omniscient Lookahead feature (`ctx.with_lookahead(true)`), the engine will preemptively use the long name on the very first mention. This prevents narrative "pop-in" where an entity is initially introduced as "a wolf" but suddenly upgrades to "the large wolf" sentences later when the second wolf arrives.
+
+#### **Best Practice: Pronoun Tags for Grammatical Case**
+
+Because English nouns do not change form between subjects and objects (e.g., "A goblin attacks" vs "You hit a goblin"), the engine's default noun tags like `{target}` or `{source.minion}` are inherently treated as **nominative (subjective)**. 
+
+If you use a noun tag in the object position of a sentence and that entity evaluates as a First-Person viewer, the engine will output the subjective pronoun "I" instead of "me" (e.g., `"Aldran hits I"`).
+
+**The Solution:** Always use pronoun cases (e.g., `{target:obj}`) to declare the grammatical position of an entity! 
+Instead of writing: `{source} [source:hit] {target}.`
+You should write: `{source} [source:hit] {target:obj}.`
+
+*Why does this work for NPCs?* If the target is an NPC, you might expect `{target:obj}` to output "Aldran hits him." However, because of the Anaphora Resolution system, if it's the *first* time the NPC has been mentioned, the engine intercepts the pronoun and falls back to the full noun with an indefinite article (e.g., "Aldran hits a goblin."). If it's the viewer, it automatically bypasses the fallback and correctly outputs "Aldran hits me."
+
 #### **Example: Multi-Sentence Combat Log**
 
 Using pronouns and active subject tracking allows builders to write multi-sentence descriptions that adapt to any combination of actors.
 
 ```rust
 let template = cache.get_or_compile(
-    "{source} [source:kick] {the:target} in the chest. {target:Subj} [target:stumble] backward, and {source:subj} [source:press] the advantage!"
+    "{A:source:subj} [source:kick] {a:target:obj} in the chest. {The:target:Subj} [target:stumble] backward, and {the:source:subj} [source:press] the advantage!"
 )?;
 
 // If Aldran kicks a goblin (Unambiguous pronouns):
-// "Aldran kicks the goblin in the chest. It stumbles backward, and he presses the advantage!"
+// "Aldran kicks a goblin in the chest. It stumbles backward, and he presses the advantage!"
 
 // If the viewer is Aldran (Actor stance takes over):
-// "You kick the goblin in the chest. It stumbles backward, and you press the advantage!"
+// "You kick a goblin in the chest. It stumbles backward, and you press the advantage!"
 
 // If Bob (Male) kicks Aldran (Male) -> Ambiguity Resolution prevents "He... he...":
 // "Bob kicks Aldran in the chest. Aldran stumbles backward, and Bob presses the advantage!"
@@ -337,8 +382,10 @@ The `TargetMatch` struct contains the matched key, the base entity, the requeste
 
 * **Pronouns:** Evaluates against `recent_entities` (e.g., "him" matches the last male entity).
 * **Ordinals:** Maps words like "second" or postfixes like "wolf 2" to stable ordinals.
-* **Nested Properties:** Parses possessives like "Aldran's sword" into entity + path.
+* **Deep Target Resolution:** The engine naturally understands possessive relationships from player inputs. It maps phrases like "Aldran's sword" or "his glowing sword" back to their underlying narrative tags (`{source's target}`) or structural data properties (`{source.weapon}`). It also automatically tracks isolated namespaces for ordinals, so a command like "look at Aldran's second sword" resolves directly to the exact sub-entity pointer without requiring you to build your own NLP string parser inside your game's `get_property` implementation!
 * **Ambiguity:** Returns multiple matches if an input is vague (e.g., "goblin" might match several).
+* **Adjectives & Aliases:** Players can mix and match articles, adjectives, aliases, and names (e.g., "the large angry boss"). The engine ensures the base name or alias matches exactly, while validating any preceding adjectives against the entity's `adjectives()` list.
+* **Inline Template Adjectives:** If a template dynamically injects an adjective (e.g., `{source's glowing:sword}`), the engine temporarily stores "glowing" in the scene's memory. This allows players to intuitively type "get glowing sword" immediately after reading it, even if "glowing" isn't normally in the item's database state!
 * **Incomplete Possessives:** If a user submits an incomplete possessive (like "take Aldran's"), the engine intentionally returns `0` matches. This prevents the player from targeting the base entity (Aldran himself) and allows your game to respond with "Aldran's what?".
 
 #### TargetMatch & Strict Resolution
@@ -367,6 +414,54 @@ By default, the target resolution engine transliterates accents and diacritics t
 let ctx = RenderContext::new("char_1").with_strict_diacritics(true);
 // "angry wolf" will now fail to match "Ängry Wölf" because the player must type it exactly.
 ```
+
+### **7. Template Debugging**
+
+The crate includes a command-line utility named `mud_template_tester` to help developers debug templates against grammatical permutations. This tool makes it easy to verify template output across different entity roles, stances, and tenses.
+
+#### Interactive Mode
+
+Running `cargo run --bin mud_template_tester` with no arguments opens an interactive console where you can type templates directly, automatically assign new keys to subsets as needed, and use runtime commands to manage the current test bindings.
+
+In interactive mode, the following commands are available:
+
+* `bind <key>=<subset>` — bind a key to a subset.
+* `unbind <key>` — remove a binding.
+* `bindings` — list current bindings.
+* `exit` / `quit` — leave interactive mode.
+
+#### File Mode
+
+You can also run the utility in file mode with `cargo run --bin mud_template_tester -- [input_file] [output_file]` to batch test templates from a file and write the rendered output to another file. This is useful for regression testing or processing many template variations automatically.
+
+#### Command-Line Options
+
+The `mud_template_tester` binary supports the following command-line flags:
+
+* `--entities <json_file>`: Load custom entities from a JSON file instead of using the default set.
+* `--context <json_file>` or `-c`: Evaluate a single specific context rather than iterating through all standard permutations.
+* `--bind <key=subset>` or `-b`: Bind a key to a subset at startup.
+* `--lookahead` or `-l`: Enable the AST pre-pass for omniscient disambiguation (see Section 2.6 for details).
+* `--interactive` or `-i`: Force interactive mode even when input and output file arguments are provided.
+
+#### Custom Entities and Subsets
+
+Evaluating every key against every entity can create exponential noise (for example, "The rusty sword attacks you"). To keep the output manageable, the tester groups entities into combinatorial subsets such as actors and objects.
+
+```json
+{
+  "subsets": {
+    "actors": { "viewer_capable": true },
+    "objects": { "viewer_capable": false }
+  },
+  "entities": [
+    { "name": "Aldran", "subset": "actors", "gender": "male" },
+    { "name": "rusty sword", "subset": "objects", "is_plural": false }
+  ]
+}
+```
+
+*Providing a simple flat JSON array will gracefully fall back to assigning all entities to the default `actors` subset.*
 
 ## **Cargo Features**
 

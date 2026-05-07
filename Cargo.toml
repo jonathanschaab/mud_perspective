@@ -8,6 +8,10 @@ repository = "https://github.com/jonathanschaab/mud_perspective"
 keywords = ["mud", "text-generation", "nlp", "template"]
 categories = ["text-processing", "game-development"]
 
+[[bin]]
+name = "mud_template_tester"
+path = "src/bin/mud_template_tester.rs"
+
 [features]
 default = ["ansi", "mxp", "msp"]
 ansi = []
@@ -22,7 +26,10 @@ in_definite = "1.1.2"
 moka = { version = "0.12", features = ["sync"] }
 phf = { version = "0.13.1", features = ["macros"] }
 tracing = "0.1"
+tracing-subscriber = "0.3"
 unicode-segmentation = "1.13.2"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 
 [dev-dependencies]
 serial_test = "3.1"
