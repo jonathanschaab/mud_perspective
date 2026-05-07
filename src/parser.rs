@@ -51,12 +51,11 @@ impl TagSegment {
             if let Some((key, fallback)) = var.split_once("??") {
                 Self::Variable {
                     key: key.trim().to_lowercase(),
-                    fallback: Some(
+                    fallback: Some(unescape_string(
                         fallback
                             .trim()
-                            .trim_matches(|c| c == '"' || c == '\'')
-                            .to_string(),
-                    ),
+                            .trim_matches(|c| c == '"' || c == '\'' || c == '`'),
+                    )),
                 }
             } else {
                 Self::Variable {
@@ -198,17 +197,65 @@ fn tokenize_expr(s: &str) -> Result<Vec<ExprToken>, String> {
                     return Err(format!("Expected '||' at index {i}"));
                 }
             }
-            '"' | '\'' => {
-                let quote = c;
+            '`' => {
                 chars.next();
                 let mut s = String::new();
                 while let Some(&(_, n)) = chars.peek() {
-                    if n == quote {
+                    if n == '`' {
                         chars.next();
                         break;
                     }
                     s.push(n);
                     chars.next();
+                }
+                tokens.push(ExprToken::Val(ConditionValue::Literal(s)));
+            }
+            '"' | '\'' => {
+                let quote = c;
+                chars.next();
+                let mut s = String::new();
+                while let Some(&(_, n)) = chars.peek() {
+                    if n == '\\' {
+                        chars.next(); // Consume the '\'
+                        if let Some(&(_, escaped_c)) = chars.peek() {
+                            chars.next(); // Consume the escaped character
+                            match escaped_c {
+                                'n' => s.push('\n'),
+                                'r' => s.push('\r'),
+                                't' => s.push('\t'),
+                                'u' => {
+                                    if let Some(&(_, '{')) = chars.peek() {
+                                        chars.next(); // Consume '{'
+                                        let mut hex = String::new();
+                                        while let Some(&(_, hc)) = chars.peek() {
+                                            chars.next();
+                                            if hc == '}' {
+                                                break;
+                                            }
+                                            hex.push(hc);
+                                        }
+                                        if let Ok(code) = u32::from_str_radix(&hex, 16) {
+                                            s.push(
+                                                char::from_u32(code)
+                                                    .unwrap_or(char::REPLACEMENT_CHARACTER),
+                                            );
+                                        } else {
+                                            s.push(char::REPLACEMENT_CHARACTER);
+                                        }
+                                    } else {
+                                        s.push('u');
+                                    }
+                                }
+                                _ => s.push(escaped_c), // handles \", \', and \\ naturally
+                            }
+                        }
+                    } else if n == quote {
+                        chars.next();
+                        break;
+                    } else {
+                        s.push(n);
+                        chars.next();
+                    }
                 }
                 tokens.push(ExprToken::Val(ConditionValue::Literal(s)));
             }
@@ -1245,7 +1292,9 @@ impl Template {
         let (key, fallback) = if let Some((k, f)) = clean.split_once("??") {
             (
                 k.trim(),
-                Some(f.trim().trim_matches(|c| c == '"' || c == '\'').to_string()),
+                Some(unescape_string(
+                    f.trim().trim_matches(|c| c == '"' || c == '\'' || c == '`'),
+                )),
             )
         } else {
             (clean, None)
@@ -1315,7 +1364,9 @@ impl Template {
             if let Some((k, f)) = var_name.split_once("??") {
                 (
                     Some(k.trim().to_string()),
-                    Some(f.trim().trim_matches(|c| c == '"' || c == '\'').to_string()),
+                    Some(unescape_string(
+                        f.trim().trim_matches(|c| c == '"' || c == '\'' || c == '`'),
+                    )),
                 )
             } else {
                 (Some(var_name.trim().to_string()), None)
@@ -1577,8 +1628,17 @@ pub(crate) fn consume_until_closed(
 ) -> Result<usize, String> {
     let mut end_idx = start_idx + 1;
     let mut closed = false;
+    let mut escaped = false;
     while let Some(&(j, ch)) = chars.peek() {
         chars.next();
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' {
+            escaped = true;
+            continue;
+        }
         if ch == close_char {
             end_idx = j;
             closed = true;
@@ -1723,6 +1783,49 @@ pub(crate) fn push_literal(tokens: &mut Vec<Token>, raw: &str, start: usize, end
             tokens.push(Token::Literal(slice.to_string()));
         }
     }
+}
+
+#[inline]
+pub(crate) fn unescape_string(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            if let Some(escaped) = chars.next() {
+                match escaped {
+                    'n' => out.push('\n'),
+                    'r' => out.push('\r'),
+                    't' => out.push('\t'),
+                    'u' => {
+                        if chars.peek() == Some(&'{') {
+                            chars.next(); // Consume '{'
+                            let mut hex = String::new();
+                            while let Some(&hc) = chars.peek() {
+                                chars.next();
+                                if hc == '}' {
+                                    break;
+                                }
+                                hex.push(hc);
+                            }
+                            if let Ok(code) = u32::from_str_radix(&hex, 16) {
+                                out.push(
+                                    char::from_u32(code).unwrap_or(char::REPLACEMENT_CHARACTER),
+                                );
+                            } else {
+                                out.push(char::REPLACEMENT_CHARACTER);
+                            }
+                        } else {
+                            out.push('u');
+                        }
+                    }
+                    _ => out.push(escaped),
+                }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 #[inline]

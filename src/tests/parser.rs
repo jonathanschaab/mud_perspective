@@ -695,3 +695,55 @@ fn test_line_continuation() {
         assert_eq!(l, "Trailing slash\\");
     }
 }
+
+#[test]
+fn test_expression_literal_escapes() {
+    // Test that escaped quotes, newlines, tabs, backslashes, and Unicode blocks
+    // are correctly processed inside string literals within conditional expressions.
+    let raw = r#"{% if $var == "Line 1\nLine 2\t\"Escaped\" \\\u{2764}" %} Match {% endif %}"#;
+    let t = Template::compile(raw).expect("Failed to compile template");
+
+    if let Token::Conditional { branches, .. } = &t.tokens[0] {
+        if let crate::parser::Condition::Eq(_, crate::parser::ConditionValue::Literal(s)) =
+            &branches[0].condition
+        {
+            assert_eq!(s, "Line 1\nLine 2\t\"Escaped\" \\\u{2764}");
+        } else {
+            panic!("Expected Eq condition with literal right side");
+        }
+    } else {
+        panic!("Expected Conditional token");
+    }
+
+    // Test raw string literal with backticks
+    let raw2 = r#"{% if $var == `Raw \n \t "String" \\` %} Match {% endif %}"#;
+    let t2 = Template::compile(raw2).expect("Failed to compile template");
+    if let Token::Conditional { branches, .. } = &t2.tokens[0] {
+        if let crate::parser::Condition::Eq(_, crate::parser::ConditionValue::Literal(s)) =
+            &branches[0].condition
+        {
+            assert_eq!(s, r#"Raw \n \t "String" \\"#);
+        }
+    }
+}
+
+#[test]
+fn test_tag_internal_escapes() {
+    // 1. Escaping closing braces inside a fallback string
+    let raw = r#"{$var ?? "a \} b"}"#;
+    let t = Template::compile(raw).expect("Failed to compile template");
+    if let Token::VariableRef { fallback, .. } = &t.tokens[0] {
+        assert_eq!(fallback.as_deref(), Some("a } b"));
+    } else {
+        panic!("Expected VariableRef");
+    }
+
+    // 2. Unescaping newlines and unicode in fallback strings
+    let raw2 = r#"{$var ?? "Line 1\nLine 2 \u{2728}"}"#;
+    let t2 = Template::compile(raw2).expect("Failed to compile template");
+    if let Token::VariableRef { fallback, .. } = &t2.tokens[0] {
+        assert_eq!(fallback.as_deref(), Some("Line 1\nLine 2 ✨"));
+    } else {
+        panic!("Expected VariableRef");
+    }
+}
