@@ -2352,6 +2352,103 @@ fn test_resolve_target_adjective_partial_disambiguation() {
 }
 
 #[test]
+fn test_resolve_target_inline_adjectives_without_owner() {
+    let sword = MockEntity {
+        id: "item_1".into(),
+        name: "sword".into(),
+        gender: Gender::Neutral,
+        is_plural: false,
+        is_proper_noun: false,
+    };
+
+    let cache = TemplateCache::new(100);
+    let ctx = RenderContext::new("viewer").with_entity("target", &sword);
+
+    // 1. With an article ({A:adjectives:target:case})
+    let t1 = cache
+        .get_or_compile("{*A:glowing:target:obj} [target:hum].")
+        .expect("Failed to compile template");
+    assert_eq!(
+        PerspectiveEngine::render(&t1, &ctx).expect("Failed to render template"),
+        "A glowing sword hums."
+    );
+
+    let m1 = ctx.resolve_target("glowing sword");
+    assert_eq!(m1.len(), 1);
+
+    // 2. Without an article ({adjectives:target})
+    ctx.clear_anaphora();
+    let t2 = cache
+        .get_or_compile("You see a {glowing:target}.")
+        .expect("Failed to compile template");
+    assert_eq!(
+        PerspectiveEngine::render(&t2, &ctx).expect("Failed to render template"),
+        "You see a glowing sword."
+    );
+
+    let m2 = ctx.resolve_target("glowing sword");
+    assert_eq!(m2.len(), 1);
+}
+
+#[test]
+fn test_target_resolution_resolved_name_fast_path() {
+    struct AdjEntity {
+        name: &'static str,
+        adjs: &'static [&'static str],
+    }
+    impl TemplateEntity for AdjEntity {
+        fn contains_viewer(&self, _: &str) -> bool {
+            false
+        }
+        fn gender(&self) -> Gender {
+            Gender::Neutral
+        }
+        fn is_plural(&self) -> bool {
+            false
+        }
+        fn is_proper_noun_for(&self, _: &str) -> bool {
+            false
+        }
+        fn display_name_for<'a>(&'a self, _: &str) -> Cow<'a, str> {
+            Cow::Borrowed(self.name)
+        }
+        fn adjectives(&self) -> Option<&[&str]> {
+            Some(self.adjs)
+        }
+    }
+
+    let w1 = AdjEntity {
+        name: "wolf",
+        adjs: &["tall", "red"],
+    };
+    let w2 = AdjEntity {
+        name: "wolf",
+        adjs: &["brown"],
+    };
+
+    let ctx = RenderContext::new("viewer")
+        .with_entity("w1", &w1)
+        .with_entity("w2", &w2)
+        .with_lookahead(true);
+
+    let cache = TemplateCache::new(100);
+    let t = cache
+        .get_or_compile("{*A:w1:subj} and {*a:w2:subj} arrive.")
+        .expect("Failed to compile template");
+    PerspectiveEngine::render(&t, &ctx).expect("Failed to render template");
+
+    // 1. Sanity check: The fast path should allow exact matches on the generated "red wolf"
+    assert_eq!(ctx.resolve_target("red wolf").len(), 1);
+    assert_eq!(ctx.resolve_target("red wolf")[0].key, "w1");
+
+    // 2. Edge Case: Verify the fast-path noun ("red wolf") safely integrates with leftover
+    //    canonical adjectives ("tall") that were not used during disambiguation!
+    let matches = ctx.resolve_target("tall red wolf");
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0].key, "w1");
+}
+
+#[test]
 fn test_target_cache_invalidation() {
     let goblin = MockEntity {
         id: "mob_1".to_string(),

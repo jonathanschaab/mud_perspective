@@ -207,6 +207,7 @@ pub struct RenderContext<'a> {
     pub anaphora_limit: usize,
     /// The maximum number of adjectives to evaluate when generating combinations for disambiguation.
     /// Capping this prevents exponential O(2^N) blowup if an entity has a large number of adjectives. Defaults to 5.
+    /// The absolute mathematical maximum is 127 to prevent bitshift overflow.
     pub adjective_disambiguation_limit: usize,
     /// If true, automatically clears the anaphora memory at the end of each successful render call.
     /// Defaults to false.
@@ -256,6 +257,8 @@ pub struct RecentEntity {
     pub flags: RecentEntityFlags,
     /// Dynamic inline adjectives injected during rendering.
     pub adjectives: Vec<String>,
+    /// The most recent non-pronoun name or description used for this entity during rendering.
+    pub resolved_name: Option<String>,
 }
 
 /// A snapshot of the engine's anaphora resolution memory.
@@ -272,6 +275,55 @@ pub struct AnaphoraState {
     pub recent_entities: Vec<RecentEntity>,
     /// Tracks the assignment of stable ordinals for display names.
     pub ordinals: HashMap<String, OrdinalState>,
+}
+
+impl AnaphoraState {
+    /// Retrieves the most recent non-pronoun name or description used for the specified entity.
+    /// This allows builders to determine if an entity was described as "red wolf" or "large wolf"
+    /// during disambiguation.
+    #[must_use]
+    pub fn latest_name(&self, key: &str) -> Option<&str> {
+        self.recent_entities
+            .iter()
+            .find(|r| r.key == key)
+            .and_then(|r| r.resolved_name.as_deref())
+    }
+
+    /// Retrieves the most recent ordinal assigned to the specified entity, if any.
+    #[must_use]
+    pub fn current_ordinal(&self, key: &str) -> Option<usize> {
+        for state in self.ordinals.values() {
+            if let Some(&ordinal) = state.members.get(key) {
+                return Some(ordinal);
+            }
+        }
+        None
+    }
+
+    /// Retrieves any inline adjectives that were dynamically injected for this entity via templates.
+    #[must_use]
+    pub fn inline_adjectives(&self, key: &str) -> Option<&[String]> {
+        self.recent_entities
+            .iter()
+            .find(|r| r.key == key)
+            .map(|r| r.adjectives.as_slice())
+    }
+
+    /// Checks if the specified entity is currently tracked in the anaphora memory.
+    /// This is useful for determining if an entity has already been introduced to the scene.
+    #[must_use]
+    pub fn has_seen_entity(&self, key: &str) -> bool {
+        self.recent_entities.iter().any(|r| r.key == key)
+    }
+
+    /// Checks if the specified entity is currently pinned in the anaphora memory.
+    #[must_use]
+    pub fn is_entity_pinned(&self, key: &str) -> bool {
+        self.recent_entities
+            .iter()
+            .find(|r| r.key == key)
+            .is_some_and(|r| r.flags.contains(RecentEntityFlags::IS_PINNED))
+    }
 }
 
 /// Represents a matched entity and an optional sub-element path requested by the user.
@@ -465,6 +517,56 @@ impl<'a> RenderContext<'a> {
         unique_matches
     }
 
+    /// Retrieves the most recent non-pronoun name or description used for the specified entity.
+    /// This allows builders to determine if an entity was described as "red wolf" or "large wolf"
+    /// during disambiguation.
+    #[must_use]
+    pub fn latest_name(&self, key: &str) -> Option<String> {
+        self.recent_entities
+            .borrow()
+            .iter()
+            .find(|r| r.key == key)
+            .and_then(|r| r.resolved_name.clone())
+    }
+
+    /// Retrieves the most recent ordinal assigned to the specified entity, if any.
+    #[must_use]
+    pub fn current_ordinal(&self, key: &str) -> Option<usize> {
+        for state in self.ordinals.borrow().values() {
+            if let Some(&ordinal) = state.members.get(key) {
+                return Some(ordinal);
+            }
+        }
+        None
+    }
+
+    /// Retrieves any inline adjectives that were dynamically injected for this entity via templates.
+    #[must_use]
+    pub fn inline_adjectives(&self, key: &str) -> Option<Vec<String>> {
+        self.recent_entities
+            .borrow()
+            .iter()
+            .find(|r| r.key == key)
+            .map(|r| r.adjectives.clone())
+    }
+
+    /// Checks if the specified entity is currently tracked in the anaphora memory.
+    /// This is useful for determining if an entity has already been introduced to the scene.
+    #[must_use]
+    pub fn has_seen_entity(&self, key: &str) -> bool {
+        self.recent_entities.borrow().iter().any(|r| r.key == key)
+    }
+
+    /// Checks if the specified entity is currently pinned in the anaphora memory.
+    #[must_use]
+    pub fn is_entity_pinned(&self, key: &str) -> bool {
+        self.recent_entities
+            .borrow()
+            .iter()
+            .find(|r| r.key == key)
+            .is_some_and(|r| r.flags.contains(RecentEntityFlags::IS_PINNED))
+    }
+
     /// Resolves a natural language description to the corresponding entities in the current context,
     /// strictly filtering out any matches where the requested sub-element path cannot be confirmed.
     ///
@@ -560,16 +662,25 @@ impl<'a> RenderContext<'a> {
         clean_desc: &str,
     ) -> bool {
         let recents = self.recent_entities.borrow();
-        let inline_adjectives = recents
-            .iter()
-            .find(|r| r.key == key)
-            .map_or(&[][..], |r| r.adjectives.as_slice());
+        let recent_entity = recents.iter().find(|r| r.key == key);
+        let inline_adjectives = recent_entity.map_or(&[][..], |r| r.adjectives.as_slice());
 
         let short_name = entity.display_name_for(self.viewer_id);
         let short_name_3rd = entity.display_name_for(NULL_VIEWER);
         let long_name = entity.long_display_name_for(self.viewer_id);
 
         let mut names_to_check = vec![short_name.as_ref(), short_name_3rd.as_ref()];
+
+        // FAST PATH: Check the exact rendered name (which includes disambiguated adjectives)
+        // to bypass the adjective validation loop entirely!
+        if let Some(r) = recent_entity
+            && let Some(ref rn) = r.resolved_name
+            && rn != short_name.as_ref()
+            && rn != short_name_3rd.as_ref()
+        {
+            names_to_check.push(rn.as_ref());
+        }
+
         if let Some(ref ln) = long_name {
             names_to_check.push(ln.as_ref());
         }
@@ -794,9 +905,24 @@ impl<'a> RenderContext<'a> {
     }
 
     /// Configures the maximum number of adjectives to evaluate for disambiguation combinations.
+    ///
+    /// The absolute maximum allowed value is 127 to prevent integer overflow during the
+    /// combinatorial search. If a larger value is provided, it will be clamped to 127
+    /// and a warning will be logged.
     #[must_use]
     pub fn with_adjective_disambiguation_limit(mut self, limit: usize) -> Self {
-        self.adjective_disambiguation_limit = limit;
+        let max_limit = (u128::BITS - 1) as usize;
+        if limit > max_limit {
+            tracing::warn!(
+                "Adjective disambiguation limit {} exceeds the maximum supported value of {}. Clamping to {}.",
+                limit,
+                max_limit,
+                max_limit
+            );
+            self.adjective_disambiguation_limit = max_limit;
+        } else {
+            self.adjective_disambiguation_limit = limit;
+        }
         self
     }
 
@@ -880,6 +1006,7 @@ impl<'a> RenderContext<'a> {
                     gender: entity.gender(),
                     flags,
                     adjectives: Vec::new(),
+                    resolved_name: None,
                 });
             }
 
@@ -927,6 +1054,15 @@ impl<'a> RenderContext<'a> {
     #[must_use]
     pub fn last_mentioned(&self) -> Option<String> {
         self.last_mentioned.borrow().clone()
+    }
+
+    /// Retrieves the key of the active grammatical subject in the current clause.
+    ///
+    /// This is automatically updated by the engine whenever a verb tag is processed
+    /// and represents the entity currently driving the narrative action.
+    #[must_use]
+    pub fn active_subject(&self) -> Option<String> {
+        self.active_subject.borrow().clone()
     }
 
     /// Clears the anaphora resolution memory, treating all subsequent entities as newly introduced.
@@ -977,6 +1113,7 @@ impl<'a> RenderContext<'a> {
                     gender: entity.gender(),
                     flags,
                     adjectives: Vec::new(),
+                    resolved_name: None,
                 });
             }
             let mut last_mentioned = self.last_mentioned.borrow_mut();
@@ -1149,10 +1286,10 @@ fn check_phrase_match(
             let valid_adjs = entity.adjectives().unwrap_or(&[]);
             let synonym_adjs = entity.adjective_synonyms().unwrap_or(&[]);
             adj_words.iter().all(|i_adj| {
-                valid_adjs
+                inline_adjectives
                     .iter()
                     .any(|v_adj| eq_ignore_case(i_adj, v_adj, strict_diacritics))
-                    || inline_adjectives
+                    || valid_adjs
                         .iter()
                         .any(|v_adj| eq_ignore_case(i_adj, v_adj, strict_diacritics))
                     || synonym_adjs

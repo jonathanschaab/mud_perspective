@@ -264,6 +264,7 @@ let template = cache.get_or_compile("{source} [source:open] the door.")?;
   * `{key}`: Inserts the entity's display name.
   * `{key:case}`: Appends a pronoun case, defaulting to an indefinite article ("a") if the engine forces a noun fallback.
   * `{article:key}`: Prepends a specific article directly to the noun.
+  * `{article:adjectives:key:case}`: You can inject adjectives directly into the tag using the colon separator (e.g., `{A:glowing:sword}` or `{glowing:sword:obj}`). The engine automatically tracks these adjectives for target resolution.
   * `{article:owner's adjectives:target:case}`: Demarcates multi-word target keys from dynamically injected adjectives.
 * **Key:** The core identifier for the entity. 
   * *Capitalization:* Capitalize the first letter (`{Key}`) to force title-casing mid-sentence. 
@@ -318,8 +319,9 @@ The engine features an Anaphora Resolution system. It allows you to write templa
   * **Chaining:** You can render multiple templates in a row using the same context, and the engine will maintain narrative continuity across the templates.
   * **Game Ticks:** If your game loop spans across multiple server ticks or async events, you can extract the full narrative state using `let state = ctx.extract_anaphora()` and inject it into a brand new context later using `RenderContext::new(...).with_anaphora(state)`. This ensures ambiguity detection carries over.
 * **Memory Limits (LRU):** To prevent memory from growing unbounded during extremely long, continuous encounters, the anaphora memory acts as a Least-Recently-Used (LRU) cache defaulting to 15 entities. You can configure this limit using `ctx.with_anaphora_limit(size)`.
-* **Pinning & Manual Control:** In crowded scenarios, important characters might get pushed out of the LRU cache by a flurry of secondary actors. Protect them by pinning them into memory using `ctx.with_pinned_entity("key")` or `ctx.pin_anaphora("key")`. You can unpin them using `ctx.unpin_anaphora("key")`. You can also explicitly remove entities using `ctx.without_anaphora("key")` or `ctx.forget_anaphora("key")`.
+* **Pinning & Manual Control:** In crowded scenarios, important characters might get pushed out of the LRU cache by a flurry of secondary actors. Protect them by pinning them into memory using `ctx.with_pinned_entity("key")` or `ctx.pin_anaphora("key")`. You can check if an entity is currently pinned using `ctx.is_entity_pinned("key")`. You can unpin them using `ctx.unpin_anaphora("key")`. You can also explicitly remove entities using `ctx.without_anaphora("key")` or `ctx.forget_anaphora("key")`.
 * **Forcing Behaviors:** If you explicitly want to suppress the engine's anaphoric article upgrades or pronoun ambiguity fallbacks, you can use the `!` prefix modifier. Writing `{!a:source}` prevents "a" from upgrading to "the". Writing `{source:!subj}` forces the engine to output the pronoun even if it detects an ambiguous collision in the current memory.
+* **Querying Rendered State:** The engine tracks exactly how it described an entity to the viewer. You can check if an entity has been introduced to the scene using `ctx.has_seen_entity("key")`. You can retrieve the exact non-pronoun description (including dynamically injected adjectives or ordinals) using `ctx.latest_name("key")`. You can query the most recently assigned integer ordinal using `ctx.current_ordinal("key")` (useful for displaying numeric `[2]` badges in UIs), and retrieve any dynamically injected template adjectives using `ctx.inline_adjectives("key")`. You can also check the current grammatical focus using `ctx.active_subject()`. All of this data is preserved when extracting the `AnaphoraState`.
 * **Resetting Memory:** To manually clear the engine's memory, call `ctx.clear_anaphora()`. You should do this whenever narrative continuity is broken to prevent lingering pronoun references. Good times to call this include:
   * When a player moves to a new room or area.
   * When a significant amount of time passes between events.
@@ -337,7 +339,7 @@ If you enable the Omniscient Lookahead feature (`ctx.with_lookahead(true)`), the
 
 As a final step before falling back to ordinals, the engine will attempt to disambiguate entities by prepending a unique set of adjectives from the `adjectives()` method. For example, if a "large red wolf" and a "large brown wolf" are in the same scene, the engine will recognize that "large" is not a unique descriptor, but "red" and "brown" are. It will automatically render them as "a red wolf" and "a brown wolf" instead of "the first wolf" and "the second wolf".
 
-To prevent exponential evaluation time on entities with many adjectives, the engine restricts its search combinations to the first 5 adjectives returned by the entity. This limit can be adjusted using `ctx.with_adjective_disambiguation_limit(size)`.
+To prevent exponential evaluation time on entities with many adjectives, the engine restricts its search combinations to the first 5 adjectives returned by the entity. This limit can be adjusted using `ctx.with_adjective_disambiguation_limit(size)`. The absolute maximum allowed size is 127 to prevent mathematical overflow.
 
 #### **Best Practice: Pronoun Tags for Grammatical Case**
 

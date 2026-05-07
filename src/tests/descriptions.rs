@@ -890,11 +890,11 @@ fn test_adjective_disambiguation_limit() {
     };
     let w2 = AdjEntity {
         name: "wolf",
-        adjs: &["large", "red", "fluffy"],
+        adjs: &["large", "red", "feral", "fluffy"],
     };
     let w3 = AdjEntity {
         name: "wolf",
-        adjs: &["large", "red", "angry"],
+        adjs: &["large", "red", "feral", "angry"],
     };
 
     let cache = TemplateCache::new(100);
@@ -902,30 +902,29 @@ fn test_adjective_disambiguation_limit() {
         .get_or_compile("{*A:w1:subj}, {*a:w2:subj}, and {*a:w3:subj} arrive.")
         .expect("Failed to compile template");
 
-    // 1. With limit = 2
-    // All three wolves only evaluate combinations from `["large", "red"]`.
-    // Since they all share these two adjectives, they provide no disambiguation value,
-    // so they are dropped entirely, falling back to base names with ordinals.
-    let ctx_limit_2 = RenderContext::new("viewer")
+    // 1. With limit = 1
+    // "large" and "red" are shared by ALL wolves, so they are dropped completely and don't count towards the limit!
+    // w2 and w3 then evaluate their next adjective ("feral").
+    // Because limit = 1, they stop there. Since both share "feral", they collide and get ordinals.
+    let ctx_limit_1 = RenderContext::new("viewer")
         .with_entity("w1", &w1)
         .with_entity("w2", &w2)
         .with_entity("w3", &w3)
         .with_lookahead(true)
-        .with_adjective_disambiguation_limit(2)
+        .with_adjective_disambiguation_limit(1)
         .with_auto_clear(true);
 
     assert_eq!(
-        PerspectiveEngine::render(&t1, &ctx_limit_2).expect("Failed to render template"),
-        "A wolf, another wolf, and a third wolf arrive."
+        PerspectiveEngine::render(&t1, &ctx_limit_1).expect("Failed to render template"),
+        "A wolf, a feral wolf, and another feral wolf arrive."
     );
 
-    // 2. With limit = 3
-    // w2 and w3 can now evaluate their 3rd adjectives ("fluffy" and "angry"), which are unique!
-    // Because they vacate the collision group, w1 is left as the only "wolf".
-    let ctx_limit_3 = ctx_limit_2.with_adjective_disambiguation_limit(3);
+    // 2. With limit = 2
+    // w2 and w3 can now evaluate their next adjectives ("fluffy" and "angry"), which are unique!
+    let ctx_limit_2 = ctx_limit_1.with_adjective_disambiguation_limit(2);
 
     assert_eq!(
-        PerspectiveEngine::render(&t1, &ctx_limit_3).expect("Failed to render template"),
+        PerspectiveEngine::render(&t1, &ctx_limit_2).expect("Failed to render template"),
         "A wolf, a fluffy wolf, and an angry wolf arrive."
     );
 
@@ -949,12 +948,71 @@ fn test_adjective_disambiguation_limit() {
         .expect("Failed to compile template");
 
     // w4 evaluates `fluffy` and `white`.
-    // Even though w5's limit is 2 (so it only searches `large` and `black` for itself),
-    // w4 checking w5 for uniqueness correctly sees w5's 3rd adjective `fluffy`.
-    // Thus, w4 realizes `fluffy` is not unique, and correctly chooses `white`!
+    // Because `fluffy` is shared by all colliders (w5), it is dropped before the limit is enforced!
+    // w4 then safely evaluates `white` and succeeds, proving that it can see w5's 3rd adjective
+    // during the shared-filtering pass, even though w5's own limit is 2.
     assert_eq!(
         PerspectiveEngine::render(&t2, &ctx_check_all).expect("Failed to render template"),
         "A white wolf and a large wolf stare."
+    );
+}
+
+#[test]
+fn test_adjective_disambiguation_limit_clamping() {
+    struct AdjEntity {
+        name: &'static str,
+        adjs: &'static [&'static str],
+    }
+    impl TemplateEntity for AdjEntity {
+        fn contains_viewer(&self, _: &str) -> bool {
+            false
+        }
+        fn gender(&self) -> Gender {
+            Gender::Neutral
+        }
+        fn is_plural(&self) -> bool {
+            false
+        }
+        fn is_proper_noun_for(&self, _: &str) -> bool {
+            false
+        }
+        fn display_name_for<'a>(&'a self, _: &str) -> Cow<'a, str> {
+            Cow::Borrowed(self.name)
+        }
+        fn adjectives(&self) -> Option<&[&str]> {
+            Some(self.adjs)
+        }
+    }
+
+    let w1 = AdjEntity {
+        name: "wolf",
+        adjs: &["large", "red"],
+    };
+    let w2 = AdjEntity {
+        name: "wolf",
+        adjs: &["large", "brown"],
+    };
+
+    // 1. Verify clamping to 127 prevents overflow
+    let ctx_clamped = RenderContext::new("viewer").with_adjective_disambiguation_limit(200);
+    assert_eq!(ctx_clamped.adjective_disambiguation_limit, 127);
+
+    // 2. Verify setting the limit to 0 safely completely disables adjective disambiguation
+    // and falls back natively to ordinals.
+    let cache = TemplateCache::new(100);
+    let t = cache
+        .get_or_compile("{*A:w1:subj} and {*a:w2:subj} arrive.")
+        .expect("Failed to compile template");
+
+    let ctx_zero = RenderContext::new("viewer")
+        .with_entity("w1", &w1)
+        .with_entity("w2", &w2)
+        .with_lookahead(true)
+        .with_adjective_disambiguation_limit(0);
+
+    assert_eq!(
+        PerspectiveEngine::render(&t, &ctx_zero).expect("Failed to render template"),
+        "A wolf and another wolf arrive."
     );
 }
 
@@ -1540,5 +1598,128 @@ fn test_no_smart_modifier_bypasses_ordinals() {
     assert_eq!(
         PerspectiveEngine::render(&t2, &ctx).expect("Failed to render template"),
         "The wolf howls."
+    );
+}
+
+#[test]
+fn test_latest_name_tracking() {
+    let wolf1 = MockEntity {
+        id: "mob_1".into(),
+        name: "wolf".into(),
+        gender: Gender::Neutral,
+        is_plural: false,
+        is_proper_noun: false,
+    };
+    let wolf2 = ConfigurableMockEntity {
+        id: "mob_2".into(),
+        name: "wolf".into(),
+        long_name: Some("large wolf".into()),
+        gender: Gender::Neutral,
+    };
+
+    let cache = TemplateCache::new(100);
+    let ctx = RenderContext::new("viewer")
+        .with_entity("w1", &wolf1)
+        .with_entity("w2", &wolf2);
+
+    let t = cache
+        .get_or_compile("{*A:w1:subj} and {*a:w2:subj} arrive. {a:w1:Subj} [w1:howl].")
+        .expect("Failed to compile template");
+    PerspectiveEngine::render(&t, &ctx).expect("Failed to render template");
+
+    // Ensure the tracked latest name matches the fully disambiguated string, and survives pronoun mentions.
+    assert_eq!(ctx.latest_name("w1").as_deref(), Some("wolf"));
+    assert_eq!(ctx.latest_name("w2").as_deref(), Some("large wolf"));
+
+    let state = ctx.extract_anaphora();
+    assert_eq!(state.latest_name("w1"), Some("wolf"));
+    assert_eq!(state.latest_name("w2"), Some("large wolf"));
+    assert_eq!(state.latest_name("missing"), None);
+}
+
+#[test]
+fn test_latest_name_eviction() {
+    let wolf = MockEntity {
+        id: "mob_1".into(),
+        name: "wolf".into(),
+        gender: Gender::Neutral,
+        is_plural: false,
+        is_proper_noun: false,
+    };
+    let orc = MockEntity {
+        id: "mob_2".into(),
+        name: "orc".into(),
+        gender: Gender::Neutral,
+        is_plural: false,
+        is_proper_noun: false,
+    };
+
+    let cache = TemplateCache::new(100);
+    let ctx = RenderContext::new("viewer")
+        .with_anaphora_limit(1) // Strict limit of 1
+        .with_entity("wolf", &wolf)
+        .with_entity("orc", &orc);
+
+    let t1 = cache
+        .get_or_compile("{*A:wolf:subj} enters.")
+        .expect("Failed to compile template");
+    PerspectiveEngine::render(&t1, &ctx).expect("Failed to render template");
+    assert_eq!(ctx.latest_name("wolf").as_deref(), Some("wolf"));
+
+    // Enter the orc. Because the limit is 1, the wolf gets evicted from memory.
+    let t2 = cache
+        .get_or_compile("{*An:orc:subj} enters.")
+        .expect("Failed to compile template");
+    PerspectiveEngine::render(&t2, &ctx).expect("Failed to render template");
+
+    // Verify that the tracked latest name is wiped along with the anaphora memory.
+    assert_eq!(ctx.latest_name("wolf"), None);
+    assert_eq!(ctx.latest_name("orc").as_deref(), Some("orc"));
+}
+
+#[test]
+fn test_state_tracking_ordinals_and_adjectives() {
+    let wolf1 = MockEntity {
+        id: "w1".into(),
+        name: "wolf".into(),
+        gender: Gender::Neutral,
+        is_plural: false,
+        is_proper_noun: false,
+    };
+    let wolf2 = MockEntity {
+        id: "w2".into(),
+        name: "wolf".into(),
+        gender: Gender::Neutral,
+        is_plural: false,
+        is_proper_noun: false,
+    };
+
+    let cache = TemplateCache::new(100);
+    let ctx = RenderContext::new("viewer")
+        .with_entity("w1", &wolf1)
+        .with_entity("w2", &wolf2)
+        .with_lookahead(true);
+
+    // Introduce an inline adjective and trigger ordinals
+    let t = cache
+        .get_or_compile("{*A:w1:subj} and {*A:angry:w2:subj} arrive.")
+        .expect("Failed to compile template");
+    PerspectiveEngine::render(&t, &ctx).expect("Failed to render template");
+
+    // 1. Verify `current_ordinal`
+    assert_eq!(ctx.current_ordinal("w1"), Some(1));
+    assert_eq!(ctx.current_ordinal("w2"), Some(2));
+    assert_eq!(ctx.current_ordinal("missing"), None);
+
+    // 2. Verify `inline_adjectives`
+    assert_eq!(ctx.inline_adjectives("w1"), Some(vec![]));
+    assert_eq!(ctx.inline_adjectives("w2"), Some(vec!["angry".to_string()]));
+
+    // 3. Verify it persists into the extracted `AnaphoraState`
+    let state = ctx.extract_anaphora();
+    assert_eq!(state.current_ordinal("w2"), Some(2));
+    assert_eq!(
+        state.inline_adjectives("w2"),
+        Some(&["angry".to_string()][..])
     );
 }

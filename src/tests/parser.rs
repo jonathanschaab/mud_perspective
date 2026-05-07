@@ -2,6 +2,7 @@ use super::common::MockEntity;
 use crate::cache::TemplateCache;
 use crate::engine::{PerspectiveEngine, Template};
 use crate::models::{Gender, RenderContext, TemplateEntity};
+use crate::parser::Token;
 use std::borrow::Cow;
 
 #[test]
@@ -436,4 +437,107 @@ fn test_nested_properties_returning_proper_nouns() {
         PerspectiveEngine::render(&t, &ctx).expect("Failed to render template"),
         "Arthur draws Excalibur."
     );
+}
+
+#[test]
+fn test_inline_adjectives_ast_parsing() {
+    // 1. 2-part tag without owner: {Adjectives:Key}
+    let t1 = Template::compile("{glowing:sword}").expect("Failed to compile template");
+    if let Token::EntityRef {
+        key,
+        article,
+        p_type,
+        owner_key,
+        adjectives,
+        ..
+    } = &t1.tokens[0]
+    {
+        assert_eq!(key, "sword");
+        assert_eq!(article.as_deref(), None);
+        assert_eq!(p_type.as_deref(), None);
+        assert_eq!(owner_key.as_deref(), None);
+        assert_eq!(adjectives.as_deref(), Some("glowing ")); // Note: parser appends a trailing space natively
+    } else {
+        panic!("Expected EntityRef token");
+    }
+
+    // 2. 3-part tag with Article: {Article:Adjectives:Key}
+    let t2 = Template::compile("{The:rusty:shield}").expect("Failed to compile template");
+    if let Token::EntityRef {
+        key,
+        article,
+        p_type,
+        owner_key,
+        adjectives,
+        ..
+    } = &t2.tokens[0]
+    {
+        assert_eq!(key, "shield");
+        assert_eq!(article.as_deref(), Some("The"));
+        assert_eq!(p_type.as_deref(), None);
+        assert_eq!(owner_key.as_deref(), None);
+        assert_eq!(adjectives.as_deref(), Some("rusty "));
+    } else {
+        panic!("Expected EntityRef token");
+    }
+
+    // 3. 3-part tag with Case: {Adjectives:Key:Case}
+    let t3 = Template::compile("{big red:wolf:subj}").expect("Failed to compile template");
+    if let Token::EntityRef {
+        key,
+        article,
+        p_type,
+        owner_key,
+        adjectives,
+        ..
+    } = &t3.tokens[0]
+    {
+        assert_eq!(key, "wolf");
+        assert_eq!(article.as_deref(), None);
+        assert_eq!(p_type.as_deref(), Some("subj"));
+        assert_eq!(owner_key.as_deref(), None);
+        assert_eq!(adjectives.as_deref(), Some("big red "));
+    } else {
+        panic!("Expected EntityRef token");
+    }
+
+    // 4. Full 4-part tag without owner: {Article:Adjectives:Key:Case}
+    let t4 = Template::compile("{A:big red:wolf:subj}").expect("Failed to compile template");
+    if let Token::EntityRef {
+        key,
+        article,
+        p_type,
+        owner_key,
+        adjectives,
+        ..
+    } = &t4.tokens[0]
+    {
+        assert_eq!(key, "wolf");
+        assert_eq!(article.as_deref(), Some("A"));
+        assert_eq!(p_type.as_deref(), Some("subj"));
+        assert_eq!(owner_key.as_deref(), None);
+        assert_eq!(adjectives.as_deref(), Some("big red "));
+    } else {
+        panic!("Expected EntityRef token");
+    }
+
+    // 5. Sanity check: Ensure owner parsing still works! {Owner's Adjectives:Target}
+    let t5 = Template::compile("{Aldran's glowing:sword}").expect("Failed to compile template");
+    if let Token::EntityRef {
+        key,
+        article,
+        p_type,
+        owner_key,
+        adjectives,
+        ..
+    } = &t5.tokens[0]
+    {
+        assert_eq!(key, "sword");
+        assert_eq!(article.as_deref(), None);
+        assert_eq!(p_type.as_deref(), None);
+        assert_eq!(owner_key.as_deref(), Some("aldran"));
+        assert_eq!(adjectives.as_deref(), Some("glowing "));
+    } else {
+        panic!("Expected EntityRef token");
+    }
 }
