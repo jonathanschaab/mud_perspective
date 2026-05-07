@@ -463,6 +463,310 @@ fn test_long_description_disambiguation_collision() {
 }
 
 #[test]
+fn test_adjective_disambiguation() {
+    struct AdjEntity {
+        name: &'static str,
+        adjs: &'static [&'static str],
+    }
+    impl TemplateEntity for AdjEntity {
+        fn contains_viewer(&self, _: &str) -> bool {
+            false
+        }
+        fn gender(&self) -> Gender {
+            Gender::Neutral
+        }
+        fn is_plural(&self) -> bool {
+            false
+        }
+        fn is_proper_noun_for(&self, _: &str) -> bool {
+            false
+        }
+        fn display_name_for<'a>(&'a self, _: &str) -> Cow<'a, str> {
+            Cow::Borrowed(self.name)
+        }
+        fn adjectives(&self) -> Option<&[&str]> {
+            Some(self.adjs)
+        }
+    }
+
+    let w1 = AdjEntity {
+        name: "wolf",
+        adjs: &["large", "red"],
+    };
+    let w2 = AdjEntity {
+        name: "wolf",
+        adjs: &["large", "brown"],
+    };
+
+    let cache = TemplateCache::new(100);
+    let t = cache
+        .get_or_compile("{*A:w1:subj} and {*a:w2:subj} arrive.")
+        .unwrap();
+    let ctx = RenderContext::new("viewer")
+        .with_entity("w1", &w1)
+        .with_entity("w2", &w2)
+        .with_lookahead(true);
+
+    assert_eq!(
+        PerspectiveEngine::render(&t, &ctx).unwrap(),
+        "A red wolf and a brown wolf arrive."
+    );
+}
+
+#[test]
+fn test_adjective_disambiguation_complex() {
+    struct AdjEntity {
+        name: &'static str,
+        adjs: &'static [&'static str],
+    }
+    impl TemplateEntity for AdjEntity {
+        fn contains_viewer(&self, _: &str) -> bool {
+            false
+        }
+        fn gender(&self) -> Gender {
+            Gender::Neutral
+        }
+        fn is_plural(&self) -> bool {
+            false
+        }
+        fn is_proper_noun_for(&self, _: &str) -> bool {
+            false
+        }
+        fn display_name_for<'a>(&'a self, _: &str) -> Cow<'a, str> {
+            Cow::Borrowed(self.name)
+        }
+        fn adjectives(&self) -> Option<&[&str]> {
+            Some(self.adjs)
+        }
+    }
+
+    let w1 = AdjEntity {
+        name: "wolf",
+        adjs: &["fierce", "large", "grey"],
+    };
+    let w2 = AdjEntity {
+        name: "wolf",
+        adjs: &["fierce", "large", "red"],
+    };
+    let w3 = AdjEntity {
+        name: "wolf",
+        adjs: &["fierce", "small", "grey"],
+    };
+    let w4 = AdjEntity {
+        name: "wolf",
+        adjs: &["fierce", "small", "red"],
+    };
+
+    let cache = TemplateCache::new(100);
+    let t = cache
+        .get_or_compile("{*A:w1:subj}, {*a:w2:subj}, {*a:w3:subj}, and {*a:w4:subj} arrive.")
+        .unwrap();
+    let ctx = RenderContext::new("viewer")
+        .with_entity("w1", &w1)
+        .with_entity("w2", &w2)
+        .with_entity("w3", &w3)
+        .with_entity("w4", &w4)
+        .with_lookahead(true);
+
+    assert_eq!(
+        PerspectiveEngine::render(&t, &ctx).unwrap(),
+        "A grey large wolf, a large red wolf, a grey small wolf, and a red small wolf arrive."
+    );
+}
+
+#[test]
+fn test_adjective_disambiguation_partial_collision() {
+    struct AdjEntity {
+        name: &'static str,
+        adjs: &'static [&'static str],
+    }
+    impl TemplateEntity for AdjEntity {
+        fn contains_viewer(&self, _: &str) -> bool {
+            false
+        }
+        fn gender(&self) -> Gender {
+            Gender::Neutral
+        }
+        fn is_plural(&self) -> bool {
+            false
+        }
+        fn is_proper_noun_for(&self, _: &str) -> bool {
+            false
+        }
+        fn display_name_for<'a>(&'a self, _: &str) -> Cow<'a, str> {
+            Cow::Borrowed(self.name)
+        }
+        fn adjectives(&self) -> Option<&[&str]> {
+            Some(self.adjs)
+        }
+    }
+
+    let w1 = AdjEntity {
+        name: "wolf",
+        adjs: &["large", "red"],
+    };
+    let w2 = AdjEntity {
+        name: "wolf",
+        adjs: &["large", "red"], // Identical to w1!
+    };
+    let w3 = AdjEntity {
+        name: "wolf",
+        adjs: &["large", "brown"],
+    };
+
+    let cache = TemplateCache::new(100);
+    let t1 = cache
+        .get_or_compile("{*A:w1:subj}, {*a:w2:subj}, and {*a:w3:subj} arrive.")
+        .unwrap();
+    let ctx = RenderContext::new("viewer")
+        .with_entity("w1", &w1)
+        .with_entity("w2", &w2)
+        .with_entity("w3", &w3)
+        .with_lookahead(true);
+
+    // "large" is shared by all 3, so it provides no disambiguation value and is dropped.
+    // "red" distinguishes w1/w2 from w3, so it is used, but w1 and w2 still collide on "red",
+    // receiving standard ordinals for the new "red wolf" group.
+    assert_eq!(
+        PerspectiveEngine::render(&t1, &ctx).unwrap(),
+        "A red wolf, another red wolf, and a brown wolf arrive."
+    );
+
+    // Verify subsequent references use the ordinals correctly
+    let t2 = cache
+        .get_or_compile("{a:w1:Subj} [w1:howl]. {a:w2:Subj} [w2:growl]. {a:w3:Subj} [w3:bark].")
+        .unwrap();
+    assert_eq!(
+        PerspectiveEngine::render(&t2, &ctx).unwrap(),
+        "The first red wolf howls. The second red wolf growls. The brown wolf barks."
+    );
+}
+
+#[test]
+fn test_adjective_disambiguation_identical_with_plain_entity() {
+    struct AdjEntity {
+        name: &'static str,
+        adjs: &'static [&'static str],
+    }
+    impl TemplateEntity for AdjEntity {
+        fn contains_viewer(&self, _: &str) -> bool {
+            false
+        }
+        fn gender(&self) -> Gender {
+            Gender::Neutral
+        }
+        fn is_plural(&self) -> bool {
+            false
+        }
+        fn is_proper_noun_for(&self, _: &str) -> bool {
+            false
+        }
+        fn display_name_for<'a>(&'a self, _: &str) -> Cow<'a, str> {
+            Cow::Borrowed(self.name)
+        }
+        fn adjectives(&self) -> Option<&[&str]> {
+            Some(self.adjs)
+        }
+    }
+
+    let w1 = AdjEntity {
+        name: "wolf",
+        adjs: &[],
+    };
+    let w2 = AdjEntity {
+        name: "wolf",
+        adjs: &["large"],
+    };
+    let w3 = AdjEntity {
+        name: "wolf",
+        adjs: &["large"],
+    };
+
+    let cache = TemplateCache::new(100);
+    let t1 = cache
+        .get_or_compile("{*A:w1:subj}, {*a:w2:subj}, and {*a:w3:subj} arrive.")
+        .unwrap();
+    let ctx = RenderContext::new("viewer")
+        .with_entity("w1", &w1)
+        .with_entity("w2", &w2)
+        .with_entity("w3", &w3)
+        .with_lookahead(true);
+
+    assert_eq!(
+        PerspectiveEngine::render(&t1, &ctx).unwrap(),
+        "A wolf, a large wolf, and another large wolf arrive."
+    );
+
+    let t2 = cache
+        .get_or_compile("{*The:w1:subj} howls. {*The:w2:subj} growls. {*The:w3:subj} barks.")
+        .unwrap();
+    assert_eq!(
+        PerspectiveEngine::render(&t2, &ctx).unwrap(),
+        "The first wolf howls. The first large wolf growls. The second large wolf barks."
+    );
+}
+
+#[test]
+fn test_adjective_synonyms_ignored_for_disambiguation() {
+    struct SynEntity {
+        name: &'static str,
+        adjs: &'static [&'static str],
+        syns: &'static [&'static str],
+    }
+    impl TemplateEntity for SynEntity {
+        fn contains_viewer(&self, _: &str) -> bool {
+            false
+        }
+        fn gender(&self) -> Gender {
+            Gender::Neutral
+        }
+        fn is_plural(&self) -> bool {
+            false
+        }
+        fn is_proper_noun_for(&self, _: &str) -> bool {
+            false
+        }
+        fn display_name_for<'a>(&'a self, _: &str) -> Cow<'a, str> {
+            Cow::Borrowed(self.name)
+        }
+        fn adjectives(&self) -> Option<&[&str]> {
+            Some(self.adjs)
+        }
+        fn adjective_synonyms(&self) -> Option<&[&str]> {
+            Some(self.syns)
+        }
+    }
+
+    let w1 = SynEntity {
+        name: "wolf",
+        adjs: &["large"],
+        syns: &["big", "huge"],
+    };
+    let w2 = SynEntity {
+        name: "wolf",
+        adjs: &["small"],
+        syns: &["tiny", "little"],
+    };
+
+    let cache = TemplateCache::new(100);
+    let t = cache
+        .get_or_compile("{*A:w1:subj} and {*a:w2:subj} arrive.")
+        .unwrap();
+    let ctx = RenderContext::new("viewer")
+        .with_entity("w1", &w1)
+        .with_entity("w2", &w2)
+        .with_lookahead(true);
+
+    // The engine should strictly use the canonical adjectives ("large", "small") for
+    // disambiguation, completely ignoring the synonyms ("big", "tiny", etc.) to prevent
+    // outputs like "A big wolf and a little wolf arrive."
+    assert_eq!(
+        PerspectiveEngine::render(&t, &ctx).unwrap(),
+        "A large wolf and a small wolf arrive."
+    );
+}
+
+#[test]
 fn test_long_description_partial_disambiguation() {
     let wolf_scrawny = MockEntity {
         id: "mob_1_scrawny".to_string(),
@@ -550,6 +854,107 @@ fn test_long_description_phantom_collision() {
     assert_eq!(
         PerspectiveEngine::render(&t1, &ctx1).expect("Failed to render template"),
         "Jim enters. A wolf enters. A large wolf enters. Another large wolf enters."
+    );
+}
+
+#[test]
+fn test_adjective_disambiguation_limit() {
+    struct AdjEntity {
+        name: &'static str,
+        adjs: &'static [&'static str],
+    }
+    impl TemplateEntity for AdjEntity {
+        fn contains_viewer(&self, _: &str) -> bool {
+            false
+        }
+        fn gender(&self) -> Gender {
+            Gender::Neutral
+        }
+        fn is_plural(&self) -> bool {
+            false
+        }
+        fn is_proper_noun_for(&self, _: &str) -> bool {
+            false
+        }
+        fn display_name_for<'a>(&'a self, _: &str) -> Cow<'a, str> {
+            Cow::Borrowed(self.name)
+        }
+        fn adjectives(&self) -> Option<&[&str]> {
+            Some(self.adjs)
+        }
+    }
+
+    let w1 = AdjEntity {
+        name: "wolf",
+        adjs: &["large", "red"],
+    };
+    let w2 = AdjEntity {
+        name: "wolf",
+        adjs: &["large", "red", "fluffy"],
+    };
+    let w3 = AdjEntity {
+        name: "wolf",
+        adjs: &["large", "red", "angry"],
+    };
+
+    let cache = TemplateCache::new(100);
+    let t1 = cache
+        .get_or_compile("{*A:w1:subj}, {*a:w2:subj}, and {*a:w3:subj} arrive.")
+        .unwrap();
+
+    // 1. With limit = 2
+    // All three wolves only evaluate combinations from `["large", "red"]`.
+    // Since they all share these two adjectives, they provide no disambiguation value,
+    // so they are dropped entirely, falling back to base names with ordinals.
+    let ctx_limit_2 = RenderContext::new("viewer")
+        .with_entity("w1", &w1)
+        .with_entity("w2", &w2)
+        .with_entity("w3", &w3)
+        .with_lookahead(true)
+        .with_adjective_disambiguation_limit(2)
+        .with_auto_clear(true);
+
+    assert_eq!(
+        PerspectiveEngine::render(&t1, &ctx_limit_2).unwrap(),
+        "A wolf, another wolf, and a third wolf arrive."
+    );
+
+    // 2. With limit = 3
+    // w2 and w3 can now evaluate their 3rd adjectives ("fluffy" and "angry"), which are unique!
+    // Because they vacate the collision group, w1 is left as the only "wolf".
+    let ctx_limit_3 = ctx_limit_2.with_adjective_disambiguation_limit(3);
+
+    assert_eq!(
+        PerspectiveEngine::render(&t1, &ctx_limit_3).unwrap(),
+        "A wolf, a fluffy wolf, and an angry wolf arrive."
+    );
+
+    // 3. Verify uniqueness checks ALL adjectives of colliders, regardless of limit
+    let w4 = AdjEntity {
+        name: "wolf",
+        adjs: &["fluffy", "white"],
+    };
+    let w5 = AdjEntity {
+        name: "wolf",
+        adjs: &["large", "black", "fluffy"],
+    };
+
+    let ctx_check_all = RenderContext::new("viewer")
+        .with_entity("w4", &w4)
+        .with_entity("w5", &w5)
+        .with_lookahead(true)
+        .with_adjective_disambiguation_limit(2);
+    let t2 = cache
+        .get_or_compile("{*A:w4:subj} and {*a:w5:subj} stare.")
+        .unwrap();
+
+    // w4 evaluates `fluffy` and `white`.
+    // Even though w5's limit is 2 (so it only searches `large` and `black` for itself),
+    // w4 checking w5 for uniqueness correctly sees w5's 3rd adjective `fluffy`.
+    // Thus, w4 realizes `fluffy` is not unique, and correctly chooses `white`!
+    assert_eq!(
+        PerspectiveEngine::render(&t2, &ctx_check_all).unwrap(),
+        "A white wolf and a large wolf stare."
     );
 }
 

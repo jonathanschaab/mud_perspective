@@ -130,6 +130,13 @@ pub trait TemplateEntity {
         None
     }
 
+    /// Returns an optional list of adjective synonyms for this entity.
+    /// Used by `RenderContext::resolve_target` to allow fuzzy matching (e.g., "big" for "large").
+    /// These are NOT used for rendering to avoid phrases like "the big large wolf".
+    fn adjective_synonyms(&self) -> Option<&[&str]> {
+        None
+    }
+
     /// Determines if the entity's current identity is a proper noun.
     ///
     /// If `true`, the rendering engine will automatically suppress indefinite (`a/an`)
@@ -198,6 +205,12 @@ pub struct RenderContext<'a> {
     /// Defaults to 15. Set to 0 for unbounded growth.
     /// If all entities in memory are pinned, this limit will be temporarily exceeded to preserve narrative continuity.
     pub anaphora_limit: usize,
+    /// The maximum number of adjectives to evaluate when generating combinations for disambiguation.
+    /// Capping this prevents exponential O(2^N) blowup if an entity has a large number of adjectives. Defaults to 5.
+    pub adjective_disambiguation_limit: usize,
+    /// If true, automatically clears the anaphora memory at the end of each successful render call.
+    /// Defaults to false.
+    pub auto_clear: bool,
     /// A mapping of template syntax keys (e.g., "source") to their actual game entities.
     /// Keys are normalized to lowercase by the engine, so ensure your builder mapping uses lowercase keys.
     pub entities: HashMap<&'a str, &'a dyn TemplateEntity>,
@@ -213,6 +226,8 @@ pub struct RenderContext<'a> {
     pub recent_entities: RefCell<Vec<RecentEntity>>,
     /// Tracks the assignment of ordinals for entities with colliding names.
     pub ordinals: RefCell<HashMap<String, OrdinalState>>,
+    /// A memoization cache for target resolution within the lifespan of this context.
+    pub(crate) target_cache: RefCell<HashMap<String, Vec<TargetMatch<'a>>>>,
 }
 
 bitflags::bitflags! {
@@ -325,11 +340,14 @@ impl<'a> RenderContext<'a> {
             ordinal_word_threshold: 999,
             strict_diacritics: false,
             anaphora_limit: 15,
+            adjective_disambiguation_limit: 5,
+            auto_clear: false,
             entities: HashMap::new(),
             last_mentioned: RefCell::new(None),
             active_subject: RefCell::new(None),
             recent_entities: RefCell::new(Vec::new()),
             ordinals: RefCell::new(HashMap::new()),
+            target_cache: RefCell::new(HashMap::new()),
         }
     }
 
@@ -345,6 +363,10 @@ impl<'a> RenderContext<'a> {
     /// `path_uncertain` will be `true`, allowing the caller to decide whether to accept it.
     #[must_use]
     pub fn resolve_target(&self, description: &str) -> Vec<TargetMatch<'a>> {
+        if let Some(cached) = self.target_cache.borrow().get(description) {
+            return cached.clone();
+        }
+
         let (base_desc, sub_element_desc) = parse_target_description(description);
 
         let clean_full_desc_owned = description.to_lowercase().replace('’', "'");
@@ -437,6 +459,9 @@ impl<'a> RenderContext<'a> {
             }
         }
 
+        self.target_cache
+            .borrow_mut()
+            .insert(description.to_string(), unique_matches.clone());
         unique_matches
     }
 
@@ -582,10 +607,11 @@ impl<'a> RenderContext<'a> {
         inline_adjectives: &[String],
     ) -> bool {
         let mut ords = Vec::new();
-        let suffix = format!("::{name_to_check}");
+        let suffix_ns = format!("::{name_to_check}");
+        let suffix_adj = format!(" {name_to_check}");
 
         for (k, state) in self.ordinals.borrow().iter() {
-            if (k == name_to_check || k.ends_with(&suffix))
+            if (k == name_to_check || k.ends_with(&suffix_ns) || k.ends_with(&suffix_adj))
                 && let Some(&o) = state.members.get(key)
                 && !ords.contains(&o)
             {
@@ -690,6 +716,7 @@ impl<'a> RenderContext<'a> {
     #[must_use]
     pub fn with_viewer(mut self, viewer_id: &'a str) -> Self {
         self.viewer_id = viewer_id;
+        self.target_cache.get_mut().clear();
         self
     }
 
@@ -697,6 +724,7 @@ impl<'a> RenderContext<'a> {
     #[must_use]
     pub fn with_stance(mut self, stance: ActorStance) -> Self {
         self.stance = stance;
+        self.target_cache.get_mut().clear();
         self
     }
 
@@ -720,6 +748,7 @@ impl<'a> RenderContext<'a> {
     #[must_use]
     pub fn with_ordinal_word_threshold(mut self, threshold: usize) -> Self {
         self.ordinal_word_threshold = threshold;
+        self.target_cache.get_mut().clear();
         self
     }
 
@@ -729,6 +758,7 @@ impl<'a> RenderContext<'a> {
     #[must_use]
     pub fn with_strict_diacritics(mut self, strict: bool) -> Self {
         self.strict_diacritics = strict;
+        self.target_cache.get_mut().clear();
         self
     }
 
@@ -740,6 +770,22 @@ impl<'a> RenderContext<'a> {
         self
     }
 
+    /// Configures the maximum number of adjectives to evaluate for disambiguation combinations.
+    #[must_use]
+    pub fn with_adjective_disambiguation_limit(mut self, limit: usize) -> Self {
+        self.adjective_disambiguation_limit = limit;
+        self
+    }
+
+    /// Enables or disables automatic clearing of anaphora memory after rendering.
+    /// If `true`, the context will automatically call `clear_anaphora()` at the end of every `PerspectiveEngine::render` call,
+    /// ensuring each render starts with a fresh narrative memory.
+    #[must_use]
+    pub fn with_auto_clear(mut self, auto_clear: bool) -> Self {
+        self.auto_clear = auto_clear;
+        self
+    }
+
     /// Adds an entity mapping to the context using a fluent builder pattern.
     ///
     /// # Arguments
@@ -748,6 +794,7 @@ impl<'a> RenderContext<'a> {
     #[must_use]
     pub fn with_entity(mut self, key: &'a str, entity: &'a dyn TemplateEntity) -> Self {
         self.entities.insert(key, entity);
+        self.target_cache.get_mut().clear();
         self
     }
 
@@ -823,6 +870,7 @@ impl<'a> RenderContext<'a> {
                 &mut last_mentioned,
                 &mut active_subject,
             );
+            self.target_cache.borrow_mut().clear();
         }
         self
     }
@@ -846,6 +894,7 @@ impl<'a> RenderContext<'a> {
         *self.active_subject.borrow_mut() = state.active_subject;
         *self.recent_entities.borrow_mut() = state.recent_entities;
         *self.ordinals.borrow_mut() = state.ordinals;
+        self.target_cache.borrow_mut().clear();
         self
     }
 
@@ -864,6 +913,7 @@ impl<'a> RenderContext<'a> {
         *self.active_subject.borrow_mut() = None;
         self.recent_entities.borrow_mut().clear();
         self.ordinals.borrow_mut().clear();
+        self.target_cache.borrow_mut().clear();
     }
 
     /// Pins an entity in the anaphora memory so it will never be automatically evicted.
@@ -915,6 +965,7 @@ impl<'a> RenderContext<'a> {
                 &mut last_mentioned,
                 &mut active_subject,
             );
+            self.target_cache.borrow_mut().clear();
         }
     }
 
@@ -927,6 +978,7 @@ impl<'a> RenderContext<'a> {
             .find(|r| r.key == key)
         {
             item.flags.remove(RecentEntityFlags::IS_PINNED);
+            self.target_cache.borrow_mut().clear();
         }
     }
 
@@ -939,6 +991,18 @@ impl<'a> RenderContext<'a> {
             *self.active_subject.borrow_mut() = None;
         }
         self.recent_entities.borrow_mut().retain(|r| r.key != key);
+        self.target_cache.borrow_mut().clear();
+    }
+
+    /// Explicitly clears the memoization cache used by `resolve_target`.
+    ///
+    /// You normally do not need to call this, as the engine automatically invalidates the cache
+    /// whenever the context's state (such as anaphora memory, ordinals, or stances) changes.
+    /// However, if you mutate an entity's internal data (like its name or adjectives) using
+    /// interior mutability while the `RenderContext` is still active, you should call this
+    /// method to ensure subsequent target resolutions reflect the updated data.
+    pub fn clear_target_cache(&self) {
+        self.target_cache.borrow_mut().clear();
     }
 }
 
@@ -1061,11 +1125,15 @@ fn check_phrase_match(
     let validate_adjectives = |adj_words: &[&str]| -> bool {
         adj_words.is_empty() || {
             let valid_adjs = entity.adjectives().unwrap_or(&[]);
+            let synonym_adjs = entity.adjective_synonyms().unwrap_or(&[]);
             adj_words.iter().all(|i_adj| {
                 valid_adjs
                     .iter()
                     .any(|v_adj| eq_ignore_case(i_adj, v_adj, strict_diacritics))
                     || inline_adjectives
+                        .iter()
+                        .any(|v_adj| eq_ignore_case(i_adj, v_adj, strict_diacritics))
+                    || synonym_adjs
                         .iter()
                         .any(|v_adj| eq_ignore_case(i_adj, v_adj, strict_diacritics))
             })

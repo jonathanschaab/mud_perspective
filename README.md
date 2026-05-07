@@ -75,6 +75,11 @@ impl TemplateEntity for Character {
     //     Some(&["large", "angry"])
     // }
 
+    // Optional: Provide a list of adjective synonyms for targeting.
+    // fn adjective_synonyms(&self) -> Option<&[&str]> {
+    //     Some(&["big", "huge"]) // for "large"
+    // }
+
     // Optional: Expose nested entities like body parts, targets, or equipment
     fn get_property(&self, property_name: &str) -> Option<&dyn TemplateEntity> {
         match property_name {
@@ -320,12 +325,19 @@ The engine features an Anaphora Resolution system. It allows you to write templa
   * When a significant amount of time passes between events.
   * At the start of a new, unrelated combat round or distinct paragraph.
   * *Why?* If you don't clear the memory between independent events, a template might output "He arrives." instead of "Aldran arrives." just because Aldran was the active subject of a completely unrelated event 5 minutes ago!
+  * *Auto-Clear:* If your contexts are short-lived or reused sequentially for independent events, you can enable `ctx.with_auto_clear(true)` to have the engine automatically flush the anaphora memory at the end of every successful render call.
 
 #### **Long Display Names & Collision Preemption**
 
 When two entities share the exact same short name (e.g., two entities named "wolf"), the engine automatically checks if either provides a `long_display_name_for` (e.g., "large wolf" or "dire wolf"). If one does, the engine dynamically upgrades the description to disambiguate them before resorting to numbered ordinals (preventing "the first wolf and the second wolf"). 
 
 If you enable the Omniscient Lookahead feature (`ctx.with_lookahead(true)`), the engine will preemptively use the long name on the very first mention. This prevents narrative "pop-in" where an entity is initially introduced as "a wolf" but suddenly upgrades to "the large wolf" sentences later when the second wolf arrives.
+
+#### Adjective Disambiguation
+
+As a final step before falling back to ordinals, the engine will attempt to disambiguate entities by prepending a unique set of adjectives from the `adjectives()` method. For example, if a "large red wolf" and a "large brown wolf" are in the same scene, the engine will recognize that "large" is not a unique descriptor, but "red" and "brown" are. It will automatically render them as "a red wolf" and "a brown wolf" instead of "the first wolf" and "the second wolf".
+
+To prevent exponential evaluation time on entities with many adjectives, the engine restricts its search combinations to the first 5 adjectives returned by the entity. This limit can be adjusted using `ctx.with_adjective_disambiguation_limit(size)`.
 
 #### **Best Practice: Pronoun Tags for Grammatical Case**
 
@@ -406,6 +418,22 @@ impl TemplateEntity for Character {
 }
 ```
 
+#### Adjective Synonyms
+
+Developers can implement the `adjective_synonyms()` method on their `TemplateEntity` to provide a list of alternative adjectives for targeting. This allows players to use more natural language (e.g., "get big sword") to target an item whose canonical adjective is `large`.
+
+These synonyms are only used for targeting and will not be used for rendering, preventing outputs like "the big large sword." 
+
+```rust
+impl TemplateEntity for Character {
+    // ... other methods ...
+
+    fn adjective_synonyms(&self) -> Option<&[&str]> {
+        Some(&["big", "huge"]) // for "large"
+    }
+}
+```
+
 #### Strict Diacritics (Unicode Transliteration)
 
 By default, the target resolution engine transliterates accents and diacritics to their closest ASCII equivalents. This means a player can type "angry wolf" to target an entity named "Ängry Wölf". If a game world relies heavily on constructed languages or specific lore terminology where diacritics matter, builders can disable this fuzzy matching.
@@ -414,6 +442,12 @@ By default, the target resolution engine transliterates accents and diacritics t
 let ctx = RenderContext::new("char_1").with_strict_diacritics(true);
 // "angry wolf" will now fail to match "Ängry Wölf" because the player must type it exactly.
 ```
+
+#### Target Memoization & Caching
+
+The `RenderContext` includes an internal memoization cache for target resolution. If a complex script or combat loop requests `ctx.resolve_target("the goblin")` multiple times in a single server tick, the engine will perform the string parsing and matching once and instantly return O(1) cached results for subsequent calls.
+
+The engine automatically invalidates this cache whenever the narrative state shifts (e.g., adding an entity, changing the stance, or updating the anaphora memory). However, if you mutate an entity's internal properties (like its name or adjectives) using interior mutability while the context is still alive, you should manually call `ctx.clear_target_cache()` to ensure the player's next input resolves against the new data.
 
 ### **7. Template Debugging**
 

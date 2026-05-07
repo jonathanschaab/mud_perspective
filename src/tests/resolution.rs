@@ -2185,3 +2185,219 @@ fn test_is_same_entity_comparison() {
     // Should be false for different instances, even with completely identical data
     assert!(!is_same_entity(ref1, ref2));
 }
+
+#[test]
+fn test_resolve_target_adjective_synonyms() {
+    struct SynEntity {
+        name: &'static str,
+        adjs: &'static [&'static str],
+        syns: &'static [&'static str],
+    }
+    impl TemplateEntity for SynEntity {
+        fn contains_viewer(&self, _: &str) -> bool {
+            false
+        }
+        fn gender(&self) -> Gender {
+            Gender::Neutral
+        }
+        fn is_plural(&self) -> bool {
+            false
+        }
+        fn is_proper_noun_for(&self, _: &str) -> bool {
+            false
+        }
+        fn display_name_for<'a>(&'a self, _: &str) -> Cow<'a, str> {
+            Cow::Borrowed(self.name)
+        }
+        fn adjectives(&self) -> Option<&[&str]> {
+            Some(self.adjs)
+        }
+        fn adjective_synonyms(&self) -> Option<&[&str]> {
+            Some(self.syns)
+        }
+    }
+
+    let w1 = SynEntity {
+        name: "wolf",
+        adjs: &["large"],
+        syns: &["big", "huge"],
+    };
+    let ctx = RenderContext::new("viewer").with_entity("w1", &w1);
+
+    assert_eq!(ctx.resolve_target("large wolf").len(), 1);
+
+    assert_eq!(ctx.resolve_target("big wolf").len(), 1);
+    assert_eq!(ctx.resolve_target("huge wolf").len(), 1);
+    assert_eq!(ctx.resolve_target("small wolf").len(), 0);
+}
+
+#[test]
+fn test_resolve_target_adjective_synonyms_and_aliases() {
+    struct Boss {
+        name: &'static str,
+        aliases: &'static [&'static str],
+        adjectives: &'static [&'static str],
+        adjective_synonyms: &'static [&'static str],
+    }
+    impl TemplateEntity for Boss {
+        fn contains_viewer(&self, _: &str) -> bool {
+            false
+        }
+        fn gender(&self) -> Gender {
+            Gender::Male
+        }
+        fn is_plural(&self) -> bool {
+            false
+        }
+        fn is_proper_noun_for(&self, _: &str) -> bool {
+            true
+        }
+        fn display_name_for<'a>(&'a self, _: &str) -> Cow<'a, str> {
+            Cow::Borrowed(self.name)
+        }
+        fn aliases(&self) -> Option<&[&str]> {
+            Some(self.aliases)
+        }
+        fn adjectives(&self) -> Option<&[&str]> {
+            Some(self.adjectives)
+        }
+        fn adjective_synonyms(&self) -> Option<&[&str]> {
+            Some(self.adjective_synonyms)
+        }
+    }
+
+    let aldran = Boss {
+        name: "Aldran",
+        aliases: &["dark lord", "boss"],
+        adjectives: &["angry", "tall"],
+        adjective_synonyms: &["furious", "giant"],
+    };
+
+    let ctx = RenderContext::new("viewer").with_entity("aldran", &aldran);
+
+    // 1. Adjective synonym + Alias
+    assert_eq!(ctx.resolve_target("furious dark lord").len(), 1);
+    assert_eq!(ctx.resolve_target("giant boss").len(), 1);
+
+    // 2. Canonical adjective + Alias (sanity check)
+    assert_eq!(ctx.resolve_target("angry boss").len(), 1);
+
+    // 3. Adjective synonym + canonical name
+    assert_eq!(ctx.resolve_target("furious Aldran").len(), 1);
+
+    // 4. Missing synonym fails
+    assert_eq!(ctx.resolve_target("short boss").len(), 0);
+}
+
+#[test]
+fn test_resolve_target_adjective_partial_disambiguation() {
+    struct AdjEntity {
+        name: &'static str,
+        adjs: &'static [&'static str],
+    }
+    impl TemplateEntity for AdjEntity {
+        fn contains_viewer(&self, _: &str) -> bool {
+            false
+        }
+        fn gender(&self) -> Gender {
+            Gender::Neutral
+        }
+        fn is_plural(&self) -> bool {
+            false
+        }
+        fn is_proper_noun_for(&self, _: &str) -> bool {
+            false
+        }
+        fn display_name_for<'a>(&'a self, _: &str) -> Cow<'a, str> {
+            Cow::Borrowed(self.name)
+        }
+        fn adjectives(&self) -> Option<&[&str]> {
+            Some(self.adjs)
+        }
+    }
+
+    let w1 = AdjEntity {
+        name: "wolf",
+        adjs: &["large", "red"],
+    };
+    let w2 = AdjEntity {
+        name: "wolf",
+        adjs: &["large", "red"],
+    };
+    let w3 = AdjEntity {
+        name: "wolf",
+        adjs: &["large", "brown"],
+    };
+
+    let ctx = RenderContext::new("viewer")
+        .with_entity("w1", &w1)
+        .with_entity("w2", &w2)
+        .with_entity("w3", &w3)
+        .with_lookahead(true); // Enable lookahead to seed the ordinals
+
+    let cache = TemplateCache::new(100);
+    let t = cache
+        .get_or_compile("{*A:w1:subj}, {*a:w2:subj}, and {*a:w3:subj} arrive.")
+        .unwrap();
+    PerspectiveEngine::render(&t, &ctx).unwrap();
+
+    assert_eq!(ctx.resolve_target("the first red wolf").len(), 1);
+    assert_eq!(ctx.resolve_target("the first red wolf")[0].key, "w1");
+
+    assert_eq!(ctx.resolve_target("the second red wolf").len(), 1);
+    assert_eq!(ctx.resolve_target("the second red wolf")[0].key, "w2");
+
+    assert_eq!(ctx.resolve_target("the brown wolf").len(), 1);
+    assert_eq!(ctx.resolve_target("the brown wolf")[0].key, "w3");
+}
+
+#[test]
+fn test_target_cache_invalidation() {
+    let goblin = MockEntity {
+        id: "mob_1".to_string(),
+        name: "goblin".to_string(),
+        gender: Gender::Neutral,
+        is_plural: false,
+        is_proper_noun: false,
+    };
+
+    let ctx = RenderContext::new("viewer").with_entity("g1", &goblin);
+
+    // 1. Initial resolution populates the cache
+    assert_eq!(ctx.target_cache.borrow().len(), 0);
+    let _ = ctx.resolve_target("goblin");
+    assert_eq!(ctx.target_cache.borrow().len(), 1);
+
+    // 2. clear_anaphora clears the cache
+    ctx.clear_anaphora();
+    assert_eq!(ctx.target_cache.borrow().len(), 0);
+
+    // 3. with_last_mentioned clears the cache
+    let _ = ctx.resolve_target("goblin");
+    let ctx = ctx.with_last_mentioned("g1");
+    assert_eq!(ctx.target_cache.borrow().len(), 0);
+
+    // 4. pin_anaphora/forget_anaphora clears the cache
+    let _ = ctx.resolve_target("goblin");
+    ctx.pin_anaphora("g1");
+    assert_eq!(ctx.target_cache.borrow().len(), 0);
+
+    let _ = ctx.resolve_target("goblin");
+    ctx.forget_anaphora("g1");
+    assert_eq!(ctx.target_cache.borrow().len(), 0);
+
+    // 5. Structural builder methods clear the cache
+    let _ = ctx.resolve_target("goblin");
+    let ctx = ctx.with_viewer("new_viewer");
+    assert_eq!(ctx.target_cache.borrow().len(), 0);
+
+    let _ = ctx.resolve_target("goblin");
+    let ctx = ctx.with_strict_diacritics(true);
+    assert_eq!(ctx.target_cache.borrow().len(), 0);
+
+    // 6. Explicit clear_target_cache
+    let _ = ctx.resolve_target("goblin");
+    assert_eq!(ctx.target_cache.borrow().len(), 1);
+    ctx.clear_target_cache();
+    assert_eq!(ctx.target_cache.borrow().len(), 0);
+}
