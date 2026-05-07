@@ -207,7 +207,7 @@ pub struct RenderContext<'a> {
     pub anaphora_limit: usize,
     /// The maximum number of adjectives to evaluate when generating combinations for disambiguation.
     /// Capping this prevents exponential O(2^N) blowup if an entity has a large number of adjectives. Defaults to 5.
-    /// The absolute mathematical maximum is 127 to prevent bitshift overflow.
+    /// The absolute mathematical maximum is 63 to prevent bitshift overflow.
     pub adjective_disambiguation_limit: usize,
     /// If true, automatically clears the anaphora memory at the end of each successful render call.
     /// Defaults to false.
@@ -906,12 +906,12 @@ impl<'a> RenderContext<'a> {
 
     /// Configures the maximum number of adjectives to evaluate for disambiguation combinations.
     ///
-    /// The absolute maximum allowed value is 127 to prevent integer overflow during the
-    /// combinatorial search. If a larger value is provided, it will be clamped to 127
+    /// The absolute maximum allowed value is 63 to prevent integer overflow during the
+    /// combinatorial search. If a larger value is provided, it will be clamped to 63
     /// and a warning will be logged.
     #[must_use]
     pub fn with_adjective_disambiguation_limit(mut self, limit: usize) -> Self {
-        let max_limit = (u128::BITS - 1) as usize;
+        let max_limit = (u64::BITS - 1) as usize;
         if limit > max_limit {
             tracing::warn!(
                 "Adjective disambiguation limit {} exceeds the maximum supported value of {}. Clamping to {}.",

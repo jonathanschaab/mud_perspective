@@ -993,9 +993,9 @@ fn test_adjective_disambiguation_limit_clamping() {
         adjs: &["large", "brown"],
     };
 
-    // 1. Verify clamping to 127 prevents overflow
+    // 1. Verify clamping to 63 prevents overflow
     let ctx_clamped = RenderContext::new("viewer").with_adjective_disambiguation_limit(200);
-    assert_eq!(ctx_clamped.adjective_disambiguation_limit, 127);
+    assert_eq!(ctx_clamped.adjective_disambiguation_limit, 63);
 
     // 2. Verify setting the limit to 0 safely completely disables adjective disambiguation
     // and falls back natively to ordinals.
@@ -1702,7 +1702,7 @@ fn test_state_tracking_ordinals_and_adjectives() {
 
     // Introduce an inline adjective and trigger ordinals
     let t = cache
-        .get_or_compile("{*A:w1:subj} and {*A:angry:w2:subj} arrive.")
+        .get_or_compile("{*A:w1:subj} and {*a:angry:w2:subj} arrive.")
         .expect("Failed to compile template");
     PerspectiveEngine::render(&t, &ctx).expect("Failed to render template");
 

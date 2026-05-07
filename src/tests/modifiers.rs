@@ -573,13 +573,13 @@ fn test_drop_possessive_override() {
         "I wield Excalibur."
     );
 
-    // 5. With adjectives -> Drops possessive and adjectives entirely
+    // 5. With adjectives -> Drops possessive but preserves adjectives
     let t3 = cache
         .get_or_compile("{*A:source:subj} [source:wield] {source's gleaming @excalibur}.")
         .expect("Failed to compile template");
     assert_eq!(
         PerspectiveEngine::render(&t3, &ctx).expect("Failed to render template"),
-        "Aldran wields Excalibur."
+        "Aldran wields gleaming Excalibur."
     );
 }
 

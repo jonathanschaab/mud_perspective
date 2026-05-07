@@ -1731,13 +1731,13 @@ fn test_unified_possessives_with_long_descriptions_on_proper_nouns() {
         "Arthur the Elder's glowing Excalibur of the Lake."
     );
 
-    // 2. Drop possessive override (@) correctly drops the long owner and the adjectives
+    // 2. Drop possessive override (@) correctly drops the long owner but preserves adjectives
     let t2 = cache
         .get_or_compile("{A1's glowing @e1:obj}.")
         .expect("Failed to compile template");
     assert_eq!(
         PerspectiveEngine::render(&t2, &ctx).expect("Failed to render template"),
-        "Excalibur of the Lake."
+        "Glowing Excalibur of the Lake."
     );
 }
 

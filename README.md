@@ -339,7 +339,7 @@ If you enable the Omniscient Lookahead feature (`ctx.with_lookahead(true)`), the
 
 As a final step before falling back to ordinals, the engine will attempt to disambiguate entities by prepending a unique set of adjectives from the `adjectives()` method. For example, if a "large red wolf" and a "large brown wolf" are in the same scene, the engine will recognize that "large" is not a unique descriptor, but "red" and "brown" are. It will automatically render them as "a red wolf" and "a brown wolf" instead of "the first wolf" and "the second wolf".
 
-To prevent exponential evaluation time on entities with many adjectives, the engine restricts its search combinations to the first 5 adjectives returned by the entity. This limit can be adjusted using `ctx.with_adjective_disambiguation_limit(size)`. The absolute maximum allowed size is 127 to prevent mathematical overflow.
+To prevent exponential evaluation time on entities with many adjectives, the engine restricts its search combinations to the first 5 adjectives returned by the entity. This limit can be adjusted using `ctx.with_adjective_disambiguation_limit(size)`. The absolute maximum allowed size is 63 to prevent mathematical overflow.
 
 #### **Best Practice: Pronoun Tags for Grammatical Case**
 
