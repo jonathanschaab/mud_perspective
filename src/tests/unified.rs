@@ -2552,3 +2552,405 @@ fn test_unified_resolution_equivalents() {
         "A wolf howls."
     );
 }
+
+#[test]
+fn test_dynamic_tag_segment_injection() {
+    let sword = MockEntity {
+        id: "item_1".into(),
+        name: "sword".into(),
+        gender: Gender::Neutral,
+        is_plural: false,
+        is_proper_noun: false,
+    };
+    let aldran = MockEntity {
+        id: "char_1".into(),
+        name: "Aldran".into(),
+        gender: Gender::Male,
+        is_plural: false,
+        is_proper_noun: true,
+    };
+
+    let cache = TemplateCache::new(100);
+    let ctx = RenderContext::new("viewer")
+        .with_entity("item_1", &sword)
+        .with_entity("char_1", &aldran)
+        .with_variable("color", "glowing")
+        .with_variable("target", "item_1")
+        .with_variable("owner", "char_1");
+
+    // Dynamic adjectives and key
+    let t1 = cache
+        .get_or_compile("{A:$color:$target:obj}.")
+        .expect("Failed to compile template");
+    assert_eq!(
+        PerspectiveEngine::render(&t1, &ctx).expect("Failed to render template"),
+        "A glowing sword."
+    );
+
+    // Dynamic owner, adjectives, and key
+    ctx.clear_anaphora();
+    let t2 = cache
+        .get_or_compile("{*$owner's $color:$target:obj}.")
+        .expect("Failed to compile template");
+    assert_eq!(
+        PerspectiveEngine::render(&t2, &ctx).expect("Failed to render template"),
+        "Aldran's glowing sword."
+    );
+
+    // Dynamic subject for verb
+    ctx.clear_anaphora();
+    let t3 = cache
+        .get_or_compile("{*A:$target:subj} [$target:hum].")
+        .expect("Failed to compile template");
+    assert_eq!(
+        PerspectiveEngine::render(&t3, &ctx).expect("Failed to render template"),
+        "A sword hums."
+    );
+}
+
+#[test]
+fn test_conditional_logic_and_properties() {
+    struct WeatherEntity {
+        is_raining: bool,
+        color: &'static str,
+    }
+    impl TemplateEntity for WeatherEntity {
+        fn contains_viewer(&self, _: &str) -> bool {
+            false
+        }
+        fn gender(&self) -> Gender {
+            Gender::Neutral
+        }
+        fn is_plural(&self) -> bool {
+            false
+        }
+        fn is_proper_noun_for(&self, _: &str) -> bool {
+            true
+        }
+        fn display_name_for<'a>(&'a self, _: &str) -> Cow<'a, str> {
+            Cow::Borrowed("Sky")
+        }
+
+        // Expose logic to the conditional engine!
+        fn check_condition(&self, prop: &str) -> bool {
+            if prop == "is_raining" {
+                self.is_raining
+            } else {
+                false
+            }
+        }
+        fn get_string_property(&self, prop: &str) -> Option<Cow<'_, str>> {
+            if prop == "color" {
+                Some(Cow::Borrowed(self.color))
+            } else {
+                None
+            }
+        }
+    }
+
+    let sky = WeatherEntity {
+        is_raining: true,
+        color: "grey",
+    };
+
+    let cache = TemplateCache::new(100);
+
+    // 1. Test Comments
+    let t_comment = cache
+        .get_or_compile("You look up.{# The player looks up #}")
+        .expect("Failed to compile template");
+    assert_eq!(
+        PerspectiveEngine::render(&t_comment, &RenderContext::new("viewer"))
+            .expect("Failed to render template"),
+        "You look up."
+    );
+
+    // 2. Test Entity Conditionals (Truthy and Property Eq)
+    let ctx = RenderContext::new("viewer").with_entity("sky", &sky);
+    let t_ent_cond = cache
+        .get_or_compile(
+            "The sky is {% if sky.color == \"grey\" %}dreary{% else %}bright{% endif %} \
+         and it {% if sky.is_raining %}is raining{% else %}is dry{% endif %}.",
+        )
+        .expect("Failed to compile template");
+    assert_eq!(
+        PerspectiveEngine::render(&t_ent_cond, &ctx).expect("Failed to render template"),
+        "The sky is dreary and it is raining."
+    );
+
+    // 3. Test Context Variable Conditionals (Falsy, Eq, NotEq)
+    let ctx_vars = RenderContext::new("viewer")
+        .with_variable("weather", "snow")
+        .with_variable("wind", "high");
+
+    let t_var_cond = cache
+        .get_or_compile(
+            "{% if $weather == \"rain\" %}\
+            It is raining.\
+        {% elif $weather == \"snow\" %}\
+            It is snowing \
+            {% if $wind == \"high\" %}heavily{% else %}lightly{% endif %}.\
+        {% else %}\
+            It is clear.\
+        {% endif %}\
+        {% if !$heat %} It is cold.{% endif %}",
+        )
+        .expect("Failed to compile template");
+
+    // The nested `if` inside the `elif` branch is evaluated successfully, and the falsy `$heat` check works.
+    assert_eq!(
+        PerspectiveEngine::render(&t_var_cond, &ctx_vars).expect("Failed to render template"),
+        "It is snowing heavily. It is cold."
+    );
+
+    // 4. Test Variable vs Variable and Property vs Property Conditionals
+    let ctx_multi = RenderContext::new("viewer")
+        .with_variable("weather", "snow")
+        .with_variable("forecast", "snow")
+        .with_entity("sky", &sky); // sky.color == "grey"
+
+    let t_complex = cache
+        .get_or_compile(
+            "{% if $weather == $forecast %}Matches{% else %}No{% endif %} \
+         {% if sky.color == $weather %}Wait{% else %}Good{% endif %} \
+         {% if sky.color == sky.color %}Self{% endif %}",
+        )
+        .expect("Failed to compile template");
+
+    assert_eq!(
+        PerspectiveEngine::render(&t_complex, &ctx_multi).expect("Failed to render template"),
+        "Matches Good Self"
+    );
+}
+
+#[test]
+fn test_numeric_inequality_conditions() {
+    struct Fighter {
+        hp: &'static str,
+    }
+    impl TemplateEntity for Fighter {
+        fn contains_viewer(&self, _: &str) -> bool {
+            false
+        }
+        fn gender(&self) -> Gender {
+            Gender::Male
+        }
+        fn is_plural(&self) -> bool {
+            false
+        }
+        fn is_proper_noun_for(&self, _: &str) -> bool {
+            true
+        }
+        fn display_name_for<'a>(&'a self, _: &str) -> Cow<'a, str> {
+            Cow::Borrowed("Fighter")
+        }
+        fn get_string_property(&self, prop: &str) -> Option<Cow<'_, str>> {
+            if prop == "hp" {
+                Some(Cow::Borrowed(self.hp))
+            } else {
+                None
+            }
+        }
+    }
+
+    let cache = TemplateCache::new(100);
+
+    // 1. Test basic less than and greater than
+    let f1 = Fighter { hp: "25" };
+    let ctx1 = RenderContext::new("viewer").with_entity("source", &f1);
+
+    let t1 = cache
+        .get_or_compile(
+            "{% if source.hp < 50 %}Bloody{% else %}Healthy{% endif %} and \
+         {% if source.hp > 10.5 %}Standing{% else %}Fallen{% endif %}.",
+        )
+        .expect("Failed to compile");
+
+    assert_eq!(
+        PerspectiveEngine::render(&t1, &ctx1).expect("Failed to render template"),
+        "Bloody and Standing."
+    );
+
+    // 2. Test less than equal, greater than equal, and dynamic variables
+    let f2 = Fighter { hp: "100" };
+    let ctx2 = RenderContext::new("viewer")
+        .with_entity("source", &f2)
+        .with_variable("max_hp", "100");
+
+    let t2 = cache
+        .get_or_compile(
+            "{% if source.hp >= $max_hp %}Full{% else %}Hurt{% endif %} \
+         {% if source.hp <= 0 %}Dead{% else %}Alive{% endif %} \
+         {% if source.hp < \"apple\" %}Error{% else %}Safe{% endif %}", // Parsing failure defaults to false
+        )
+        .expect("Failed to compile");
+
+    assert_eq!(
+        PerspectiveEngine::render(&t2, &ctx2).expect("Failed to render template"),
+        "Full Alive Safe"
+    );
+}
+
+#[test]
+fn test_dynamic_variable_injection_with_entity_properties() {
+    struct ColorEntity {
+        color: &'static str,
+    }
+    impl TemplateEntity for ColorEntity {
+        fn contains_viewer(&self, _: &str) -> bool {
+            false
+        }
+        fn gender(&self) -> Gender {
+            Gender::Neutral
+        }
+        fn is_plural(&self) -> bool {
+            false
+        }
+        fn is_proper_noun_for(&self, _: &str) -> bool {
+            false
+        }
+        fn display_name_for<'a>(&'a self, _: &str) -> Cow<'a, str> {
+            Cow::Borrowed("box")
+        }
+        fn get_string_property(&self, prop: &str) -> Option<Cow<'_, str>> {
+            if prop == "color" {
+                Some(Cow::Borrowed(self.color))
+            } else {
+                None
+            }
+        }
+    }
+    struct Room {
+        item: ColorEntity,
+    }
+    impl TemplateEntity for Room {
+        fn contains_viewer(&self, _: &str) -> bool {
+            false
+        }
+        fn gender(&self) -> Gender {
+            Gender::Neutral
+        }
+        fn is_plural(&self) -> bool {
+            false
+        }
+        fn is_proper_noun_for(&self, _: &str) -> bool {
+            false
+        }
+        fn display_name_for<'a>(&'a self, _: &str) -> Cow<'a, str> {
+            Cow::Borrowed("room")
+        }
+        fn get_property(&self, prop: &str) -> Option<&dyn TemplateEntity> {
+            if prop == "box" {
+                Some(&self.item)
+            } else {
+                None
+            }
+        }
+    }
+
+    let r = Room {
+        item: ColorEntity { color: "red" },
+    };
+
+    let cache = TemplateCache::new(100);
+    let ctx = RenderContext::new("viewer").with_entity("room", &r);
+
+    // 1. Directly interpolate string property into text
+    let t1 = cache
+        .get_or_compile("The box is {$room.box.color}.")
+        .unwrap();
+    assert_eq!(
+        PerspectiveEngine::render(&t1, &ctx).unwrap(),
+        "The box is red."
+    );
+
+    // 2. Use it structurally to inject adjectives
+    let t2 = cache
+        .get_or_compile("{*The:$room.box.color:room.box}.")
+        .unwrap();
+    assert_eq!(
+        PerspectiveEngine::render(&t2, &ctx).unwrap(),
+        "The red box."
+    );
+
+    // 3. Format ALL CAPS
+    let t3 = cache.get_or_compile("{$ROOM.BOX.COLOR} BOX!").unwrap();
+    assert_eq!(PerspectiveEngine::render(&t3, &ctx).unwrap(), "RED BOX!");
+}
+
+#[test]
+fn test_boolean_logic_conditions() {
+    let cache = TemplateCache::new(100);
+    let ctx = RenderContext::new("viewer")
+        .with_variable("hp", "25")
+        .with_variable("poisoned", "true")
+        .with_variable("shielded", "false");
+
+    // 1. And / Or
+    let t1 = cache
+        .get_or_compile("{% if $hp < 50 and $poisoned %}Danger!{% endif %}")
+        .unwrap();
+    assert_eq!(PerspectiveEngine::render(&t1, &ctx).unwrap(), "Danger!");
+
+    // 2. Precedence and Grouping
+    let t2 = cache
+        .get_or_compile("{% if ($hp > 50 or $poisoned) and !$shielded %}Vulnerable!{% endif %}")
+        .unwrap();
+    assert_eq!(PerspectiveEngine::render(&t2, &ctx).unwrap(), "Vulnerable!");
+
+    // 3. Not logic with parenthesis
+    let t3 = cache
+        .get_or_compile(
+            "{% if not $shielded %}No Shield{% endif %} {% if !($hp > 50) %}Low HP{% endif %}",
+        )
+        .unwrap();
+    assert_eq!(
+        PerspectiveEngine::render(&t3, &ctx).unwrap(),
+        "No Shield Low HP"
+    );
+}
+
+#[test]
+fn test_null_coalescing_fallback() {
+    let aldran = MockEntity {
+        id: "char_1".into(),
+        name: "Aldran".into(),
+        gender: Gender::Male,
+        is_plural: false,
+        is_proper_noun: true,
+    };
+
+    let cache = TemplateCache::new(100);
+    let ctx = RenderContext::new("viewer").with_entity("source", &aldran);
+
+    // 1. Missing Variable Fallback
+    let t1 = cache
+        .get_or_compile("It is {$weather ?? \"sunny\"}.")
+        .unwrap();
+    assert_eq!(
+        PerspectiveEngine::render(&t1, &ctx).unwrap(),
+        "It is sunny."
+    );
+
+    // 2. Missing Property Fallback with Capitalization
+    let t2 = cache
+        .get_or_compile("{$Source.weapon.name ?? \"fists\"} strike true.")
+        .unwrap();
+    assert_eq!(
+        PerspectiveEngine::render(&t2, &ctx).unwrap(),
+        "Fists strike true."
+    );
+
+    // 3. Fallback on Verb Conjugation! (The fallback word is perfectly conjugated natively)
+    let t3 = cache
+        .get_or_compile("{*A:source:subj} [source:$action ?? \"punch\"]!")
+        .unwrap();
+    assert_eq!(
+        PerspectiveEngine::render(&t3, &ctx).unwrap(),
+        "Aldran punches!"
+    );
+
+    // 4. Missing without fallback still fails
+    let t4 = cache.get_or_compile("It is {$weather}.").unwrap();
+    assert!(PerspectiveEngine::render(&t4, &ctx).is_err());
+}

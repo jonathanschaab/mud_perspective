@@ -168,6 +168,20 @@ pub trait TemplateEntity {
         None
     }
 
+    /// Checks a custom boolean condition on the entity.
+    ///
+    /// This is used by template conditional logic (e.g., `{% if target.is_bleeding %}`).
+    fn check_condition(&self, _condition_name: &str) -> bool {
+        false
+    }
+
+    /// Retrieves a custom string property from the entity.
+    ///
+    /// This is used by template conditional logic (e.g., `{% if target.color == "red" %}`).
+    fn get_string_property(&self, _property_name: &str) -> Option<Cow<'_, str>> {
+        None
+    }
+
     /// Returns an optional list of alternative names or aliases the user can use to target this entity.
     /// Used exclusively by `RenderContext::resolve_target`.
     fn aliases(&self) -> Option<&[&str]> {
@@ -212,6 +226,8 @@ pub struct RenderContext<'a> {
     /// If true, automatically clears the anaphora memory at the end of each successful render call.
     /// Defaults to false.
     pub auto_clear: bool,
+    /// A mapping of runtime string variables to dynamically inject into templates (e.g., dynamic verbs).
+    pub variables: HashMap<&'a str, Vec<String>>,
     /// A mapping of template syntax keys (e.g., "source") to their actual game entities.
     /// Keys are normalized to lowercase by the engine, so ensure your builder mapping uses lowercase keys.
     pub entities: HashMap<&'a str, &'a dyn TemplateEntity>,
@@ -394,6 +410,7 @@ impl<'a> RenderContext<'a> {
             anaphora_limit: 15,
             adjective_disambiguation_limit: 5,
             auto_clear: false,
+            variables: HashMap::new(),
             entities: HashMap::new(),
             last_mentioned: RefCell::new(None),
             active_subject: RefCell::new(None),
@@ -932,6 +949,27 @@ impl<'a> RenderContext<'a> {
     #[must_use]
     pub fn with_auto_clear(mut self, auto_clear: bool) -> Self {
         self.auto_clear = auto_clear;
+        self
+    }
+
+    /// Binds a single dynamic variable to the context (e.g., for dynamic verbs).
+    #[must_use]
+    pub fn with_variable(mut self, key: &'a str, value: impl Into<String>) -> Self {
+        self.variables.insert(key, vec![value.into()]);
+        self.clear_target_cache();
+        self
+    }
+
+    /// Binds a list of dynamic variables to the context, formatted as an Oxford comma list when rendered.
+    #[must_use]
+    pub fn with_variables<I, S>(mut self, key: &'a str, values: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.variables
+            .insert(key, values.into_iter().map(Into::into).collect());
+        self.clear_target_cache();
         self
     }
 

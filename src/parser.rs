@@ -27,36 +27,359 @@ pub(crate) const MOD_DROP_POSSESSIVE: char = '@';
 pub(crate) const CTRL_SENTENCE_BREAK: &str = "SB";
 pub(crate) const CTRL_NO_SENTENCE_BREAK: &str = "NO_SB";
 
+/// A segment of a tag that can either be a static literal or a dynamic variable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TagSegment {
+    /// A static string literal.
+    Literal(String),
+    /// A dynamic variable lookup key.
+    Variable {
+        /// The string key of the variable in the context.
+        key: String,
+        /// The optional fallback string if the variable is missing.
+        fallback: Option<String>,
+    },
+}
+
+impl TagSegment {
+    pub(crate) fn parse(s: &str) -> Self {
+        let s = s.trim();
+        if let Some(var) = s.strip_prefix('$') {
+            if let Some((key, fallback)) = var.split_once("??") {
+                Self::Variable {
+                    key: key.trim().to_lowercase(),
+                    fallback: Some(
+                        fallback
+                            .trim()
+                            .trim_matches(|c| c == '"' || c == '\'')
+                            .to_string(),
+                    ),
+                }
+            } else {
+                Self::Variable {
+                    key: var.trim().to_lowercase(),
+                    fallback: None,
+                }
+            }
+        } else {
+            Self::Literal(s.to_string())
+        }
+    }
+}
+
+/// A value evaluated within a conditional statement.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ConditionValue {
+    /// A static string literal (e.g., `"raining"`).
+    Literal(String),
+    /// A numerical float parsed for inequalities.
+    Number(f64),
+    /// A dynamic context variable (e.g., `$weather`).
+    Variable(String),
+    /// A dynamic entity property (e.g., `source.color`).
+    EntityProperty(String, String),
+}
+
+/// A logical condition that can be evaluated dynamically at render time.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Condition {
+    /// Evaluates a single value for truthiness.
+    Value(ConditionValue),
+    /// Inverts the boolean result of an expression.
+    Not(Box<Condition>),
+    /// Evaluates true if both expressions are true.
+    And(Box<Condition>, Box<Condition>),
+    /// Evaluates true if either expression is true.
+    Or(Box<Condition>, Box<Condition>),
+    /// Evaluates equality between two condition values.
+    Eq(ConditionValue, ConditionValue),
+    /// Evaluates inequality between two condition values.
+    NotEq(ConditionValue, ConditionValue),
+    /// Evaluates if the left value is strictly greater than the right value (numerically).
+    Gt(ConditionValue, ConditionValue),
+    /// Evaluates if the left value is strictly less than the right value (numerically).
+    Lt(ConditionValue, ConditionValue),
+    /// Evaluates if the left value is greater than or equal to the right value (numerically).
+    GtEq(ConditionValue, ConditionValue),
+    /// Evaluates if the left value is less than or equal to the right value (numerically).
+    LtEq(ConditionValue, ConditionValue),
+}
+
+impl Condition {
+    pub(crate) fn parse(s: &str) -> Result<Self, String> {
+        let tokens = tokenize_expr(s)?;
+        ExprParser::parse(&tokens)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum ExprToken {
+    And,
+    Or,
+    Not,
+    LParen,
+    RParen,
+    Eq,
+    NotEq,
+    Gt,
+    Lt,
+    GtEq,
+    LtEq,
+    Val(ConditionValue),
+}
+
+#[allow(clippy::too_many_lines)]
+fn tokenize_expr(s: &str) -> Result<Vec<ExprToken>, String> {
+    let mut tokens = Vec::new();
+    let mut chars = s.char_indices().peekable();
+
+    while let Some(&(i, c)) = chars.peek() {
+        if c.is_whitespace() {
+            chars.next();
+            continue;
+        }
+        match c {
+            '(' => {
+                tokens.push(ExprToken::LParen);
+                chars.next();
+            }
+            ')' => {
+                tokens.push(ExprToken::RParen);
+                chars.next();
+            }
+            '=' => {
+                chars.next();
+                if chars.next_if(|&(_, n)| n == '=').is_some() {
+                    tokens.push(ExprToken::Eq);
+                } else {
+                    return Err(format!("Expected '==' at index {i}"));
+                }
+            }
+            '!' => {
+                chars.next();
+                if chars.next_if(|&(_, n)| n == '=').is_some() {
+                    tokens.push(ExprToken::NotEq);
+                } else {
+                    tokens.push(ExprToken::Not);
+                }
+            }
+            '>' => {
+                chars.next();
+                if chars.next_if(|&(_, n)| n == '=').is_some() {
+                    tokens.push(ExprToken::GtEq);
+                } else {
+                    tokens.push(ExprToken::Gt);
+                }
+            }
+            '<' => {
+                chars.next();
+                if chars.next_if(|&(_, n)| n == '=').is_some() {
+                    tokens.push(ExprToken::LtEq);
+                } else {
+                    tokens.push(ExprToken::Lt);
+                }
+            }
+            '&' => {
+                chars.next();
+                if chars.next_if(|&(_, n)| n == '&').is_some() {
+                    tokens.push(ExprToken::And);
+                } else {
+                    return Err(format!("Expected '&&' at index {i}"));
+                }
+            }
+            '|' => {
+                chars.next();
+                if chars.next_if(|&(_, n)| n == '|').is_some() {
+                    tokens.push(ExprToken::Or);
+                } else {
+                    return Err(format!("Expected '||' at index {i}"));
+                }
+            }
+            '"' | '\'' => {
+                let quote = c;
+                chars.next();
+                let mut s = String::new();
+                while let Some(&(_, n)) = chars.peek() {
+                    if n == quote {
+                        chars.next();
+                        break;
+                    }
+                    s.push(n);
+                    chars.next();
+                }
+                tokens.push(ExprToken::Val(ConditionValue::Literal(s)));
+            }
+            _ => {
+                let mut ident = String::new();
+                while let Some(&(_, n)) = chars.peek() {
+                    if n.is_whitespace() || "()=!<>&|\"'".contains(n) {
+                        break;
+                    }
+                    ident.push(n);
+                    chars.next();
+                }
+                match ident.to_lowercase().as_str() {
+                    "and" => tokens.push(ExprToken::And),
+                    "or" => tokens.push(ExprToken::Or),
+                    "not" => tokens.push(ExprToken::Not),
+                    "true" | "false" => tokens.push(ExprToken::Val(ConditionValue::Literal(ident))),
+                    _ => {
+                        if let Ok(num) = ident.parse::<f64>() {
+                            tokens.push(ExprToken::Val(ConditionValue::Number(num)));
+                        } else if let Some(var) = ident.strip_prefix('$') {
+                            tokens
+                                .push(ExprToken::Val(ConditionValue::Variable(var.to_lowercase())));
+                        } else if let Some((ent, prop)) = ident.rsplit_once('.') {
+                            tokens.push(ExprToken::Val(ConditionValue::EntityProperty(
+                                ent.to_lowercase(),
+                                prop.to_string(),
+                            )));
+                        } else {
+                            tokens.push(ExprToken::Val(ConditionValue::Literal(ident)));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(tokens)
+}
+
+struct ExprParser<'a> {
+    tokens: &'a [ExprToken],
+    pos: usize,
+}
+
+impl<'a> ExprParser<'a> {
+    fn parse(tokens: &'a [ExprToken]) -> Result<Condition, String> {
+        let mut parser = Self { tokens, pos: 0 };
+        let expr = parser.parse_or()?;
+        if parser.pos < parser.tokens.len() {
+            return Err("Unexpected trailing tokens in expression".into());
+        }
+        Ok(expr)
+    }
+    fn peek(&self) -> Option<&ExprToken> {
+        self.tokens.get(self.pos)
+    }
+    fn consume(&mut self) -> Option<&ExprToken> {
+        let t = self.tokens.get(self.pos);
+        self.pos += 1;
+        t
+    }
+
+    fn parse_or(&mut self) -> Result<Condition, String> {
+        let mut left = self.parse_and()?;
+        while let Some(ExprToken::Or) = self.peek() {
+            self.consume();
+            left = Condition::Or(Box::new(left), Box::new(self.parse_and()?));
+        }
+        Ok(left)
+    }
+    fn parse_and(&mut self) -> Result<Condition, String> {
+        let mut left = self.parse_comparison()?;
+        while let Some(ExprToken::And) = self.peek() {
+            self.consume();
+            left = Condition::And(Box::new(left), Box::new(self.parse_comparison()?));
+        }
+        Ok(left)
+    }
+    fn parse_comparison(&mut self) -> Result<Condition, String> {
+        let left_expr = self.parse_unary()?;
+        match self.peek() {
+            Some(
+                op @ (ExprToken::Eq
+                | ExprToken::NotEq
+                | ExprToken::Lt
+                | ExprToken::Gt
+                | ExprToken::LtEq
+                | ExprToken::GtEq),
+            ) => {
+                let op_clone = op.clone();
+                self.consume();
+                let Condition::Value(left_val) = left_expr else {
+                    return Err("Left side of comparison must be a value".into());
+                };
+                let Condition::Value(right_val) = self.parse_unary()? else {
+                    return Err("Right side of comparison must be a value".into());
+                };
+                Ok(match op_clone {
+                    ExprToken::Eq => Condition::Eq(left_val, right_val),
+                    ExprToken::NotEq => Condition::NotEq(left_val, right_val),
+                    ExprToken::Lt => Condition::Lt(left_val, right_val),
+                    ExprToken::Gt => Condition::Gt(left_val, right_val),
+                    ExprToken::LtEq => Condition::LtEq(left_val, right_val),
+                    ExprToken::GtEq => Condition::GtEq(left_val, right_val),
+                    _ => return Err("Invalid comparison operator".into()),
+                })
+            }
+            _ => Ok(left_expr),
+        }
+    }
+    fn parse_unary(&mut self) -> Result<Condition, String> {
+        if let Some(ExprToken::Not) = self.peek() {
+            self.consume();
+            Ok(Condition::Not(Box::new(self.parse_unary()?)))
+        } else {
+            match self.consume() {
+                Some(ExprToken::Val(v)) => Ok(Condition::Value(v.clone())),
+                Some(ExprToken::LParen) => {
+                    let expr = self.parse_or()?;
+                    if matches!(self.consume(), Some(ExprToken::RParen)) {
+                        Ok(expr)
+                    } else {
+                        Err("Expected ')'".into())
+                    }
+                }
+                _ => Err("Expected expression or value".into()),
+            }
+        }
+    }
+}
+
+/// A single evaluated branch inside a conditional logic block.
+#[derive(Debug, Clone)]
+pub struct ConditionalBranch {
+    /// The condition required to enter this branch.
+    pub condition: Condition,
+    /// The body of the branch.
+    pub body: Vec<Token>,
+}
+
 /// Represents a parsed unit of a template string.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Token {
     /// Plain text that is inserted exactly as-is.
     Literal(String),
     /// e.g., `{source}`, `{a:source}`, `{the:target:obj}`, or `{source's glowing target}`
     EntityRef {
         /// The key of the entity in the `RenderContext`.
-        key: String,
+        key: TagSegment,
         /// An optional article to precede the entity name (e.g., "a", "an", "the").
-        article: Option<String>,
+        article: Option<TagSegment>,
         /// The optional type of pronoun requested (e.g., `"subj"`, `"obj"`, `"poss"`, `"abs_poss"`, `"reflex"`).
-        p_type: Option<String>,
+        p_type: Option<TagSegment>,
         /// The optional owner key if this is a narrative possessive (e.g., `source` in `{source's target}`)
-        owner_key: Option<String>,
+        owner_key: Option<TagSegment>,
         /// Modifiers specifically attached to the owner
         owner_flags: TagFlags,
         /// Optional adjectives between the owner and the target
-        adjectives: Option<String>,
+        adjectives: Option<TagSegment>,
         /// A packed bitflags struct containing all formatting modifiers.
         flags: TagFlags,
     },
     /// e.g., [source:pulse]
     VerbRef {
         /// The optional subject key to bind the verb to for correct conjugation.
-        subject_key: Option<String>,
+        subject_key: Option<TagSegment>,
         /// The original, un-processed form of the verb from the template.
         original_verb: String,
         /// The lowercased form of the verb, for dictionary lookups.
         lower_verb: String,
+        /// An optional variable key to resolve and conjugate dynamically at render time.
+        dynamic_key: Option<String>,
+        /// An optional fallback string to use if the dynamic key is missing.
+        dynamic_fallback: Option<String>,
         /// A sequence of explicit present-tense overrides that bypasses the algorithm entirely (e.g., `["am", "are", "is"]`).
         /// Note: This vector does not include the base verb itself, which is stored in `original_verb`.
         forced_present: Option<Vec<String>>,
@@ -64,6 +387,22 @@ pub enum Token {
         forced_past: Option<Vec<String>>,
         /// A packed bitflags struct containing all formatting modifiers.
         flags: TagFlags,
+    },
+    /// e.g., `{$weather}`, `{$Colors}`
+    VariableRef {
+        /// The key of the string variable in the `RenderContext`.
+        key: String,
+        /// An optional fallback string to use if the dynamic key is missing.
+        fallback: Option<String>,
+        /// A packed bitflags struct containing all formatting modifiers.
+        flags: TagFlags,
+    },
+    /// A dynamic control-flow block evaluated at render time.
+    Conditional {
+        /// The list of `if` and `elif` branches.
+        branches: Vec<ConditionalBranch>,
+        /// The `else` fallback, if provided.
+        fallback: Option<Vec<Token>>,
     },
     /// A tag that forces a new sentence boundary for capitalization.
     SentenceBreak,
@@ -86,12 +425,23 @@ pub struct Template {
     pub estimated_length: usize,
 }
 
-/// Type alias for the parsed components of a verb's conjugations.
-pub(crate) type VerbConjugations<'a> = (&'a str, Option<Vec<String>>, Option<Vec<String>>);
-
 /// Type alias for the destructured components of an entity tag.
 pub(crate) type DestructuredEntityTag<'a> =
     (Option<&'a str>, Option<&'a str>, &'a str, Option<&'a str>);
+
+/// A container for the destructured components of a verb tag.
+pub(crate) struct ParsedVerb<'a> {
+    /// An optional dynamic variable key.
+    pub dynamic_key: Option<String>,
+    /// An optional fallback string.
+    pub dynamic_fallback: Option<String>,
+    /// The base verb string.
+    pub base_verb: &'a str,
+    /// Forced present tense overrides.
+    pub forced_present: Option<Vec<String>>,
+    /// Forced past tense overrides.
+    pub forced_past: Option<Vec<String>>,
+}
 
 impl Template {
     /// Compiles a raw text string into a `Template` AST.
@@ -104,8 +454,35 @@ impl Template {
     ///
     /// # Errors
     /// Returns a `String` describing the syntax error if the template is malformed.
+    #[allow(clippy::too_many_lines)]
     pub fn compile(raw: &str) -> Result<Self, String> {
-        let mut tokens = Vec::new();
+        enum Frame {
+            Root(Vec<Token>),
+            If {
+                condition: Condition,
+                branches: Vec<ConditionalBranch>,
+                current_body: Vec<Token>,
+            },
+            Else {
+                branches: Vec<ConditionalBranch>,
+                current_body: Vec<Token>,
+            },
+        }
+        impl Frame {
+            fn body_mut(&mut self) -> &mut Vec<Token> {
+                match self {
+                    Frame::Root(b)
+                    | Frame::If {
+                        current_body: b, ..
+                    }
+                    | Frame::Else {
+                        current_body: b, ..
+                    } => b,
+                }
+            }
+        }
+
+        let mut stack = vec![Frame::Root(Vec::new())];
         let mut chars = raw.char_indices().peekable();
         let mut last_literal_start = 0;
 
@@ -123,19 +500,189 @@ impl Template {
 
             if c == TAG_ESCAPE {
                 chars.next();
-                if let Some(&(next_i, next_c)) = chars.peek()
-                    && is_escapable_char(next_c)
-                {
-                    push_literal(&mut tokens, raw, last_literal_start, i);
-                    last_literal_start = next_i;
-                    chars.next();
+                if let Some(&(next_i, next_c)) = chars.peek() {
+                    if is_escapable_char(next_c) {
+                        let frame = stack.last_mut().ok_or_else(|| {
+                            "Internal parser error: Missing root frame".to_string()
+                        })?;
+                        push_literal(frame.body_mut(), raw, last_literal_start, i);
+                        last_literal_start = next_i;
+                        chars.next();
+                    } else if next_c == '\n' || next_c == '\r' {
+                        let frame = stack.last_mut().ok_or_else(|| {
+                            "Internal parser error: Missing root frame".to_string()
+                        })?;
+                        push_literal(frame.body_mut(), raw, last_literal_start, i);
+
+                        if next_c == '\r' {
+                            chars.next();
+                            if let Some(&(_, '\n')) = chars.peek() {
+                                chars.next();
+                            }
+                        } else {
+                            chars.next();
+                        }
+
+                        while let Some(&(_, w_c)) = chars.peek() {
+                            if w_c == ' ' || w_c == '\t' {
+                                chars.next();
+                            } else {
+                                break;
+                            }
+                        }
+
+                        if let Some(&(curr_i, _)) = chars.peek() {
+                            last_literal_start = curr_i;
+                        } else {
+                            last_literal_start = raw.len();
+                        }
+                    }
                 }
                 continue;
             }
 
             if c == TAG_ENTITY_OPEN || c == TAG_VERB_OPEN {
+                let mut lookahead = chars.clone();
+                lookahead.next(); // Skip the '{' or '['
+
+                if c == TAG_ENTITY_OPEN
+                    && let Some(&(next_i, next_c)) = lookahead.peek()
+                {
+                    if next_c == '#' {
+                        if let Some(end_rel) = raw[next_i..].find("#}") {
+                            let frame = stack.last_mut().ok_or_else(|| {
+                                "Internal parser error: Missing root frame".to_string()
+                            })?;
+                            push_literal(frame.body_mut(), raw, last_literal_start, i);
+                            let end_idx = next_i + end_rel;
+                            while let Some(&(curr_i, _)) = chars.peek() {
+                                if curr_i <= end_idx + 1 {
+                                    chars.next();
+                                } else {
+                                    break;
+                                }
+                            }
+                            last_literal_start = end_idx + 2;
+                            continue;
+                        }
+                        return Err(format!("Unclosed comment starting at index {i}"));
+                    } else if next_c == '%' {
+                        if let Some(end_rel) = raw[next_i..].find("%}") {
+                            let frame = stack.last_mut().ok_or_else(|| {
+                                "Internal parser error: Missing root frame".to_string()
+                            })?;
+                            push_literal(frame.body_mut(), raw, last_literal_start, i);
+                            let end_idx = next_i + end_rel;
+                            let content = raw[next_i + 1..end_idx].trim();
+
+                            if let Some(cond_str) = content.strip_prefix("if ") {
+                                let condition = Condition::parse(cond_str)?;
+                                stack.push(Frame::If {
+                                    condition,
+                                    branches: Vec::new(),
+                                    current_body: Vec::new(),
+                                });
+                            } else if let Some(cond_str) = content.strip_prefix("elif ") {
+                                let condition = Condition::parse(cond_str)?;
+                                let last = stack.last_mut().ok_or_else(|| {
+                                    "Unexpected {% elif %} without an open {% if %}".to_string()
+                                })?;
+                                match last {
+                                    Frame::If {
+                                        condition: old_cond,
+                                        branches,
+                                        current_body,
+                                    } => {
+                                        branches.push(ConditionalBranch {
+                                            condition: old_cond.clone(),
+                                            body: std::mem::take(current_body),
+                                        });
+                                        *old_cond = condition;
+                                    }
+                                    _ => {
+                                        return Err(
+                                            "Unexpected {% elif %} in this context".to_string()
+                                        );
+                                    }
+                                }
+                            } else if content == "else" {
+                                let last = stack.pop().ok_or_else(|| {
+                                    "Unexpected {% else %} without an open {% if %}".to_string()
+                                })?;
+                                match last {
+                                    Frame::If {
+                                        condition,
+                                        mut branches,
+                                        current_body,
+                                    } => {
+                                        branches.push(ConditionalBranch {
+                                            condition,
+                                            body: current_body,
+                                        });
+                                        stack.push(Frame::Else {
+                                            branches,
+                                            current_body: Vec::new(),
+                                        });
+                                    }
+                                    _ => {
+                                        return Err(
+                                            "Unexpected {% else %} in this context".to_string()
+                                        );
+                                    }
+                                }
+                            } else if content == "endif" {
+                                let last = stack.pop().ok_or_else(|| {
+                                    "Unexpected {% endif %} without an open {% if %}".to_string()
+                                })?;
+                                let (branches, fallback) = match last {
+                                    Frame::If {
+                                        condition,
+                                        mut branches,
+                                        current_body,
+                                    } => {
+                                        branches.push(ConditionalBranch {
+                                            condition,
+                                            body: current_body,
+                                        });
+                                        (branches, None)
+                                    }
+                                    Frame::Else {
+                                        branches,
+                                        current_body,
+                                    } => (branches, Some(current_body)),
+                                    Frame::Root(_) => {
+                                        return Err("Unexpected {% endif %}".to_string());
+                                    }
+                                };
+                                let frame = stack.last_mut().ok_or_else(|| {
+                                    "Internal parser error: Missing root frame".to_string()
+                                })?;
+                                frame
+                                    .body_mut()
+                                    .push(Token::Conditional { branches, fallback });
+                            } else {
+                                return Err(format!("Unknown control tag: {{% {content} %}}"));
+                            }
+
+                            while let Some(&(curr_i, _)) = chars.peek() {
+                                if curr_i <= end_idx + 1 {
+                                    chars.next();
+                                } else {
+                                    break;
+                                }
+                            }
+                            last_literal_start = end_idx + 2;
+                            continue;
+                        }
+                        return Err(format!("Unclosed control tag starting at index {i}"));
+                    }
+                }
+
                 // Push any preceding literal text
-                push_literal(&mut tokens, raw, last_literal_start, i);
+                let frame = stack
+                    .last_mut()
+                    .ok_or_else(|| "Internal parser error: Missing root frame".to_string())?;
+                push_literal(frame.body_mut(), raw, last_literal_start, i);
                 chars.next(); // Consume the opening brace or bracket
 
                 let is_entity = c == TAG_ENTITY_OPEN;
@@ -150,12 +697,19 @@ impl Template {
                 let content = raw.get(i + 1..end_idx).unwrap_or_default();
 
                 let token = if is_entity {
-                    Self::parse_entity(content)?
+                    if content.trim_start().starts_with('$') {
+                        Self::parse_variable(content)?
+                    } else {
+                        Self::parse_entity(content)?
+                    }
                 } else {
                     Self::parse_verb(content)?
                 };
 
-                tokens.push(token);
+                let frame = stack
+                    .last_mut()
+                    .ok_or_else(|| "Internal parser error: Missing root frame".to_string())?;
+                frame.body_mut().push(token);
                 last_literal_start = end_idx + 1;
             } else {
                 // Move to the next character if it's not a special tag
@@ -164,37 +718,162 @@ impl Template {
         }
 
         // Push any remaining literal text at the end of the string
-        push_literal(&mut tokens, raw, last_literal_start, raw.len());
+        let frame = stack
+            .last_mut()
+            .ok_or_else(|| "Internal parser error: Missing root frame".to_string())?;
+        push_literal(frame.body_mut(), raw, last_literal_start, raw.len());
+
+        if stack.len() != 1 {
+            return Err("Unclosed {% if %} tag at the end of the template".to_string());
+        }
+
+        let Frame::Root(tokens) = stack
+            .pop()
+            .ok_or_else(|| "Internal parser error: Missing root frame".to_string())?
+        else {
+            return Err("Internal parser error: Invalid root frame structure".to_string());
+        };
 
         let mut template_keys = Vec::new();
         let mut seen_keys = HashSet::new();
-        for token in &tokens {
-            match token {
-                Token::EntityRef { key, owner_key, .. } => {
-                    if seen_keys.insert(key.as_str()) {
-                        template_keys.push(key.clone());
-                    }
-                    if let Some(ok) = owner_key
-                        && seen_keys.insert(ok.as_str())
-                    {
-                        template_keys.push(ok.clone());
-                    }
-                }
-                Token::VerbRef {
-                    subject_key: Some(key),
-                    ..
-                } if seen_keys.insert(key.as_str()) => {
-                    template_keys.push(key.clone());
-                }
-                _ => {}
-            }
-        }
+        Self::extract_keys(&tokens, &mut seen_keys, &mut template_keys);
 
         Ok(Template {
             tokens,
             template_keys,
             estimated_length: raw.len() + (raw.len() / 5),
         })
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn extract_keys<'a>(tokens: &'a [Token], seen: &mut HashSet<&'a str>, keys: &mut Vec<String>) {
+        fn check_entity_segment<'a>(
+            seg: &'a TagSegment,
+            seen: &mut HashSet<&'a str>,
+            keys: &mut Vec<String>,
+        ) {
+            match seg {
+                TagSegment::Literal(k) => {
+                    if seen.insert(k.as_str()) {
+                        keys.push(k.clone());
+                    }
+                }
+                TagSegment::Variable { key: k, .. } => {
+                    if let Some((ent, _)) = k.rsplit_once('.')
+                        && seen.insert(ent)
+                    {
+                        keys.push(ent.to_string());
+                    }
+                }
+            }
+        }
+
+        fn check_var_segment<'a>(
+            seg: &'a TagSegment,
+            seen: &mut HashSet<&'a str>,
+            keys: &mut Vec<String>,
+        ) {
+            if let TagSegment::Variable { key: k, .. } = seg
+                && let Some((ent, _)) = k.rsplit_once('.')
+                && seen.insert(ent)
+            {
+                keys.push(ent.to_string());
+            }
+        }
+
+        fn check_val<'a>(
+            val: &'a ConditionValue,
+            seen: &mut HashSet<&'a str>,
+            keys: &mut Vec<String>,
+        ) {
+            if let ConditionValue::EntityProperty(e, _) = val
+                && seen.insert(e.as_str())
+            {
+                keys.push(e.clone());
+            }
+        }
+
+        for token in tokens {
+            match token {
+                Token::EntityRef {
+                    key,
+                    owner_key,
+                    article,
+                    p_type,
+                    adjectives,
+                    ..
+                } => {
+                    check_entity_segment(key, seen, keys);
+                    if let Some(ok) = owner_key {
+                        check_entity_segment(ok, seen, keys);
+                    }
+                    if let Some(art) = article {
+                        check_var_segment(art, seen, keys);
+                    }
+                    if let Some(pt) = p_type {
+                        check_var_segment(pt, seen, keys);
+                    }
+                    if let Some(adj) = adjectives {
+                        check_var_segment(adj, seen, keys);
+                    }
+                }
+                Token::VerbRef {
+                    subject_key,
+                    dynamic_key,
+                    ..
+                } => {
+                    if let Some(sk) = subject_key {
+                        check_entity_segment(sk, seen, keys);
+                    }
+                    if let Some(dk) = dynamic_key
+                        && let Some((ent, _)) = dk.rsplit_once('.')
+                        && seen.insert(ent)
+                    {
+                        keys.push(ent.to_string());
+                    }
+                }
+                Token::VariableRef { key, .. } => {
+                    if let Some((ent, _)) = key.rsplit_once('.')
+                        && seen.insert(ent)
+                    {
+                        keys.push(ent.to_string());
+                    }
+                }
+                Token::Conditional { branches, fallback } => {
+                    for branch in branches {
+                        fn check_cond<'a>(
+                            c: &'a Condition,
+                            seen: &mut HashSet<&'a str>,
+                            keys: &mut Vec<String>,
+                        ) {
+                            match c {
+                                Condition::Value(val) => check_val(val, seen, keys),
+                                Condition::Not(inner) => check_cond(inner, seen, keys),
+                                Condition::And(l, r) | Condition::Or(l, r) => {
+                                    check_cond(l, seen, keys);
+                                    check_cond(r, seen, keys);
+                                }
+                                Condition::Eq(v1, v2)
+                                | Condition::NotEq(v1, v2)
+                                | Condition::Gt(v1, v2)
+                                | Condition::Lt(v1, v2)
+                                | Condition::GtEq(v1, v2)
+                                | Condition::LtEq(v1, v2) => {
+                                    check_val(v1, seen, keys);
+                                    check_val(v2, seen, keys);
+                                }
+                            }
+                        }
+                        check_cond(&branch.condition, seen, keys);
+                        Self::extract_keys(&branch.body, seen, keys);
+                    }
+                    if let Some(fb) = fallback {
+                        Self::extract_keys(fb, seen, keys);
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 
     #[inline]
@@ -291,12 +970,12 @@ impl Template {
         flags.set(TagFlags::ALL_CAPS, is_all_caps);
 
         Ok(Token::EntityRef {
-            key: clean_key.to_lowercase(),
-            article: clean_article.map(ToString::to_string),
-            p_type: clean_p_type.map(str::to_lowercase),
-            owner_key,
+            key: TagSegment::parse(&clean_key.to_lowercase()),
+            article: clean_article.map(TagSegment::parse),
+            p_type: clean_p_type.map(|s| TagSegment::parse(&s.to_lowercase())),
+            owner_key: owner_key.map(|s| TagSegment::parse(&s)),
             owner_flags,
-            adjectives,
+            adjectives: adjectives.map(|s| TagSegment::parse(&s)),
             flags,
         })
     }
@@ -341,7 +1020,7 @@ impl Template {
 
             let adj = adj_str.trim();
             if !adj.is_empty() {
-                adjectives = Some(format!("{adj} "));
+                adjectives = Some(adj.to_string());
             }
         } else if let Some((idx, len)) = find_spaced_possessive(working_key) {
             let owner_part = &working_key[..idx];
@@ -353,7 +1032,7 @@ impl Template {
 
             let remainder = &working_key[idx + len..];
             if let Some(space_idx) = remainder.rfind(' ') {
-                adjectives = Some(remainder[..=space_idx].to_string());
+                adjectives = Some(remainder[..space_idx].trim().to_string());
                 working_key = &remainder[space_idx + 1..];
             } else {
                 working_key = remainder;
@@ -461,25 +1140,70 @@ impl Template {
             Err(token) => return Ok(token),
         };
 
-        let (actual_verb, forced_present, forced_past) =
-            Self::process_verb_conjugations(verb_part, content)?;
+        let parsed_verb = Self::process_verb_conjugations(verb_part, content)?;
 
-        let original_verb = actual_verb.to_string();
-        let is_capitalized = is_capitalized(&original_verb);
+        let original_verb = parsed_verb.base_verb.to_string();
+        // Capitalize the dynamic variable name (e.g. {Action}) to flag the engine to capitalize the resulting verb
+        let is_capitalized = parsed_verb
+            .dynamic_key
+            .as_deref()
+            .is_some_and(is_capitalized)
+            || is_capitalized(&original_verb);
         let lower_verb = original_verb.to_lowercase();
 
-        Self::emit_verb_warnings(&original_verb, &lower_verb);
+        Self::emit_verb_warnings(
+            &original_verb,
+            &lower_verb,
+            parsed_verb.dynamic_key.is_some(),
+        );
 
         let mut flags = p1_flags;
         flags.set(TagFlags::IS_CAPITALIZED, is_capitalized);
         flags.set(TagFlags::ALL_CAPS, is_all_caps);
 
         Ok(Token::VerbRef {
-            subject_key,
+            subject_key: subject_key.map(|s| TagSegment::parse(&s.to_lowercase())),
             original_verb,
             lower_verb,
-            forced_present,
-            forced_past,
+            dynamic_key: parsed_verb.dynamic_key.map(|k| k.to_lowercase()),
+            dynamic_fallback: parsed_verb.dynamic_fallback,
+            forced_present: parsed_verb.forced_present,
+            forced_past: parsed_verb.forced_past,
+            flags,
+        })
+    }
+
+    fn parse_variable(content: &str) -> Result<Token, String> {
+        let is_all_caps = is_all_caps(content);
+        let clean = content
+            .trim_start()
+            .strip_prefix('$')
+            .unwrap_or(content)
+            .trim();
+
+        let (key, fallback) = if let Some((k, f)) = clean.split_once("??") {
+            (
+                k.trim(),
+                Some(f.trim().trim_matches(|c| c == '"' || c == '\'').to_string()),
+            )
+        } else {
+            (clean, None)
+        };
+
+        reject_if(
+            key.is_empty(),
+            "Variable tag has an empty key",
+            content,
+            TAG_ENTITY_OPEN,
+        )?;
+
+        let mut flags = TagFlags::empty();
+        flags.set(TagFlags::IS_CAPITALIZED, is_capitalized(key));
+        flags.set(TagFlags::ALL_CAPS, is_all_caps);
+
+        Ok(Token::VariableRef {
+            key: key.to_lowercase(),
+            fallback,
             flags,
         })
     }
@@ -519,24 +1243,59 @@ impl Template {
     fn process_verb_conjugations<'a>(
         verb_part: &'a str,
         content: &str,
-    ) -> Result<VerbConjugations<'a>, String> {
-        if let Some((base_verb, forced)) = verb_part.split_once(VERB_FORM_SEP) {
+    ) -> Result<ParsedVerb<'a>, String> {
+        let (base_verb, forced) = if let Some((bv, f)) = verb_part.split_once(VERB_FORM_SEP) {
+            (bv.trim(), Some(f.trim()))
+        } else {
+            (verb_part.trim(), None)
+        };
+
+        let (dynamic_key, dynamic_fallback) = if let Some(var_name) = base_verb.strip_prefix('$') {
+            if let Some((k, f)) = var_name.split_once("??") {
+                (
+                    Some(k.trim().to_string()),
+                    Some(f.trim().trim_matches(|c| c == '"' || c == '\'').to_string()),
+                )
+            } else {
+                (Some(var_name.trim().to_string()), None)
+            }
+        } else {
+            (None, None)
+        };
+
+        if let Some(forced_str) = forced {
             reject_if(
-                base_verb.trim().is_empty() || forced.trim().is_empty(),
+                base_verb.is_empty() || forced_str.is_empty(),
                 "Verb tag has an empty verb or forced conjugation segment",
                 content,
                 TAG_VERB_OPEN,
             )?;
 
-            let (forced_present, forced_past) = parse_forced_conjugations(forced, content)?;
-            Ok((base_verb.trim(), forced_present, forced_past))
+            let (forced_present, forced_past) = parse_forced_conjugations(forced_str, content)?;
+            Ok(ParsedVerb {
+                dynamic_key,
+                dynamic_fallback,
+                base_verb,
+                forced_present,
+                forced_past,
+            })
         } else {
-            Ok((verb_part, None, None))
+            Ok(ParsedVerb {
+                dynamic_key,
+                dynamic_fallback,
+                base_verb,
+                forced_present: None,
+                forced_past: None,
+            })
         }
     }
 
     #[inline]
-    fn emit_verb_warnings(original_verb: &str, lower_verb: &str) {
+    fn emit_verb_warnings(original_verb: &str, lower_verb: &str, is_dynamic: bool) {
+        if is_dynamic {
+            return;
+        }
+
         if let Some(options) = crate::grammar::get_collision_options(lower_verb) {
             let opt1 = options.first().copied().unwrap_or("unknown");
             let opt2 = options.get(1).copied().unwrap_or("unknown");
@@ -897,7 +1656,11 @@ pub(crate) fn push_literal(tokens: &mut Vec<Token>, raw: &str, start: usize, end
     if end > start
         && let Some(slice) = raw.get(start..end)
     {
-        tokens.push(Token::Literal(slice.to_string()));
+        if let Some(Token::Literal(last)) = tokens.last_mut() {
+            last.push_str(slice);
+        } else {
+            tokens.push(Token::Literal(slice.to_string()));
+        }
     }
 }
 

@@ -1209,6 +1209,108 @@ fn test_dynamic_future_tense_force_director_stance() {
 }
 
 #[test]
+fn test_dynamic_verb_injection() {
+    let player = MockEntity {
+        id: "char_1".to_string(),
+        name: "Aldran".to_string(),
+        gender: Gender::Male,
+        is_plural: false,
+        is_proper_noun: true,
+    };
+
+    let cache = TemplateCache::new(100);
+    let template = cache
+        .get_or_compile("{*A:source:subj} [source:$action].")
+        .expect("Failed to compile template");
+    let template_cap = cache
+        .get_or_compile("{*A:source:subj} [source:$Action].")
+        .expect("Failed to compile template");
+
+    // 1. Single dynamic verb
+    let ctx1 = RenderContext::new("char_2")
+        .with_entity("source", &player)
+        .with_variable("action", "smile");
+    assert_eq!(
+        PerspectiveEngine::render(&template, &ctx1).expect("Failed to render template"),
+        "Aldran smiles."
+    );
+    assert_eq!(
+        PerspectiveEngine::render(&template_cap, &ctx1).expect("Failed to render template"),
+        "Aldran Smiles."
+    );
+
+    // 2. Multiple dynamic verbs (Oxford comma formatting)
+    let ctx2 = RenderContext::new("char_2")
+        .with_entity("source", &player)
+        .with_variables("action", ["smile", "wave", "dance"]);
+    assert_eq!(
+        PerspectiveEngine::render(&template, &ctx2).expect("Failed to render template"),
+        "Aldran smiles, waves, and dances."
+    );
+
+    // 3. Tense shifting on dynamic verbs natively applies to all list members
+    let ctx3 = RenderContext::new("char_2")
+        .with_entity("source", &player)
+        .with_tense(crate::models::Tense::Past)
+        .with_variables("action", ["run", "jump"]);
+    assert_eq!(
+        PerspectiveEngine::render(&template, &ctx3).expect("Failed to render template"),
+        "Aldran ran and jumped."
+    );
+
+    // 4. Missing variable fails gracefully
+    let ctx4 = RenderContext::new("char_2").with_entity("source", &player);
+    assert!(PerspectiveEngine::render(&template, &ctx4).is_err());
+}
+
+#[test]
+fn test_dynamic_variable_injection() {
+    let cache = TemplateCache::new(100);
+
+    // 1. Single variable insertion
+    let t1 = cache
+        .get_or_compile("It is {$weather} today.")
+        .expect("Failed to compile template");
+    let ctx1 = RenderContext::new("viewer").with_variable("weather", "raining");
+    assert_eq!(
+        PerspectiveEngine::render(&t1, &ctx1).expect("Failed to render template"),
+        "It is raining today."
+    );
+
+    // 2. Capitalization and Oxford Comma listing
+    let t2 = cache
+        .get_or_compile("{$Colors} are my favorite.")
+        .expect("Failed to compile template");
+    let ctx2 = RenderContext::new("viewer").with_variables("colors", ["red", "green", "blue"]);
+    assert_eq!(
+        PerspectiveEngine::render(&t2, &ctx2).expect("Failed to render template"),
+        "Red, green, and blue are my favorite."
+    );
+
+    // 3. All Caps
+    let t3 = cache
+        .get_or_compile("IT IS {$WEATHER}!")
+        .expect("Failed to compile template");
+    assert_eq!(
+        PerspectiveEngine::render(&t3, &ctx1).expect("Failed to render template"),
+        "IT IS RAINING!"
+    );
+
+    // 4. Missing variable fails gracefully
+    let ctx_empty = RenderContext::new("viewer");
+    assert!(PerspectiveEngine::render(&t1, &ctx_empty).is_err());
+
+    // 5. Spacing resilience
+    let t4 = cache
+        .get_or_compile("It is { $weather } today.")
+        .expect("Failed to compile template");
+    assert_eq!(
+        PerspectiveEngine::render(&t4, &ctx1).expect("Failed to render template"),
+        "It is raining today."
+    );
+}
+
+#[test]
 fn test_all_twelve_english_tenses() {
     let player = MockEntity {
         id: "char_1".to_string(),

@@ -12,13 +12,13 @@ use crate::typography::{has_protocol_tags, skip_protocol_tags};
 use std::collections::HashMap;
 
 /// Parameters extracted from a token or fallback logic to render an entity.
-struct EntityRefParams<'a> {
-    key: &'a str,
-    article: Option<&'a str>,
-    p_type: Option<&'a str>,
-    owner_key: Option<&'a str>,
+struct EntityRefParams<'p> {
+    key: &'p str,
+    article: Option<&'p str>,
+    p_type: Option<&'p str>,
+    owner_key: Option<&'p str>,
     owner_flags: TagFlags,
-    adjectives: Option<&'a str>,
+    adjectives: Option<&'p str>,
     flags: TagFlags,
     ordinal: Option<usize>,
 }
@@ -110,7 +110,33 @@ impl PerspectiveEngine {
         let mut raw_output = String::with_capacity(template.estimated_length);
         let mut caps_buffer = String::new();
 
-        for token in &template.tokens {
+        Self::render_tokens(
+            ctx,
+            &template.tokens,
+            &mut raw_output,
+            &mut caps_buffer,
+            &pre_resolved,
+            &future_keys,
+        )?;
+
+        if ctx.auto_clear {
+            ctx.clear_anaphora();
+        }
+
+        // 2. Pass the fully assembled base-case string to the typography post-processor
+        Ok(post_process_typography(&raw_output))
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn render_tokens<'a>(
+        ctx: &'a RenderContext,
+        tokens: &[Token],
+        raw_output: &mut String,
+        caps_buffer: &mut String,
+        pre_resolved: &HashMap<&str, &'a dyn TemplateEntity>,
+        future_keys: &[&str],
+    ) -> Result<(), String> {
+        for token in tokens {
             let start_len = raw_output.len();
             let mut all_caps = false;
 
@@ -126,49 +152,100 @@ impl PerspectiveEngine {
                     flags,
                 } => {
                     all_caps = flags.contains(TagFlags::ALL_CAPS);
+
+                    let resolved_key = Self::resolve_tag_segment(ctx, key, pre_resolved)?;
+                    let resolved_article = article
+                        .as_ref()
+                        .map(|a| Self::resolve_tag_segment(ctx, a, pre_resolved))
+                        .transpose()?;
+                    let resolved_p_type = p_type
+                        .as_ref()
+                        .map(|p| Self::resolve_tag_segment(ctx, p, pre_resolved))
+                        .transpose()?;
+                    let resolved_owner_key = owner_key
+                        .as_ref()
+                        .map(|o| Self::resolve_tag_segment(ctx, o, pre_resolved))
+                        .transpose()?;
+                    let resolved_adjectives = adjectives
+                        .as_ref()
+                        .map(|a| Self::resolve_tag_segment(ctx, a, pre_resolved))
+                        .transpose()?;
+
                     Self::render_entity_ref(
                         ctx,
-                        &mut raw_output,
+                        raw_output,
                         &EntityRefParams {
-                            key,
-                            article: article.as_deref(),
-                            p_type: p_type.as_deref(),
-                            owner_key: owner_key.as_deref(),
+                            key: resolved_key.as_ref(),
+                            article: resolved_article.as_deref(),
+                            p_type: resolved_p_type.as_deref(),
+                            owner_key: resolved_owner_key.as_deref(),
                             owner_flags: *owner_flags,
-                            adjectives: adjectives.as_deref(),
+                            adjectives: resolved_adjectives.as_deref(),
                             flags: *flags,
                             ordinal: None,
                         },
-                        &future_keys,
-                        &pre_resolved,
+                        future_keys,
+                        pre_resolved,
                     )?;
                 }
-                Token::VerbRef { .. } => {
-                    if let Token::VerbRef { flags, .. } = token {
-                        all_caps = flags.contains(TagFlags::ALL_CAPS);
-                    }
-                    Self::render_verb_ref(ctx, &mut raw_output, token, &pre_resolved)?;
+                Token::VerbRef { flags, .. } => {
+                    all_caps = flags.contains(TagFlags::ALL_CAPS);
+                    Self::render_verb_ref(ctx, raw_output, token, pre_resolved)?;
                 }
-                Token::SentenceBreak => {
-                    raw_output.push(SENTENCE_BREAK_SENTINEL);
+                Token::VariableRef {
+                    key,
+                    fallback,
+                    flags,
+                } => {
+                    all_caps = flags.contains(TagFlags::ALL_CAPS);
+                    Self::render_variable_ref(
+                        ctx,
+                        raw_output,
+                        key,
+                        fallback.as_deref(),
+                        *flags,
+                        pre_resolved,
+                    )?;
                 }
+                Token::SentenceBreak => raw_output.push(SENTENCE_BREAK_SENTINEL),
                 Token::NoSentenceBreak => raw_output.push(NO_SENTENCE_BREAK_SENTINEL),
+                Token::Conditional { branches, fallback } => {
+                    let mut matched = false;
+                    for branch in branches {
+                        if Self::evaluate_condition(ctx, &branch.condition, pre_resolved) {
+                            Self::render_tokens(
+                                ctx,
+                                &branch.body,
+                                raw_output,
+                                caps_buffer,
+                                pre_resolved,
+                                future_keys,
+                            )?;
+                            matched = true;
+                            break;
+                        }
+                    }
+                    if !matched && let Some(fb) = fallback {
+                        Self::render_tokens(
+                            ctx,
+                            fb,
+                            raw_output,
+                            caps_buffer,
+                            pre_resolved,
+                            future_keys,
+                        )?;
+                    }
+                }
             }
 
             if all_caps && raw_output.len() > start_len {
                 caps_buffer.clear();
-                apply_all_caps(&raw_output[start_len..], &mut caps_buffer);
+                apply_all_caps(&raw_output[start_len..], caps_buffer);
                 raw_output.truncate(start_len);
-                raw_output.push_str(&caps_buffer);
+                raw_output.push_str(caps_buffer);
             }
         }
-
-        if ctx.auto_clear {
-            ctx.clear_anaphora();
-        }
-
-        // 2. Pass the fully assembled base-case string to the typography post-processor
-        Ok(post_process_typography(&raw_output))
+        Ok(())
     }
 
     #[inline]
@@ -196,6 +273,188 @@ impl PerspectiveEngine {
 
         tracing::error!("Failed to render template: Missing entity for key '{key}'");
         Err(format!("Missing entity for key: {key}"))
+    }
+
+    #[inline]
+    fn resolve_tag_segment<'a>(
+        ctx: &'a RenderContext,
+        segment: &'a crate::parser::TagSegment,
+        pre_resolved: &HashMap<&str, &'a dyn TemplateEntity>,
+    ) -> Result<std::borrow::Cow<'a, str>, String> {
+        match segment {
+            crate::parser::TagSegment::Literal(s) => Ok(std::borrow::Cow::Borrowed(s.as_str())),
+            crate::parser::TagSegment::Variable { key: k, fallback } => {
+                if let Some((ent, prop)) = k.rsplit_once('.') {
+                    let root_key = ent.split_once('.').map_or(ent, |(r, _)| r);
+                    if ctx.entities.contains_key(root_key) {
+                        if let Ok(entity) = pre_resolved
+                            .get(ent)
+                            .copied()
+                            .map_or_else(|| Self::get_entity(ctx, ent), Ok)
+                            && let Some(val) = entity.get_string_property(prop)
+                        {
+                            return Ok(val);
+                        }
+                        if let Some(fb) = fallback {
+                            return Ok(std::borrow::Cow::Owned(fb.clone()));
+                        }
+                        tracing::error!("Missing string property '{prop}' on entity '{ent}'");
+                        return Err(format!(
+                            "Missing string property '{prop}' on entity '{ent}'"
+                        ));
+                    }
+                }
+                if let Some(values) = ctx.variables.get(k.as_str()) {
+                    if let Some(v) = values.first() {
+                        Ok(std::borrow::Cow::Borrowed(v.as_str()))
+                    } else {
+                        Ok(std::borrow::Cow::Borrowed(""))
+                    }
+                } else {
+                    if let Some(fb) = fallback {
+                        return Ok(std::borrow::Cow::Owned(fb.clone()));
+                    }
+                    tracing::error!("Missing dynamic variable for key '{k}'");
+                    Err(format!("Missing variable for key: {k}"))
+                }
+            }
+        }
+    }
+
+    fn evaluate_condition_value_bool(
+        ctx: &RenderContext,
+        val: &crate::parser::ConditionValue,
+        pre_resolved: &HashMap<&str, &dyn TemplateEntity>,
+    ) -> bool {
+        match val {
+            crate::parser::ConditionValue::Literal(s) => {
+                !s.is_empty() && !s.eq_ignore_ascii_case("false") && s != "0"
+            }
+            crate::parser::ConditionValue::Number(n) => *n != 0.0,
+            crate::parser::ConditionValue::Variable(var) => {
+                ctx.variables.get(var.as_str()).is_some_and(|v| {
+                    v.first().is_some_and(|f| {
+                        !f.is_empty() && !f.eq_ignore_ascii_case("false") && f != "0"
+                    })
+                })
+            }
+            crate::parser::ConditionValue::EntityProperty(ent, prop) => {
+                if let Ok(entity) = pre_resolved
+                    .get(ent.as_str())
+                    .copied()
+                    .map_or_else(|| Self::get_entity(ctx, ent), Ok)
+                {
+                    entity.check_condition(prop)
+                } else {
+                    false
+                }
+            }
+        }
+    }
+
+    fn evaluate_condition_value_string<'a>(
+        ctx: &'a RenderContext,
+        val: &'a crate::parser::ConditionValue,
+        pre_resolved: &HashMap<&str, &'a dyn TemplateEntity>,
+    ) -> Option<std::borrow::Cow<'a, str>> {
+        match val {
+            crate::parser::ConditionValue::Literal(s) => {
+                Some(std::borrow::Cow::Borrowed(s.as_str()))
+            }
+            crate::parser::ConditionValue::Number(n) => {
+                Some(std::borrow::Cow::Owned(n.to_string()))
+            }
+            crate::parser::ConditionValue::Variable(var) => ctx
+                .variables
+                .get(var.as_str())
+                .and_then(|v| v.first())
+                .map(|s| std::borrow::Cow::Borrowed(s.as_str())),
+            crate::parser::ConditionValue::EntityProperty(ent, prop) => {
+                if let Ok(entity) = pre_resolved
+                    .get(ent.as_str())
+                    .copied()
+                    .map_or_else(|| Self::get_entity(ctx, ent), Ok)
+                {
+                    entity.get_string_property(prop)
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
+    fn get_numeric_value(
+        ctx: &RenderContext,
+        val: &crate::parser::ConditionValue,
+        pre_resolved: &HashMap<&str, &dyn TemplateEntity>,
+    ) -> Option<f64> {
+        if let crate::parser::ConditionValue::Number(n) = val {
+            Some(*n)
+        } else {
+            let s_opt = Self::evaluate_condition_value_string(ctx, val, pre_resolved);
+            s_opt.and_then(|s| s.parse::<f64>().ok())
+        }
+    }
+
+    fn evaluate_numeric(
+        ctx: &RenderContext,
+        left: &crate::parser::ConditionValue,
+        right: &crate::parser::ConditionValue,
+        pre_resolved: &HashMap<&str, &dyn TemplateEntity>,
+        op: impl Fn(f64, f64) -> bool,
+    ) -> bool {
+        let left_num = Self::get_numeric_value(ctx, left, pre_resolved);
+        let right_num = Self::get_numeric_value(ctx, right, pre_resolved);
+        if let (Some(l), Some(r)) = (left_num, right_num) {
+            op(l, r)
+        } else {
+            false
+        }
+    }
+
+    fn evaluate_condition(
+        ctx: &RenderContext,
+        condition: &crate::parser::Condition,
+        pre_resolved: &HashMap<&str, &dyn TemplateEntity>,
+    ) -> bool {
+        match condition {
+            crate::parser::Condition::Value(val) => {
+                Self::evaluate_condition_value_bool(ctx, val, pre_resolved)
+            }
+            crate::parser::Condition::Not(inner) => {
+                !Self::evaluate_condition(ctx, inner, pre_resolved)
+            }
+            crate::parser::Condition::And(left, right) => {
+                Self::evaluate_condition(ctx, left, pre_resolved)
+                    && Self::evaluate_condition(ctx, right, pre_resolved)
+            }
+            crate::parser::Condition::Or(left, right) => {
+                Self::evaluate_condition(ctx, left, pre_resolved)
+                    || Self::evaluate_condition(ctx, right, pre_resolved)
+            }
+            crate::parser::Condition::Eq(left, right) => {
+                let left_str = Self::evaluate_condition_value_string(ctx, left, pre_resolved);
+                let right_str = Self::evaluate_condition_value_string(ctx, right, pre_resolved);
+                left_str == right_str
+            }
+            crate::parser::Condition::NotEq(left, right) => {
+                let left_str = Self::evaluate_condition_value_string(ctx, left, pre_resolved);
+                let right_str = Self::evaluate_condition_value_string(ctx, right, pre_resolved);
+                left_str != right_str
+            }
+            crate::parser::Condition::Gt(left, right) => {
+                Self::evaluate_numeric(ctx, left, right, pre_resolved, |l, r| l > r)
+            }
+            crate::parser::Condition::Lt(left, right) => {
+                Self::evaluate_numeric(ctx, left, right, pre_resolved, |l, r| l < r)
+            }
+            crate::parser::Condition::GtEq(left, right) => {
+                Self::evaluate_numeric(ctx, left, right, pre_resolved, |l, r| l >= r)
+            }
+            crate::parser::Condition::LtEq(left, right) => {
+                Self::evaluate_numeric(ctx, left, right, pre_resolved, |l, r| l <= r)
+            }
+        }
     }
 
     #[inline]
@@ -269,7 +528,7 @@ impl PerspectiveEngine {
         let entity_adjs = entity.adjectives().filter(|adjs| !adjs.is_empty())?;
 
         // Prevent bitshift overflow by capping the limit to the bit-width of our counter
-        let safe_limit = limit.min((u64::BITS - 1) as usize);
+        let safe_limit = limit.min((u128::BITS - 1) as usize);
         if safe_limit == 0 {
             return None;
         }
@@ -302,7 +561,7 @@ impl PerspectiveEngine {
 
         // Iterate through all non-empty subsets of the entity's adjectives to find the smallest set
         // that minimizes the number of colliders sharing those adjectives.
-        for i in 1_u64..(1_u64 << searchable_adjs.len()) {
+        for i in 1_u128..(1_u128 << searchable_adjs.len()) {
             subset.clear();
             for (j, &adj) in searchable_adjs.iter().enumerate() {
                 if (i >> j) & 1 == 1 {
@@ -742,6 +1001,17 @@ impl PerspectiveEngine {
 
         raw_output.push(' ');
 
+        if let Some(adj) = params.adjectives
+            && !adj.is_empty()
+        {
+            if params.flags.contains(TagFlags::ALL_CAPS) {
+                apply_all_caps(adj, raw_output);
+            } else {
+                raw_output.push_str(adj);
+            }
+            raw_output.push(' ');
+        }
+
         Ok(())
     }
 
@@ -1033,7 +1303,11 @@ impl PerspectiveEngine {
             p_type: actual_p_type,
             owner_key: None,
             owner_flags: TagFlags::empty(),
-            adjectives: params.adjectives, // Pass the adjectives to the print functions
+            adjectives: if after_possessive {
+                None
+            } else {
+                params.adjectives
+            },
             flags: active_flags,
             ordinal,
         };
@@ -1130,7 +1404,9 @@ impl PerspectiveEngine {
         }
 
         let mut adj_printed = false;
-        if let Some(adj) = active_params.adjectives {
+        if let Some(adj) = active_params.adjectives
+            && !adj.is_empty()
+        {
             let mut formatted_adj = String::new();
             if active_params.flags.contains(TagFlags::ALL_CAPS) {
                 crate::typography::apply_all_caps(adj, &mut formatted_adj);
@@ -1143,6 +1419,7 @@ impl PerspectiveEngine {
             } else {
                 raw_output.push_str(&formatted_adj);
             }
+            raw_output.push(' ');
             adj_printed = true;
         }
 
@@ -1456,12 +1733,16 @@ impl PerspectiveEngine {
         );
 
         let mut adj_prefix = String::new();
-        if first_visible_item && let Some(adj) = params.adjectives {
+        if first_visible_item
+            && let Some(adj) = params.adjectives
+            && !adj.is_empty()
+        {
             if params.flags.contains(TagFlags::ALL_CAPS) {
                 crate::typography::apply_all_caps(adj, &mut adj_prefix);
             } else {
                 adj_prefix.push_str(adj);
             }
+            adj_prefix.push(' ');
         }
 
         let mut final_name = if let Some(resolved_art) = config.article_to_use.and_then(|art| {
@@ -1604,6 +1885,83 @@ impl PerspectiveEngine {
         false
     }
 
+    fn render_variable_ref<'a>(
+        ctx: &'a RenderContext,
+        raw_output: &mut String,
+        key: &str,
+        fallback: Option<&str>,
+        flags: TagFlags,
+        pre_resolved: &HashMap<&str, &'a dyn TemplateEntity>,
+    ) -> Result<(), String> {
+        if let Some((ent, prop)) = key.rsplit_once('.') {
+            let root_key = ent.split_once('.').map_or(ent, |(r, _)| r);
+            if ctx.entities.contains_key(root_key) {
+                if let Ok(entity) = pre_resolved
+                    .get(ent)
+                    .copied()
+                    .map_or_else(|| Self::get_entity(ctx, ent), Ok)
+                    && let Some(val) = entity.get_string_property(prop)
+                {
+                    Self::apply_variable_formatting(val.as_ref(), raw_output, flags);
+                    return Ok(());
+                }
+                if let Some(fb) = fallback {
+                    Self::apply_variable_formatting(fb, raw_output, flags);
+                    return Ok(());
+                }
+                tracing::error!("Missing string property '{prop}' on entity '{ent}'");
+                return Err(format!(
+                    "Missing string property '{prop}' on entity '{ent}'"
+                ));
+            }
+        }
+        if let Some(values) = ctx.variables.get(key) {
+            if values.is_empty() {
+                return Ok(());
+            }
+
+            let mut formatted_vals: Vec<std::borrow::Cow<'_, str>> =
+                Vec::with_capacity(values.len());
+            for (i, v) in values.iter().enumerate() {
+                let cap_this = if i == 0 {
+                    flags.is_capitalized()
+                } else {
+                    false
+                };
+                if cap_this {
+                    formatted_vals
+                        .push(std::borrow::Cow::Owned(crate::grammar::capitalize_first(v)));
+                } else {
+                    formatted_vals.push(std::borrow::Cow::Borrowed(v.as_str()));
+                }
+            }
+
+            let list = crate::grammar::format_oxford_list(formatted_vals, "and");
+            raw_output.push_str(&list);
+            Ok(())
+        } else {
+            if let Some(fb) = fallback {
+                Self::apply_variable_formatting(fb, raw_output, flags);
+                return Ok(());
+            }
+            tracing::error!("Missing dynamic variable for key '{key}'");
+            Err(format!("Missing variable for key: {key}"))
+        }
+    }
+
+    #[inline]
+    fn apply_variable_formatting(val: &str, raw_output: &mut String, flags: TagFlags) {
+        let mut formatted = String::new();
+        if flags.contains(TagFlags::ALL_CAPS) {
+            crate::typography::apply_all_caps(val, &mut formatted);
+        } else if flags.is_capitalized() {
+            formatted.push_str(&crate::grammar::capitalize_first(val));
+        } else {
+            formatted.push_str(val);
+        }
+        raw_output.push_str(&formatted);
+    }
+
     fn render_verb_ref<'a>(
         ctx: &'a RenderContext,
         raw_output: &mut String,
@@ -1614,6 +1972,8 @@ impl PerspectiveEngine {
             subject_key,
             original_verb,
             lower_verb,
+            dynamic_key,
+            dynamic_fallback,
             forced_present,
             forced_past,
             flags,
@@ -1622,16 +1982,22 @@ impl PerspectiveEngine {
             return Ok(());
         };
 
+        let resolved_subject_key = subject_key
+            .as_ref()
+            .map(|s| Self::resolve_tag_segment(ctx, s, pre_resolved))
+            .transpose()?;
+
         // Explicitly bind the verb to its subject to solve passive voice / compound subjects
-        let (mut is_viewer, mut is_plural, is_group) = if let Some(key) = subject_key {
+        let (mut is_viewer, mut is_plural, is_group) = if let Some(key) = resolved_subject_key {
+            let key_str = key.as_ref();
             let entity = pre_resolved
-                .get(key.as_str())
+                .get(key_str)
                 .copied()
-                .map_or_else(|| Self::get_entity(ctx, key), Ok)?;
+                .map_or_else(|| Self::get_entity(ctx, key_str), Ok)?;
             let effective_viewer = effective_viewer_id(ctx, flags.force_3rd_person());
-            update_memory(&ctx.active_subject, key);
-            update_memory(&ctx.last_mentioned, key);
-            track_recent_entity(ctx, key, entity, None, None);
+            update_memory(&ctx.active_subject, key_str);
+            update_memory(&ctx.last_mentioned, key_str);
+            track_recent_entity(ctx, key_str, entity, None, None);
             (
                 entity.contains_viewer(effective_viewer),
                 entity.is_plural(),
@@ -1647,6 +2013,19 @@ impl PerspectiveEngine {
         }
         if extract_member {
             is_viewer = false;
+        }
+
+        if let Some(d_key) = dynamic_key {
+            return Self::render_dynamic_verb_key(
+                ctx,
+                raw_output,
+                d_key,
+                dynamic_fallback.as_deref(),
+                *flags,
+                is_viewer,
+                is_plural,
+                pre_resolved,
+            );
         }
 
         let forced_conjugation = match ctx.tense {
@@ -1693,6 +2072,89 @@ impl PerspectiveEngine {
             )
         };
         raw_output.push_str(&conjugated);
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_dynamic_verb_key(
+        ctx: &RenderContext,
+        raw_output: &mut String,
+        d_key: &str,
+        dynamic_fallback: Option<&str>,
+        flags: TagFlags,
+        is_viewer: bool,
+        is_plural: bool,
+        pre_resolved: &HashMap<&str, &dyn TemplateEntity>,
+    ) -> Result<(), String> {
+        let mut conjugated_verbs = Vec::new();
+
+        if let Some((ent, prop)) = d_key.rsplit_once('.') {
+            let root_key = ent.split_once('.').map_or(ent, |(r, _)| r);
+            if ctx.entities.contains_key(root_key) {
+                let entity = pre_resolved
+                    .get(ent)
+                    .copied()
+                    .map_or_else(|| Self::get_entity(ctx, ent), Ok)?;
+                if let Some(val) = entity.get_string_property(prop) {
+                    let v_lower = val.to_lowercase();
+                    let conjugated = conjugate_verb(
+                        &val,
+                        &v_lower,
+                        flags.is_capitalized(),
+                        is_viewer,
+                        is_plural,
+                        ctx.stance,
+                        ctx.tense,
+                    );
+                    conjugated_verbs.push(conjugated.into_owned().into());
+                } else if let Some(fb) = dynamic_fallback {
+                    conjugated_verbs.push(std::borrow::Cow::Owned(fb.to_string()));
+                } else {
+                    tracing::error!("Missing string property '{prop}' on entity '{ent}'");
+                    return Err(format!(
+                        "Missing string property '{prop}' on entity '{ent}'"
+                    ));
+                }
+            }
+        }
+
+        if conjugated_verbs.is_empty() {
+            if let Some(verbs) = ctx.variables.get(d_key) {
+                if verbs.is_empty() {
+                    return Ok(());
+                }
+                for (i, v) in verbs.iter().enumerate() {
+                    let v_lower = v.to_lowercase();
+                    let cap_this = if i == 0 {
+                        flags.is_capitalized()
+                    } else {
+                        false
+                    };
+                    let conjugated = conjugate_verb(
+                        v, &v_lower, cap_this, is_viewer, is_plural, ctx.stance, ctx.tense,
+                    );
+                    conjugated_verbs.push(conjugated.into_owned().into());
+                }
+            } else if let Some(fb) = dynamic_fallback {
+                let fb_lower = fb.to_lowercase();
+                let conjugated = conjugate_verb(
+                    fb,
+                    &fb_lower,
+                    flags.is_capitalized(),
+                    is_viewer,
+                    is_plural,
+                    ctx.stance,
+                    ctx.tense,
+                );
+                conjugated_verbs.push(conjugated.into_owned().into());
+            } else {
+                tracing::error!("Missing dynamic verb variable for key '{d_key}'");
+                return Err(format!("Missing variable for key: {d_key}"));
+            }
+        }
+
+        let list = crate::grammar::format_oxford_list(conjugated_verbs, "and");
+        raw_output.push_str(&list);
         Ok(())
     }
 }
