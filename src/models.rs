@@ -716,7 +716,7 @@ impl<'a> RenderContext<'a> {
     #[must_use]
     pub fn with_viewer(mut self, viewer_id: &'a str) -> Self {
         self.viewer_id = viewer_id;
-        self.target_cache.get_mut().clear();
+        self.clear_target_cache();
         self
     }
 
@@ -724,7 +724,7 @@ impl<'a> RenderContext<'a> {
     #[must_use]
     pub fn with_stance(mut self, stance: ActorStance) -> Self {
         self.stance = stance;
-        self.target_cache.get_mut().clear();
+        self.clear_target_cache();
         self
     }
 
@@ -748,7 +748,7 @@ impl<'a> RenderContext<'a> {
     #[must_use]
     pub fn with_ordinal_word_threshold(mut self, threshold: usize) -> Self {
         self.ordinal_word_threshold = threshold;
-        self.target_cache.get_mut().clear();
+        self.clear_target_cache();
         self
     }
 
@@ -758,7 +758,7 @@ impl<'a> RenderContext<'a> {
     #[must_use]
     pub fn with_strict_diacritics(mut self, strict: bool) -> Self {
         self.strict_diacritics = strict;
-        self.target_cache.get_mut().clear();
+        self.clear_target_cache();
         self
     }
 
@@ -794,7 +794,7 @@ impl<'a> RenderContext<'a> {
     #[must_use]
     pub fn with_entity(mut self, key: &'a str, entity: &'a dyn TemplateEntity) -> Self {
         self.entities.insert(key, entity);
-        self.target_cache.get_mut().clear();
+        self.clear_target_cache();
         self
     }
 
@@ -870,7 +870,7 @@ impl<'a> RenderContext<'a> {
                 &mut last_mentioned,
                 &mut active_subject,
             );
-            self.target_cache.borrow_mut().clear();
+            self.clear_target_cache();
         }
         self
     }
@@ -894,7 +894,7 @@ impl<'a> RenderContext<'a> {
         *self.active_subject.borrow_mut() = state.active_subject;
         *self.recent_entities.borrow_mut() = state.recent_entities;
         *self.ordinals.borrow_mut() = state.ordinals;
-        self.target_cache.borrow_mut().clear();
+        self.clear_target_cache();
         self
     }
 
@@ -913,7 +913,7 @@ impl<'a> RenderContext<'a> {
         *self.active_subject.borrow_mut() = None;
         self.recent_entities.borrow_mut().clear();
         self.ordinals.borrow_mut().clear();
-        self.target_cache.borrow_mut().clear();
+        self.clear_target_cache();
     }
 
     /// Pins an entity in the anaphora memory so it will never be automatically evicted.
@@ -965,7 +965,7 @@ impl<'a> RenderContext<'a> {
                 &mut last_mentioned,
                 &mut active_subject,
             );
-            self.target_cache.borrow_mut().clear();
+            self.clear_target_cache();
         }
     }
 
@@ -978,7 +978,7 @@ impl<'a> RenderContext<'a> {
             .find(|r| r.key == key)
         {
             item.flags.remove(RecentEntityFlags::IS_PINNED);
-            self.target_cache.borrow_mut().clear();
+            self.clear_target_cache();
         }
     }
 
@@ -991,7 +991,7 @@ impl<'a> RenderContext<'a> {
             *self.active_subject.borrow_mut() = None;
         }
         self.recent_entities.borrow_mut().retain(|r| r.key != key);
-        self.target_cache.borrow_mut().clear();
+        self.clear_target_cache();
     }
 
     /// Explicitly clears the memoization cache used by `resolve_target`.

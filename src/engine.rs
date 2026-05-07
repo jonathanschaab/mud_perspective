@@ -499,7 +499,7 @@ impl PerspectiveEngine {
         name_collision: bool,
     ) -> Option<usize> {
         let mut ordinals = ctx.ordinals.borrow_mut();
-        ctx.target_cache.borrow_mut().clear();
+        ctx.clear_target_cache();
         if !ordinals.contains_key(name) {
             ordinals.insert(
                 name.to_string(),
@@ -1657,7 +1657,7 @@ fn track_recent_entity(
     adjectives: Option<&str>,
 ) {
     let mut recents = ctx.recent_entities.borrow_mut();
-    ctx.target_cache.borrow_mut().clear();
+        ctx.clear_target_cache();
 
     let mut new_adjs = Vec::new();
     if let Some(adj_str) = adjectives {
