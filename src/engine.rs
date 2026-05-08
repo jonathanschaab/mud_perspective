@@ -127,7 +127,6 @@ impl PerspectiveEngine {
         Ok(post_process_typography(&raw_output))
     }
 
-    #[allow(clippy::too_many_lines)]
     fn render_tokens<'a>(
         ctx: &'a RenderContext,
         tokens: &[Token],
@@ -142,51 +141,9 @@ impl PerspectiveEngine {
 
             match token {
                 Token::Literal(text) => raw_output.push_str(text),
-                Token::EntityRef {
-                    key,
-                    article,
-                    p_type,
-                    owner_key,
-                    owner_flags,
-                    adjectives,
-                    flags,
-                } => {
+                Token::EntityRef { flags, .. } => {
                     all_caps = flags.contains(TagFlags::ALL_CAPS);
-
-                    let resolved_key = Self::resolve_tag_segment(ctx, key, pre_resolved)?;
-                    let resolved_article = article
-                        .as_ref()
-                        .map(|a| Self::resolve_tag_segment(ctx, a, pre_resolved))
-                        .transpose()?;
-                    let resolved_p_type = p_type
-                        .as_ref()
-                        .map(|p| Self::resolve_tag_segment(ctx, p, pre_resolved))
-                        .transpose()?;
-                    let resolved_owner_key = owner_key
-                        .as_ref()
-                        .map(|o| Self::resolve_tag_segment(ctx, o, pre_resolved))
-                        .transpose()?;
-                    let resolved_adjectives = adjectives
-                        .as_ref()
-                        .map(|a| Self::resolve_tag_segment(ctx, a, pre_resolved))
-                        .transpose()?;
-
-                    Self::render_entity_ref(
-                        ctx,
-                        raw_output,
-                        &EntityRefParams {
-                            key: resolved_key.as_ref(),
-                            article: resolved_article.as_deref(),
-                            p_type: resolved_p_type.as_deref(),
-                            owner_key: resolved_owner_key.as_deref(),
-                            owner_flags: *owner_flags,
-                            adjectives: resolved_adjectives.as_deref(),
-                            flags: *flags,
-                            ordinal: None,
-                        },
-                        future_keys,
-                        pre_resolved,
-                    )?;
+                    Self::render_entity_token(ctx, raw_output, token, pre_resolved, future_keys)?;
                 }
                 Token::VerbRef { flags, .. } => {
                     all_caps = flags.contains(TagFlags::ALL_CAPS);
@@ -209,32 +166,15 @@ impl PerspectiveEngine {
                 }
                 Token::SentenceBreak => raw_output.push(SENTENCE_BREAK_SENTINEL),
                 Token::NoSentenceBreak => raw_output.push(NO_SENTENCE_BREAK_SENTINEL),
-                Token::Conditional { branches, fallback } => {
-                    let mut matched = false;
-                    for branch in branches {
-                        if Self::evaluate_condition(ctx, &branch.condition, pre_resolved) {
-                            Self::render_tokens(
-                                ctx,
-                                &branch.body,
-                                raw_output,
-                                caps_buffer,
-                                pre_resolved,
-                                future_keys,
-                            )?;
-                            matched = true;
-                            break;
-                        }
-                    }
-                    if !matched && let Some(fb) = fallback {
-                        Self::render_tokens(
-                            ctx,
-                            fb,
-                            raw_output,
-                            caps_buffer,
-                            pre_resolved,
-                            future_keys,
-                        )?;
-                    }
+                Token::Conditional { .. } => {
+                    Self::render_conditional_token(
+                        ctx,
+                        token,
+                        raw_output,
+                        caps_buffer,
+                        pre_resolved,
+                        future_keys,
+                    )?;
                 }
             }
 
@@ -244,6 +184,95 @@ impl PerspectiveEngine {
                 raw_output.truncate(start_len);
                 raw_output.push_str(caps_buffer);
             }
+        }
+        Ok(())
+    }
+
+    fn render_entity_token<'a>(
+        ctx: &'a RenderContext,
+        raw_output: &mut String,
+        token: &Token,
+        pre_resolved: &HashMap<&str, &'a dyn TemplateEntity>,
+        future_keys: &[&str],
+    ) -> Result<(), String> {
+        let Token::EntityRef {
+            key,
+            article,
+            p_type,
+            owner_key,
+            owner_flags,
+            adjectives,
+            flags,
+        } = token
+        else {
+            return Ok(());
+        };
+
+        let resolved_key = Self::resolve_tag_segment(ctx, key, pre_resolved)?;
+        let resolved_article = article
+            .as_ref()
+            .map(|a| Self::resolve_tag_segment(ctx, a, pre_resolved))
+            .transpose()?;
+        let resolved_p_type = p_type
+            .as_ref()
+            .map(|p| Self::resolve_tag_segment(ctx, p, pre_resolved))
+            .transpose()?;
+        let resolved_owner_key = owner_key
+            .as_ref()
+            .map(|o| Self::resolve_tag_segment(ctx, o, pre_resolved))
+            .transpose()?;
+        let resolved_adjectives = adjectives
+            .as_ref()
+            .map(|a| Self::resolve_tag_segment(ctx, a, pre_resolved))
+            .transpose()?;
+
+        Self::render_entity_ref(
+            ctx,
+            raw_output,
+            &EntityRefParams {
+                key: resolved_key.as_ref(),
+                article: resolved_article.as_deref(),
+                p_type: resolved_p_type.as_deref(),
+                owner_key: resolved_owner_key.as_deref(),
+                owner_flags: *owner_flags,
+                adjectives: resolved_adjectives.as_deref(),
+                flags: *flags,
+                ordinal: None,
+            },
+            future_keys,
+            pre_resolved,
+        )
+    }
+
+    fn render_conditional_token<'a>(
+        ctx: &'a RenderContext,
+        token: &Token,
+        raw_output: &mut String,
+        caps_buffer: &mut String,
+        pre_resolved: &HashMap<&str, &'a dyn TemplateEntity>,
+        future_keys: &[&str],
+    ) -> Result<(), String> {
+        let Token::Conditional { branches, fallback } = token else {
+            return Ok(());
+        };
+
+        let mut matched = false;
+        for branch in branches {
+            if Self::evaluate_condition(ctx, &branch.condition, pre_resolved) {
+                Self::render_tokens(
+                    ctx,
+                    &branch.body,
+                    raw_output,
+                    caps_buffer,
+                    pre_resolved,
+                    future_keys,
+                )?;
+                matched = true;
+                break;
+            }
+        }
+        if !matched && let Some(fb) = fallback {
+            Self::render_tokens(ctx, fb, raw_output, caps_buffer, pre_resolved, future_keys)?;
         }
         Ok(())
     }

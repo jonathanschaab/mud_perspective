@@ -746,4 +746,13 @@ fn test_tag_internal_escapes() {
     } else {
         panic!("Expected VariableRef");
     }
+
+    // 3. Nested quotes inside fallback strings
+    let raw3 = r#"{$var ?? "'Nested'"}"#;
+    let t3 = Template::compile(raw3).expect("Failed to compile template");
+    if let Token::VariableRef { fallback, .. } = &t3.tokens[0] {
+        assert_eq!(fallback.as_deref(), Some("'Nested'"));
+    } else {
+        panic!("Expected VariableRef");
+    }
 }

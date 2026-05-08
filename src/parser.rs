@@ -51,11 +51,7 @@ impl TagSegment {
             if let Some((key, fallback)) = var.split_once("??") {
                 Self::Variable {
                     key: key.trim().to_lowercase(),
-                    fallback: Some(unescape_string(
-                        fallback
-                            .trim()
-                            .trim_matches(|c| c == '"' || c == '\'' || c == '`'),
-                    )),
+                    fallback: Some(unescape_string(strip_outer_quotes(fallback))),
                 }
             } else {
                 Self::Variable {
@@ -1290,12 +1286,7 @@ impl Template {
             .trim();
 
         let (key, fallback) = if let Some((k, f)) = clean.split_once("??") {
-            (
-                k.trim(),
-                Some(unescape_string(
-                    f.trim().trim_matches(|c| c == '"' || c == '\'' || c == '`'),
-                )),
-            )
+            (k.trim(), Some(unescape_string(strip_outer_quotes(f))))
         } else {
             (clean, None)
         };
@@ -1364,9 +1355,7 @@ impl Template {
             if let Some((k, f)) = var_name.split_once("??") {
                 (
                     Some(k.trim().to_string()),
-                    Some(unescape_string(
-                        f.trim().trim_matches(|c| c == '"' || c == '\'' || c == '`'),
-                    )),
+                    Some(unescape_string(strip_outer_quotes(f))),
                 )
             } else {
                 (Some(var_name.trim().to_string()), None)
@@ -1629,6 +1618,7 @@ pub(crate) fn consume_until_closed(
     let mut end_idx = start_idx + 1;
     let mut closed = false;
     let mut escaped = false;
+    let mut in_quote: Option<char> = None;
     while let Some(&(j, ch)) = chars.peek() {
         chars.next();
         if escaped {
@@ -1637,6 +1627,16 @@ pub(crate) fn consume_until_closed(
         }
         if ch == '\\' {
             escaped = true;
+            continue;
+        }
+        if let Some(q) = in_quote {
+            if ch == q {
+                in_quote = None;
+            }
+            continue;
+        }
+        if matches!(ch, '"' | '`') {
+            in_quote = Some(ch);
             continue;
         }
         if ch == close_char {
@@ -1826,6 +1826,20 @@ pub(crate) fn unescape_string(input: &str) -> String {
         }
     }
     out
+}
+
+/// Safely strips exactly one layer of outer quotes if they match.
+#[inline]
+pub(crate) fn strip_outer_quotes(s: &str) -> &str {
+    let s = s.trim();
+    if let Some(first) = s.chars().next()
+        && matches!(first, '"' | '\'' | '`')
+        && s.ends_with(first)
+        && s.len() >= 2
+    {
+        return &s[1..s.len() - 1];
+    }
+    s
 }
 
 #[inline]
