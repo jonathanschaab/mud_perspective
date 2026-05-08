@@ -1261,6 +1261,27 @@ fn test_dynamic_verb_injection() {
     // 4. Missing variable fails gracefully
     let ctx4 = RenderContext::new("char_2").with_entity("source", &player);
     assert!(PerspectiveEngine::render(&template, &ctx4).is_err());
+
+    // 5. Forced conjugations on dynamic verbs
+    let t_forced = cache
+        .get_or_compile("{*A:source:subj} [source:$action|am|are|is].")
+        .expect("Failed to compile template");
+    let ctx5 = RenderContext::new("char_2")
+        .with_entity("source", &player)
+        .with_variable("action", "smile"); // Base verb won't matter because of override
+    assert_eq!(
+        PerspectiveEngine::render(&t_forced, &ctx5).expect("Failed to render template"),
+        "Aldran is."
+    );
+
+    let ctx6 = RenderContext::new("char_1")
+        .with_stance(crate::models::ActorStance::FirstPerson)
+        .with_entity("source", &player)
+        .with_variable("action", "smile");
+    assert_eq!(
+        PerspectiveEngine::render(&t_forced, &ctx6).expect("Failed to render template"),
+        "I am."
+    );
 }
 
 #[test]
@@ -1501,17 +1522,19 @@ fn test_modal_verbs_perspectives() {
     // --- TEST 1: The modal verb "must" ---
     let template_must = cache
         .get_or_compile("{*A:source:subj} [source:must] flee from {*the:target:obj}!")
-        .unwrap();
+        .expect("Failed to compile template");
 
     // Actor Stance (Player is the one fleeing)
     let actor_must =
-        render_msg!("char_1", &template_must, "source" => &player, "target" => &goblin).unwrap();
+        render_msg!("char_1", &template_must, "source" => &player, "target" => &goblin)
+            .expect("Failed to render template");
     assert_eq!(actor_must, "You must flee from the Goblin!");
 
     // Director Stance (A bystander is watching the Player flee)
     // The engine should output "must", NOT "musts"
     let director_must =
-        render_msg!("char_3", &template_must, "source" => &player, "target" => &goblin).unwrap();
+        render_msg!("char_3", &template_must, "source" => &player, "target" => &goblin)
+            .expect("Failed to render template");
     assert_eq!(director_must, "Aldran must flee from the Goblin!");
 
     // --- TEST 2: Multiple modal verbs ("can" and "will") in a complex sentence ---
@@ -1519,17 +1542,18 @@ fn test_modal_verbs_perspectives() {
         .get_or_compile(
             "if {*a:source:subj} [source:can] catch {*the:target:obj}, {a:source:subj} [source:will] win.",
         )
-        .unwrap();
+        .expect("Failed to compile template");
 
     // Actor Stance
-    let actor_can =
-        render_msg!("char_1", &template_can, "source" => &player, "target" => &goblin).unwrap();
+    let actor_can = render_msg!("char_1", &template_can, "source" => &player, "target" => &goblin)
+        .expect("Failed to render template");
     assert_eq!(actor_can, "If you can catch the Goblin, you will win.");
 
     // Director Stance
     // The engine should output "can" and "will", NOT "cans" and "wills"
     let director_can =
-        render_msg!("char_3", &template_can, "source" => &player, "target" => &goblin).unwrap();
+        render_msg!("char_3", &template_can, "source" => &player, "target" => &goblin)
+            .expect("Failed to render template");
     assert_eq!(director_can, "If Aldran can catch the Goblin, he will win.");
 
     // --- TEST 3: Modal verbs interacting with plural targets ---

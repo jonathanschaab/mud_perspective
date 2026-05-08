@@ -81,6 +81,63 @@ pub(crate) fn consume_until_closed(
     Ok(end_idx)
 }
 
+#[inline]
+pub(crate) fn consume_control_tag(
+    chars: &mut std::iter::Peekable<std::str::CharIndices<'_>>,
+    start_idx: usize,
+) -> Result<usize, String> {
+    let mut closed = false;
+    let mut escaped = false;
+    let mut in_quote: Option<char> = None;
+    let mut prev_ch = '\0';
+    let mut end_idx = 0;
+
+    while let Some(&(j, ch)) = chars.peek() {
+        chars.next();
+        if escaped {
+            escaped = false;
+            prev_ch = ch;
+            continue;
+        }
+        if ch == '\\' {
+            escaped = true;
+            prev_ch = ch;
+            continue;
+        }
+        if let Some(q) = in_quote {
+            if ch == q {
+                in_quote = None;
+            }
+            prev_ch = ch;
+            continue;
+        }
+        if ch == '\'' {
+            if !prev_ch.is_alphanumeric() {
+                in_quote = Some(ch);
+            }
+        } else if matches!(ch, '"' | '`') {
+            in_quote = Some(ch);
+        }
+        if ch == '%'
+            && let Some(&(_, '}')) = chars.peek()
+        {
+            end_idx = j;
+            closed = true;
+            break;
+        }
+        prev_ch = ch;
+    }
+
+    if !closed {
+        tracing::error!("Unclosed control tag starting at index {}", start_idx);
+        return Err(format!(
+            "Unclosed control tag starting at index {start_idx}"
+        ));
+    }
+
+    Ok(end_idx)
+}
+
 /// Parses prefix modifiers (like `+`) used to force perspectives, returning the
 /// stripped string alongside the boolean flags for `force_3rd_person`/`force_article`, `no_smart`, and `force_singular`.
 #[inline]
@@ -226,6 +283,8 @@ pub(crate) fn unescape_string(input: &str) -> String {
                     'u' => process_unicode_escape(&mut chars, &mut out),
                     _ => out.push(escaped),
                 }
+            } else {
+                out.push('\\');
             }
         } else {
             out.push(c);

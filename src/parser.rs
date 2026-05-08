@@ -249,6 +249,27 @@ impl Template {
                         push_literal(frame.body_mut(), raw, last_literal_start, i);
                         last_literal_start = next_i;
                         chars.next();
+                    } else if next_c == 'u' {
+                        let frame = stack.last_mut().ok_or_else(|| {
+                            "Internal parser error: Missing root frame".to_string()
+                        })?;
+                        push_literal(frame.body_mut(), raw, last_literal_start, i);
+                        chars.next(); // Consume 'u'
+
+                        let mut decoded = String::new();
+                        process_unicode_escape(&mut chars, &mut decoded);
+
+                        if let Some(Token::Literal(last)) = frame.body_mut().last_mut() {
+                            last.push_str(&decoded);
+                        } else {
+                            frame.body_mut().push(Token::Literal(decoded));
+                        }
+
+                        if let Some(&(curr_i, _)) = chars.peek() {
+                            last_literal_start = curr_i;
+                        } else {
+                            last_literal_start = raw.len();
+                        }
                     } else if next_c == '\n' || next_c == '\r' {
                         let frame = stack.last_mut().ok_or_else(|| {
                             "Internal parser error: Missing root frame".to_string()
@@ -308,119 +329,116 @@ impl Template {
                         }
                         return Err(format!("Unclosed comment starting at index {i}"));
                     } else if next_c == '%' {
-                        if let Some(end_rel) = raw[next_i..].find("%}") {
+                        chars.next(); // Consume '{'
+                        chars.next(); // Consume '%'
+
+                        let end_idx = consume_control_tag(&mut chars, i)?;
+
+                        let frame = stack.last_mut().ok_or_else(|| {
+                            "Internal parser error: Missing root frame".to_string()
+                        })?;
+                        push_literal(frame.body_mut(), raw, last_literal_start, i);
+                        let content = raw[next_i + 1..end_idx].trim();
+
+                        if let Some(cond_str) = content.strip_prefix("if ") {
+                            if stack.len() > max_depth {
+                                return Err(format!(
+                                    "Maximum template nesting depth of {max_depth} exceeded"
+                                ));
+                            }
+                            let condition = Condition::parse(cond_str, max_depth)?;
+                            stack.push(Frame::If {
+                                condition,
+                                branches: Vec::new(),
+                                current_body: Vec::new(),
+                            });
+                        } else if let Some(cond_str) = content.strip_prefix("elif ") {
+                            let condition = Condition::parse(cond_str, max_depth)?;
+                            let last = stack.last_mut().ok_or_else(|| {
+                                "Unexpected {% elif %} without an open {% if %}".to_string()
+                            })?;
+                            match last {
+                                Frame::If {
+                                    condition: old_cond,
+                                    branches,
+                                    current_body,
+                                } => {
+                                    branches.push(ConditionalBranch {
+                                        condition: old_cond.clone(),
+                                        body: std::mem::take(current_body),
+                                    });
+                                    *old_cond = condition;
+                                }
+                                _ => {
+                                    return Err("Unexpected {% elif %} in this context".to_string());
+                                }
+                            }
+                        } else if content == "else" {
+                            let last = stack.pop().ok_or_else(|| {
+                                "Unexpected {% else %} without an open {% if %}".to_string()
+                            })?;
+                            match last {
+                                Frame::If {
+                                    condition,
+                                    mut branches,
+                                    current_body,
+                                } => {
+                                    branches.push(ConditionalBranch {
+                                        condition,
+                                        body: current_body,
+                                    });
+                                    stack.push(Frame::Else {
+                                        branches,
+                                        current_body: Vec::new(),
+                                    });
+                                }
+                                _ => {
+                                    return Err("Unexpected {% else %} in this context".to_string());
+                                }
+                            }
+                        } else if content == "endif" {
+                            let last = stack.pop().ok_or_else(|| {
+                                "Unexpected {% endif %} without an open {% if %}".to_string()
+                            })?;
+                            let (branches, fallback) = match last {
+                                Frame::If {
+                                    condition,
+                                    mut branches,
+                                    current_body,
+                                } => {
+                                    branches.push(ConditionalBranch {
+                                        condition,
+                                        body: current_body,
+                                    });
+                                    (branches, None)
+                                }
+                                Frame::Else {
+                                    branches,
+                                    current_body,
+                                } => (branches, Some(current_body)),
+                                Frame::Root(_) => {
+                                    return Err("Unexpected {% endif %}".to_string());
+                                }
+                            };
                             let frame = stack.last_mut().ok_or_else(|| {
                                 "Internal parser error: Missing root frame".to_string()
                             })?;
-                            push_literal(frame.body_mut(), raw, last_literal_start, i);
-                            let end_idx = next_i + end_rel;
-                            let content = raw[next_i + 1..end_idx].trim();
-
-                            if let Some(cond_str) = content.strip_prefix("if ") {
-                                if stack.len() > max_depth {
-                                    return Err(format!(
-                                        "Maximum template nesting depth of {max_depth} exceeded"
-                                    ));
-                                }
-                                let condition = Condition::parse(cond_str, max_depth)?;
-                                stack.push(Frame::If {
-                                    condition,
-                                    branches: Vec::new(),
-                                    current_body: Vec::new(),
-                                });
-                            } else if let Some(cond_str) = content.strip_prefix("elif ") {
-                                let condition = Condition::parse(cond_str, max_depth)?;
-                                let last = stack.last_mut().ok_or_else(|| {
-                                    "Unexpected {% elif %} without an open {% if %}".to_string()
-                                })?;
-                                match last {
-                                    Frame::If {
-                                        condition: old_cond,
-                                        branches,
-                                        current_body,
-                                    } => {
-                                        branches.push(ConditionalBranch {
-                                            condition: old_cond.clone(),
-                                            body: std::mem::take(current_body),
-                                        });
-                                        *old_cond = condition;
-                                    }
-                                    _ => {
-                                        return Err(
-                                            "Unexpected {% elif %} in this context".to_string()
-                                        );
-                                    }
-                                }
-                            } else if content == "else" {
-                                let last = stack.pop().ok_or_else(|| {
-                                    "Unexpected {% else %} without an open {% if %}".to_string()
-                                })?;
-                                match last {
-                                    Frame::If {
-                                        condition,
-                                        mut branches,
-                                        current_body,
-                                    } => {
-                                        branches.push(ConditionalBranch {
-                                            condition,
-                                            body: current_body,
-                                        });
-                                        stack.push(Frame::Else {
-                                            branches,
-                                            current_body: Vec::new(),
-                                        });
-                                    }
-                                    _ => {
-                                        return Err(
-                                            "Unexpected {% else %} in this context".to_string()
-                                        );
-                                    }
-                                }
-                            } else if content == "endif" {
-                                let last = stack.pop().ok_or_else(|| {
-                                    "Unexpected {% endif %} without an open {% if %}".to_string()
-                                })?;
-                                let (branches, fallback) = match last {
-                                    Frame::If {
-                                        condition,
-                                        mut branches,
-                                        current_body,
-                                    } => {
-                                        branches.push(ConditionalBranch {
-                                            condition,
-                                            body: current_body,
-                                        });
-                                        (branches, None)
-                                    }
-                                    Frame::Else {
-                                        branches,
-                                        current_body,
-                                    } => (branches, Some(current_body)),
-                                    Frame::Root(_) => {
-                                        return Err("Unexpected {% endif %}".to_string());
-                                    }
-                                };
-                                let frame = stack.last_mut().ok_or_else(|| {
-                                    "Internal parser error: Missing root frame".to_string()
-                                })?;
-                                frame
-                                    .body_mut()
-                                    .push(Token::Conditional { branches, fallback });
-                            } else {
-                                return Err(format!("Unknown control tag: {{% {content} %}}"));
-                            }
-
-                            while let Some(&(curr_i, _)) = chars.peek() {
-                                if curr_i <= end_idx + 1 {
-                                    chars.next();
-                                } else {
-                                    break;
-                                }
-                            }
-                            last_literal_start = end_idx + 2;
-                            continue;
+                            frame
+                                .body_mut()
+                                .push(Token::Conditional { branches, fallback });
+                        } else {
+                            return Err(format!("Unknown control tag: {{% {content} %}}"));
                         }
-                        return Err(format!("Unclosed control tag starting at index {i}"));
+
+                        while let Some(&(curr_i, _)) = chars.peek() {
+                            if curr_i <= end_idx + 1 {
+                                chars.next();
+                            } else {
+                                break;
+                            }
+                        }
+                        last_literal_start = end_idx + 2;
+                        continue;
                     }
                 }
 

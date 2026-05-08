@@ -2137,8 +2137,8 @@ fn test_resolve_target_alias_ordinal_synergy() {
     let cache = TemplateCache::new(100);
     let t = cache
         .get_or_compile("{*A:b1:subj} and {*A:b2:subj} arrive.")
-        .unwrap();
-    PerspectiveEngine::render(&t, &ctx).unwrap();
+        .expect("Failed to compile template");
+    PerspectiveEngine::render(&t, &ctx).expect("Failed to render template");
 
     // Because their display names are completely different ("Aldran" and "Malakor"), the
     // engine natively recognizes they do not collide, so it generates NO ordinals for them!

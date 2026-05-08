@@ -2632,6 +2632,17 @@ fn test_dynamic_tag_segment_injection() {
         PerspectiveEngine::render(&t3, &ctx).expect("Failed to render template"),
         "A sword hums."
     );
+
+    // Dynamic tag segment with multiple values
+    ctx.clear_anaphora();
+    let ctx_multi = ctx.with_variables("color", ["big", "red", "glowing"]);
+    let t_multi = cache
+        .get_or_compile("{A:$color:$target:obj}.")
+        .expect("Failed to compile template");
+    assert_eq!(
+        PerspectiveEngine::render(&t_multi, &ctx_multi).expect("Failed to render template"),
+        "A big red glowing sword."
+    );
 }
 
 #[test]
@@ -2884,24 +2895,29 @@ fn test_dynamic_variable_injection_with_entity_properties() {
     // 1. Directly interpolate string property into text
     let t1 = cache
         .get_or_compile("The box is {$room.box.color}.")
-        .unwrap();
+        .expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t1, &ctx).unwrap(),
+        PerspectiveEngine::render(&t1, &ctx).expect("Failed to render template"),
         "The box is red."
     );
 
     // 2. Use it structurally to inject adjectives
     let t2 = cache
         .get_or_compile("{*The:$room.box.color:room.box}.")
-        .unwrap();
+        .expect("Failed to compile template");
     assert_eq!(
-        PerspectiveEngine::render(&t2, &ctx).unwrap(),
+        PerspectiveEngine::render(&t2, &ctx).expect("Failed to render template"),
         "The red box."
     );
 
     // 3. Format ALL CAPS
-    let t3 = cache.get_or_compile("{$ROOM.BOX.COLOR} BOX!").unwrap();
-    assert_eq!(PerspectiveEngine::render(&t3, &ctx).unwrap(), "RED BOX!");
+    let t3 = cache
+        .get_or_compile("{$ROOM.BOX.COLOR} BOX!")
+        .expect("Failed to compile template");
+    assert_eq!(
+        PerspectiveEngine::render(&t3, &ctx).expect("Failed to render template"),
+        "RED BOX!"
+    );
 }
 
 #[test]

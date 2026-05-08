@@ -77,10 +77,10 @@ pub(crate) fn resolve_tag_segment<'a>(
                 return Ok(val);
             }
             if let Some(values) = ctx.variables.get(k.as_str()) {
-                if let Some(v) = values.first() {
-                    Ok(Cow::Borrowed(v.as_str()))
-                } else {
-                    Ok(Cow::Borrowed(""))
+                match values.as_slice() {
+                    [] => Ok(Cow::Borrowed("")),
+                    [single] => Ok(Cow::Borrowed(single.as_str())),
+                    _ => Ok(Cow::Owned(values.join(" "))),
                 }
             } else {
                 if let Some(fb) = fallback {
@@ -101,10 +101,15 @@ pub(crate) fn evaluate_condition_value_bool(
     match val {
         ConditionValue::Literal(s) => !s.is_empty() && !s.eq_ignore_ascii_case("false") && s != "0",
         ConditionValue::Number(n) => *n != 0.0,
-        ConditionValue::Variable(var) => ctx.variables.get(var.as_str()).is_some_and(|v| {
-            v.first()
-                .is_some_and(|f| !f.is_empty() && !f.eq_ignore_ascii_case("false") && f != "0")
-        }),
+        ConditionValue::Variable(var) => {
+            ctx.variables
+                .get(var.as_str())
+                .is_some_and(|v| match v.as_slice() {
+                    [] => false,
+                    [f] => !f.is_empty() && !f.eq_ignore_ascii_case("false") && f != "0",
+                    _ => true,
+                })
+        }
         ConditionValue::EntityProperty(ent, prop) => {
             if let Ok(entity) = pre_resolved
                 .get(ent.as_str())
@@ -127,11 +132,13 @@ pub(crate) fn evaluate_condition_value_string<'a>(
     match val {
         ConditionValue::Literal(s) => Some(Cow::Borrowed(s.as_str())),
         ConditionValue::Number(n) => Some(Cow::Owned(n.to_string())),
-        ConditionValue::Variable(var) => ctx
-            .variables
-            .get(var.as_str())
-            .and_then(|v| v.first())
-            .map(|s| Cow::Borrowed(s.as_str())),
+        ConditionValue::Variable(var) => {
+            ctx.variables.get(var.as_str()).map(|v| match v.as_slice() {
+                [] => Cow::Borrowed(""),
+                [single] => Cow::Borrowed(single.as_str()),
+                _ => Cow::Owned(v.join(" ")),
+            })
+        }
         ConditionValue::EntityProperty(ent, prop) => {
             if let Ok(entity) = pre_resolved
                 .get(ent.as_str())

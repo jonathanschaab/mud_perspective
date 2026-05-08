@@ -1042,6 +1042,12 @@ impl PerspectiveEngine {
             is_viewer = false;
         }
 
+        let forced_conjugation = match ctx.tense {
+            crate::models::Tense::Present => forced_present.as_deref(),
+            crate::models::Tense::Past => forced_past.as_deref(),
+            crate::models::Tense::Future => None,
+        };
+
         if let Some(d_key) = dynamic_key {
             return Self::render_dynamic_verb_key(
                 ctx,
@@ -1052,40 +1058,13 @@ impl PerspectiveEngine {
                 is_viewer,
                 is_plural,
                 pre_resolved,
+                forced_conjugation,
             );
         }
 
-        let forced_conjugation = match ctx.tense {
-            crate::models::Tense::Present => forced_present.as_ref(),
-            crate::models::Tense::Past => forced_past.as_ref(),
-            crate::models::Tense::Future => None,
-        };
-
         let conjugated = if let Some(forced) = forced_conjugation {
-            // Note: `forced` only contains the override segments for the requested tense.
-            let forced_str = match forced.as_slice() {
-                [first, second] => {
-                    if !is_viewer && !is_plural {
-                        second
-                    } else {
-                        first
-                    }
-                }
-                [first, second, third] => {
-                    if is_viewer
-                        && ctx.stance == crate::models::ActorStance::FirstPerson
-                        && !is_plural
-                    {
-                        first
-                    } else if !is_viewer && !is_plural {
-                        third
-                    } else {
-                        second
-                    }
-                }
-                [first, ..] => first,
-                [] => original_verb,
-            };
+            let forced_str =
+                Self::get_forced_override(forced, original_verb, is_viewer, is_plural, ctx.stance);
             crate::grammar::format_verb(forced_str, flags.is_capitalized())
         } else {
             conjugate_verb(
@@ -1102,6 +1081,36 @@ impl PerspectiveEngine {
         Ok(())
     }
 
+    #[inline]
+    fn get_forced_override<'a>(
+        forced: &'a [String],
+        base_verb: &'a str,
+        is_viewer: bool,
+        is_plural: bool,
+        stance: crate::models::ActorStance,
+    ) -> &'a str {
+        match forced {
+            [first, second] => {
+                if !is_viewer && !is_plural {
+                    second
+                } else {
+                    first
+                }
+            }
+            [first, second, third] => {
+                if is_viewer && stance == crate::models::ActorStance::FirstPerson && !is_plural {
+                    first
+                } else if !is_viewer && !is_plural {
+                    third
+                } else {
+                    second
+                }
+            }
+            [first, ..] => first,
+            [] => base_verb,
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn render_dynamic_verb_key(
         ctx: &RenderContext,
@@ -1112,23 +1121,32 @@ impl PerspectiveEngine {
         is_viewer: bool,
         is_plural: bool,
         pre_resolved: &HashMap<&str, &dyn TemplateEntity>,
+        forced_conjugation: Option<&[String]>,
     ) -> Result<(), String> {
         let mut conjugated_verbs = Vec::new();
+
+        let evaluate_verb = |base_verb: &str, is_cap: bool| -> std::borrow::Cow<'static, str> {
+            if let Some(forced) = forced_conjugation {
+                let forced_str =
+                    Self::get_forced_override(forced, base_verb, is_viewer, is_plural, ctx.stance);
+                std::borrow::Cow::Owned(
+                    crate::grammar::format_verb(forced_str, is_cap).into_owned(),
+                )
+            } else {
+                let v_lower = base_verb.to_lowercase();
+                std::borrow::Cow::Owned(
+                    conjugate_verb(
+                        base_verb, &v_lower, is_cap, is_viewer, is_plural, ctx.stance, ctx.tense,
+                    )
+                    .into_owned(),
+                )
+            }
+        };
 
         if let Some(val) =
             crate::evaluator::resolve_entity_property(ctx, d_key, dynamic_fallback, pre_resolved)?
         {
-            let v_lower = val.to_lowercase();
-            let conjugated = conjugate_verb(
-                &val,
-                &v_lower,
-                flags.is_capitalized(),
-                is_viewer,
-                is_plural,
-                ctx.stance,
-                ctx.tense,
-            );
-            conjugated_verbs.push(conjugated.into_owned().into());
+            conjugated_verbs.push(evaluate_verb(val.as_ref(), flags.is_capitalized()));
         }
 
         if conjugated_verbs.is_empty() {
@@ -1137,29 +1155,15 @@ impl PerspectiveEngine {
                     return Ok(());
                 }
                 for (i, v) in verbs.iter().enumerate() {
-                    let v_lower = v.to_lowercase();
                     let cap_this = if i == 0 {
                         flags.is_capitalized()
                     } else {
                         false
                     };
-                    let conjugated = conjugate_verb(
-                        v, &v_lower, cap_this, is_viewer, is_plural, ctx.stance, ctx.tense,
-                    );
-                    conjugated_verbs.push(conjugated.into_owned().into());
+                    conjugated_verbs.push(evaluate_verb(v.as_str(), cap_this));
                 }
             } else if let Some(fb) = dynamic_fallback {
-                let fb_lower = fb.to_lowercase();
-                let conjugated = conjugate_verb(
-                    fb,
-                    &fb_lower,
-                    flags.is_capitalized(),
-                    is_viewer,
-                    is_plural,
-                    ctx.stance,
-                    ctx.tense,
-                );
-                conjugated_verbs.push(conjugated.into_owned().into());
+                conjugated_verbs.push(evaluate_verb(fb, flags.is_capitalized()));
             } else {
                 tracing::error!("Missing dynamic verb variable for key '{d_key}'");
                 return Err(format!("Missing variable for key: {d_key}"));

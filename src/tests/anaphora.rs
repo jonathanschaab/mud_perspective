@@ -114,8 +114,8 @@ fn test_anaphora_ambiguity_resolution() {
         .get_or_compile(
             "{*the:goblin:subj} [goblin:hit] {*A:aldran:obj}. {a:aldran:Subj} [aldran:smile].",
         )
-        .unwrap();
-    let out1 = PerspectiveEngine::render(&t1, &ctx).unwrap();
+        .expect("Failed to compile template");
+    let out1 = PerspectiveEngine::render(&t1, &ctx).expect("Failed to render template");
     assert_eq!(out1, "The goblin hits Aldran. He smiles.");
 
     // 2. Ambiguous object reference (Bob -> Male, Aldran -> Male)
@@ -123,8 +123,8 @@ fn test_anaphora_ambiguity_resolution() {
     ctx.clear_anaphora();
     let t2 = cache
         .get_or_compile("{*A:bob:subj} [bob:hit] {*A:aldran:obj}. {a:aldran:Subj} [aldran:smile].")
-        .unwrap();
-    let out2 = PerspectiveEngine::render(&t2, &ctx).unwrap();
+        .expect("Failed to compile template");
+    let out2 = PerspectiveEngine::render(&t2, &ctx).expect("Failed to render template");
     assert_eq!(out2, "Bob hits Aldran. Aldran smiles.");
 
     // 3. Ambiguous object reference with 3+ entities (Jill -> Female, Bob -> Male, Aldran -> Male)
@@ -135,8 +135,8 @@ fn test_anaphora_ambiguity_resolution() {
         .get_or_compile(
             "{*A:jill:subj} [jill:tell] {*A:bob:obj} about {*A:aldran:obj}. {a:aldran:Subj} [aldran:smile].",
         )
-        .unwrap();
-    let out3 = PerspectiveEngine::render(&t3, &ctx).unwrap();
+        .expect("Failed to compile template");
+    let out3 = PerspectiveEngine::render(&t3, &ctx).expect("Failed to render template");
     // Because Bob is in the `recent_entities` memory, "He" is correctly bypassed!
     assert_eq!(out3, "Jill tells Bob about Aldran. Aldran smiles.");
 }

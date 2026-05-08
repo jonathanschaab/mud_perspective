@@ -157,6 +157,8 @@ fn tokenize_expr(s: &str) -> Result<Vec<ExprToken>, String> {
                                 'u' => process_unicode_escape(&mut chars, &mut s),
                                 _ => s.push(escaped_c), // handles \", \', and \\ naturally
                             }
+                        } else {
+                            s.push('\\');
                         }
                     } else if n == quote {
                         chars.next();

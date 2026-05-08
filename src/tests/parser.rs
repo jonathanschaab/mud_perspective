@@ -671,6 +671,25 @@ fn test_conditional_and_comment_parsing() {
     } else {
         panic!("Expected Conditional token");
     }
+
+    // 3. String literals inside conditionals shouldn't close the tag prematurely
+    let t_escape = Template::compile(r#"{% if $a == "a %} b" %} Inside {% endif %}"#)
+        .expect("Failed to compile template");
+
+    if let Token::Conditional { branches, .. } = &t_escape.tokens[0] {
+        if let crate::parser::Condition::Eq(_, crate::parser::ConditionValue::Literal(s)) =
+            &branches[0].condition
+        {
+            assert_eq!(s, "a %} b");
+        } else {
+            panic!("Expected Eq");
+        }
+        if let Token::Literal(ref l) = branches[0].body[0] {
+            assert_eq!(l, " Inside ");
+        }
+    } else {
+        panic!("Expected Conditional token");
+    }
 }
 
 #[test]
@@ -763,5 +782,38 @@ fn test_tag_internal_escapes() {
         assert_eq!(fallback.as_deref(), Some("a } b"));
     } else {
         panic!("Expected VariableRef");
+    }
+
+    // 5. To include a trailing backslash, the backslash itself must be escaped
+    let raw5 = r#"{$var ?? "trailing\\"}"#;
+    let t5 = Template::compile(raw5).expect("Failed to compile template");
+    if let Token::VariableRef { fallback, .. } = &t5.tokens[0] {
+        assert_eq!(fallback.as_deref(), Some("trailing\\"));
+    } else {
+        panic!("Expected VariableRef");
+    }
+
+    // 6. An unescaped quote at the end means the string never closed!
+    let raw6 = r#"{$var ?? "trailing\"}"#;
+    let err6 = Template::compile(raw6).expect_err("Expected compilation to fail");
+    assert_eq!(err6, "Unclosed entity tag starting at index 0");
+}
+
+#[test]
+fn test_literal_unicode_escapes() {
+    // 1. Standard unicode escape inside literal text
+    let t1 = Template::compile(r"I love \u{2764} MUDs!").expect("Failed to compile template");
+    if let Token::Literal(ref l) = t1.tokens[0] {
+        assert_eq!(l, "I love ❤ MUDs!");
+    } else {
+        panic!("Expected Literal token");
+    }
+
+    // 2. Sequential unicode escapes
+    let t2 = Template::compile(r"\u{1F525}\u{1F525}").expect("Failed to compile template");
+    if let Token::Literal(ref l) = t2.tokens[0] {
+        assert_eq!(l, "🔥🔥");
+    } else {
+        panic!("Expected Literal token");
     }
 }
