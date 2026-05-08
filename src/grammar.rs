@@ -299,7 +299,7 @@ pub fn conjugate_verb<'a>(
     }
 
     if tense == Tense::Present && (is_viewer || is_plural) {
-        return Cow::Borrowed(original_verb);
+        return capitalize_cow(Cow::Borrowed(original_verb), is_capitalized);
     }
 
     // 1. Check full string against runtime overrides
@@ -326,9 +326,15 @@ pub fn conjugate_verb<'a>(
             let word = if tense == Tense::Past { past } else { present };
             format_verb(word, is_capitalized)
         } else if tense == Tense::Past {
-            conjugate_regular_past_verb(first_word_original, first_word_lower)
+            capitalize_cow(
+                conjugate_regular_past_verb(first_word_original, first_word_lower),
+                is_capitalized,
+            )
         } else {
-            conjugate_regular_verb(first_word_original, first_word_lower)
+            capitalize_cow(
+                conjugate_regular_verb(first_word_original, first_word_lower),
+                is_capitalized,
+            )
         };
 
         let mut s = conjugated_first.into_owned();
@@ -339,9 +345,15 @@ pub fn conjugate_verb<'a>(
 
     // 4. Standard fallback for single words
     if tense == Tense::Past {
-        conjugate_regular_past_verb(original_verb, lower_verb)
+        capitalize_cow(
+            conjugate_regular_past_verb(original_verb, lower_verb),
+            is_capitalized,
+        )
     } else {
-        conjugate_regular_verb(original_verb, lower_verb)
+        capitalize_cow(
+            conjugate_regular_verb(original_verb, lower_verb),
+            is_capitalized,
+        )
     }
 }
 

@@ -726,8 +726,8 @@ fn test_resolve_target_inline_adjectives_tracking() {
     // Render a template that injects "gleaming" inline!
     let t = cache
         .get_or_compile("{*A:goblin:subj} draws {goblin's gleaming:sword:obj}.")
-        .unwrap();
-    PerspectiveEngine::render(&t, &ctx).unwrap();
+        .expect("Failed to compile template");
+    PerspectiveEngine::render(&t, &ctx).expect("Failed to render template");
 
     // Now, the anaphora memory tracks the rendered adjective!
     let m = ctx.resolve_target("gleaming sword");
@@ -763,8 +763,8 @@ fn test_resolve_target_inline_adjectives_strips_ansi() {
 
     let t = cache
         .get_or_compile("{*A:goblin:subj} draws {goblin's \x1b[31mgleaming\x1b[0m:sword:obj}.")
-        .unwrap();
-    PerspectiveEngine::render(&t, &ctx).unwrap();
+        .expect("Failed to compile template");
+    PerspectiveEngine::render(&t, &ctx).expect("Failed to render template");
 
     // It should have stripped the ANSI codes and tracked just "gleaming"
     let m = ctx.resolve_target("gleaming sword");
@@ -796,8 +796,8 @@ fn test_resolve_target_inline_adjectives_cleared_on_reset() {
 
     let t = cache
         .get_or_compile("{*A:goblin:subj} draws {goblin's gleaming:sword:obj}.")
-        .unwrap();
-    PerspectiveEngine::render(&t, &ctx).unwrap();
+        .expect("Failed to compile template");
+    PerspectiveEngine::render(&t, &ctx).expect("Failed to render template");
 
     // The adjective is tracked initially
     let m1 = ctx.resolve_target("gleaming sword");
@@ -854,8 +854,8 @@ fn test_resolve_target_dynamic_adjective_mutation() {
     // Seed the anaphora memory
     let t = cache
         .get_or_compile("{*A:target:subj} [target:growl].")
-        .unwrap();
-    PerspectiveEngine::render(&t, &ctx).unwrap();
+        .expect("Failed to compile template");
+    PerspectiveEngine::render(&t, &ctx).expect("Failed to render template");
 
     // 1. Initial state: "three-legged" is not a valid adjective yet.
     assert_eq!(ctx.resolve_target("three-legged wolf").len(), 0);
@@ -1169,8 +1169,8 @@ fn test_resolve_target_deep_ordinal_natively() {
     // Seed ordinals using narrative possessives
     let t = cache
         .get_or_compile("{*A:g1:subj} grabs {g1's s1:obj} and {g1's s2:obj}.")
-        .unwrap();
-    PerspectiveEngine::render(&t, &ctx).unwrap();
+        .expect("Failed to compile template");
+    PerspectiveEngine::render(&t, &ctx).expect("Failed to render template");
 
     // 1. Resolve the natural language phrase without requiring manual parsing!
     let m1 = ctx.resolve_target("the goblin's second sword");
@@ -2137,8 +2137,8 @@ fn test_resolve_target_alias_ordinal_synergy() {
     let cache = TemplateCache::new(100);
     let t = cache
         .get_or_compile("{*A:b1:subj} and {*A:b2:subj} arrive.")
-        .unwrap();
-    PerspectiveEngine::render(&t, &ctx).unwrap();
+        .expect("Failed to compile template");
+    PerspectiveEngine::render(&t, &ctx).expect("Failed to render template");
 
     // Because their display names are completely different ("Aldran" and "Malakor"), the
     // engine natively recognizes they do not collide, so it generates NO ordinals for them!

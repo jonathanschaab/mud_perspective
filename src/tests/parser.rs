@@ -177,6 +177,19 @@ fn test_empty_tag_parts_return_errors() {
         err13,
         "Verb tag has too many forced past conjugation segments: [source:be|am|are|is;was|were|was|were]"
     );
+
+    let err14 =
+        Template::compile("The weather is {$ }.").expect_err("Expected compilation to fail");
+    assert_eq!(err14, "Variable tag has an empty key: {$ }");
+
+    let err15 = Template::compile("Text {# comment").expect_err("Expected compilation to fail");
+    assert_eq!(err15, "Unclosed comment starting at index 5");
+
+    let err16 = Template::compile("Text {% if $a").expect_err("Expected compilation to fail");
+    assert_eq!(err16, "Unclosed control tag starting at index 5");
+
+    let err17 = Template::compile("Text {% if $a %} B").expect_err("Expected compilation to fail");
+    assert_eq!(err17, "Unclosed {% if %} tag at the end of the template");
 }
 
 #[test]
@@ -452,11 +465,14 @@ fn test_inline_adjectives_ast_parsing() {
         ..
     } = &t1.tokens[0]
     {
-        assert_eq!(key, "sword");
-        assert_eq!(article.as_deref(), None);
-        assert_eq!(p_type.as_deref(), None);
-        assert_eq!(owner_key.as_deref(), None);
-        assert_eq!(adjectives.as_deref(), Some("glowing ")); // Note: parser appends a trailing space natively
+        assert_eq!(key, &crate::parser::TagSegment::Literal("sword".into()));
+        assert_eq!(article.as_ref(), None);
+        assert_eq!(p_type.as_ref(), None);
+        assert_eq!(owner_key.as_ref(), None);
+        assert_eq!(
+            adjectives.as_ref(),
+            Some(&crate::parser::TagSegment::Literal("glowing".into()))
+        );
     } else {
         panic!("Expected EntityRef token");
     }
@@ -472,11 +488,17 @@ fn test_inline_adjectives_ast_parsing() {
         ..
     } = &t2.tokens[0]
     {
-        assert_eq!(key, "shield");
-        assert_eq!(article.as_deref(), Some("The"));
-        assert_eq!(p_type.as_deref(), None);
-        assert_eq!(owner_key.as_deref(), None);
-        assert_eq!(adjectives.as_deref(), Some("rusty "));
+        assert_eq!(key, &crate::parser::TagSegment::Literal("shield".into()));
+        assert_eq!(
+            article.as_ref(),
+            Some(&crate::parser::TagSegment::Literal("The".into()))
+        );
+        assert_eq!(p_type.as_ref(), None);
+        assert_eq!(owner_key.as_ref(), None);
+        assert_eq!(
+            adjectives.as_ref(),
+            Some(&crate::parser::TagSegment::Literal("rusty".into()))
+        );
     } else {
         panic!("Expected EntityRef token");
     }
@@ -492,11 +514,17 @@ fn test_inline_adjectives_ast_parsing() {
         ..
     } = &t3.tokens[0]
     {
-        assert_eq!(key, "wolf");
-        assert_eq!(article.as_deref(), None);
-        assert_eq!(p_type.as_deref(), Some("subj"));
-        assert_eq!(owner_key.as_deref(), None);
-        assert_eq!(adjectives.as_deref(), Some("big red "));
+        assert_eq!(key, &crate::parser::TagSegment::Literal("wolf".into()));
+        assert_eq!(article.as_ref(), None);
+        assert_eq!(
+            p_type.as_ref(),
+            Some(&crate::parser::TagSegment::Literal("subj".into()))
+        );
+        assert_eq!(owner_key.as_ref(), None);
+        assert_eq!(
+            adjectives.as_ref(),
+            Some(&crate::parser::TagSegment::Literal("big red".into()))
+        );
     } else {
         panic!("Expected EntityRef token");
     }
@@ -512,11 +540,20 @@ fn test_inline_adjectives_ast_parsing() {
         ..
     } = &t4.tokens[0]
     {
-        assert_eq!(key, "wolf");
-        assert_eq!(article.as_deref(), Some("A"));
-        assert_eq!(p_type.as_deref(), Some("subj"));
-        assert_eq!(owner_key.as_deref(), None);
-        assert_eq!(adjectives.as_deref(), Some("big red "));
+        assert_eq!(key, &crate::parser::TagSegment::Literal("wolf".into()));
+        assert_eq!(
+            article.as_ref(),
+            Some(&crate::parser::TagSegment::Literal("A".into()))
+        );
+        assert_eq!(
+            p_type.as_ref(),
+            Some(&crate::parser::TagSegment::Literal("subj".into()))
+        );
+        assert_eq!(owner_key.as_ref(), None);
+        assert_eq!(
+            adjectives.as_ref(),
+            Some(&crate::parser::TagSegment::Literal("big red".into()))
+        );
     } else {
         panic!("Expected EntityRef token");
     }
@@ -532,12 +569,251 @@ fn test_inline_adjectives_ast_parsing() {
         ..
     } = &t5.tokens[0]
     {
-        assert_eq!(key, "sword");
-        assert_eq!(article.as_deref(), None);
-        assert_eq!(p_type.as_deref(), None);
-        assert_eq!(owner_key.as_deref(), Some("aldran"));
-        assert_eq!(adjectives.as_deref(), Some("glowing "));
+        assert_eq!(key, &crate::parser::TagSegment::Literal("sword".into()));
+        assert_eq!(article.as_ref(), None);
+        assert_eq!(p_type.as_ref(), None);
+        assert_eq!(
+            owner_key.as_ref(),
+            Some(&crate::parser::TagSegment::Literal("aldran".into()))
+        );
+        assert_eq!(
+            adjectives.as_ref(),
+            Some(&crate::parser::TagSegment::Literal("glowing".into()))
+        );
     } else {
         panic!("Expected EntityRef token");
+    }
+}
+
+#[test]
+fn test_dynamic_verb_ast_parsing() {
+    let t1 = Template::compile("[source:$action]").expect("Failed to compile template");
+    if let Token::VerbRef {
+        subject_key,
+        dynamic_key,
+        ..
+    } = &t1.tokens[0]
+    {
+        assert_eq!(
+            subject_key.as_ref(),
+            Some(&crate::parser::TagSegment::Literal("source".into()))
+        );
+        assert_eq!(dynamic_key.as_deref(), Some("action"));
+    } else {
+        panic!("Expected VerbRef token");
+    }
+}
+
+#[test]
+fn test_dynamic_variable_ast_parsing() {
+    let t1 = Template::compile("{$weather}").expect("Failed to compile template");
+    if let Token::VariableRef {
+        key,
+        fallback,
+        flags,
+    } = &t1.tokens[0]
+    {
+        assert_eq!(key, "weather");
+        assert_eq!(fallback.as_ref(), None);
+        assert!(!flags.is_capitalized());
+        assert!(!flags.contains(crate::parser::TagFlags::ALL_CAPS));
+    } else {
+        panic!("Expected VariableRef token");
+    }
+}
+
+#[test]
+fn test_conditional_and_comment_parsing() {
+    // 1. Comments should vanish cleanly from the AST
+    let t_comment = Template::compile("A {# hidden #} B").expect("Failed to compile template");
+    assert_eq!(t_comment.tokens.len(), 1); // "A " and " B" merge organically!
+    if let Token::Literal(ref l) = t_comment.tokens[0] {
+        assert_eq!(l, "A  B");
+    }
+
+    // 2. Conditionals AST structure
+    let t_cond = Template::compile(
+        "{% if $rain %} Raining {% elif $snow %} Snowing {% else %} Sunny {% endif %}",
+    )
+    .expect("Failed to compile template");
+
+    assert_eq!(t_cond.tokens.len(), 1);
+    if let Token::Conditional { branches, fallback } = &t_cond.tokens[0] {
+        assert_eq!(branches.len(), 2);
+
+        // First branch
+        assert_eq!(
+            branches[0].condition,
+            crate::parser::Condition::Value(crate::parser::ConditionValue::Variable(
+                "rain".to_string()
+            ))
+        );
+        if let Token::Literal(ref l) = branches[0].body[0] {
+            assert_eq!(l, " Raining ");
+        }
+
+        // Second branch
+        assert_eq!(
+            branches[1].condition,
+            crate::parser::Condition::Value(crate::parser::ConditionValue::Variable(
+                "snow".to_string()
+            ))
+        );
+        if let Token::Literal(ref l) = branches[1].body[0] {
+            assert_eq!(l, " Snowing ");
+        }
+
+        // Fallback (else)
+        let fb = fallback.as_ref().expect("Expected else block");
+        if let Token::Literal(ref l) = fb[0] {
+            assert_eq!(l, " Sunny ");
+        }
+    } else {
+        panic!("Expected Conditional token");
+    }
+
+    // 3. String literals inside conditionals shouldn't close the tag prematurely
+    let t_escape = Template::compile(r#"{% if $a == "a %} b" %} Inside {% endif %}"#)
+        .expect("Failed to compile template");
+
+    if let Token::Conditional { branches, .. } = &t_escape.tokens[0] {
+        if let crate::parser::Condition::Eq(_, crate::parser::ConditionValue::Literal(s)) =
+            &branches[0].condition
+        {
+            assert_eq!(s, "a %} b");
+        } else {
+            panic!("Expected Eq");
+        }
+        if let Token::Literal(ref l) = branches[0].body[0] {
+            assert_eq!(l, " Inside ");
+        }
+    } else {
+        panic!("Expected Conditional token");
+    }
+}
+
+#[test]
+fn test_line_continuation() {
+    // 1. Unix style (\n)
+    let t1 = Template::compile("Hello \\\n    world!").expect("Failed to compile template");
+    assert_eq!(t1.tokens.len(), 1);
+    if let Token::Literal(ref l) = t1.tokens[0] {
+        assert_eq!(l, "Hello world!");
+    }
+
+    // 2. Windows style with tabs (\r\n)
+    let t2 = Template::compile("Hello \\\r\n\tworld!").expect("Failed to compile template");
+    assert_eq!(t2.tokens.len(), 1);
+    if let Token::Literal(ref l) = t2.tokens[0] {
+        assert_eq!(l, "Hello world!");
+    }
+
+    // 3. Trailing backslash shouldn't panic
+    let t3 = Template::compile("Trailing slash\\").expect("Failed to compile template");
+    if let Token::Literal(ref l) = t3.tokens[0] {
+        assert_eq!(l, "Trailing slash\\");
+    }
+}
+
+#[test]
+fn test_expression_literal_escapes() {
+    // Test that escaped quotes, newlines, tabs, backslashes, and Unicode blocks
+    // are correctly processed inside string literals within conditional expressions.
+    let raw = r#"{% if $var == "Line 1\nLine 2\t\"Escaped\" \\\u{2764}" %} Match {% endif %}"#;
+    let t = Template::compile(raw).expect("Failed to compile template");
+
+    if let Token::Conditional { branches, .. } = &t.tokens[0] {
+        if let crate::parser::Condition::Eq(_, crate::parser::ConditionValue::Literal(s)) =
+            &branches[0].condition
+        {
+            assert_eq!(s, "Line 1\nLine 2\t\"Escaped\" \\\u{2764}");
+        } else {
+            panic!("Expected Eq condition with literal right side");
+        }
+    } else {
+        panic!("Expected Conditional token");
+    }
+
+    // Test raw string literal with backticks
+    let raw2 = r#"{% if $var == `Raw \n \t "String" \\` %} Match {% endif %}"#;
+    let t2 = Template::compile(raw2).expect("Failed to compile template");
+    if let Token::Conditional { branches, .. } = &t2.tokens[0] {
+        if let crate::parser::Condition::Eq(_, crate::parser::ConditionValue::Literal(s)) =
+            &branches[0].condition
+        {
+            assert_eq!(s, r#"Raw \n \t "String" \\"#);
+        }
+    }
+}
+
+#[test]
+fn test_tag_internal_escapes() {
+    // 1. Escaping closing braces inside a fallback string
+    let raw = r#"{$var ?? "a \} b"}"#;
+    let t = Template::compile(raw).expect("Failed to compile template");
+    if let Token::VariableRef { fallback, .. } = &t.tokens[0] {
+        assert_eq!(fallback.as_deref(), Some("a } b"));
+    } else {
+        panic!("Expected VariableRef");
+    }
+
+    // 2. Unescaping newlines and unicode in fallback strings
+    let raw2 = r#"{$var ?? "Line 1\nLine 2 \u{2728}"}"#;
+    let t2 = Template::compile(raw2).expect("Failed to compile template");
+    if let Token::VariableRef { fallback, .. } = &t2.tokens[0] {
+        assert_eq!(fallback.as_deref(), Some("Line 1\nLine 2 ✨"));
+    } else {
+        panic!("Expected VariableRef");
+    }
+
+    // 3. Nested quotes inside fallback strings
+    let raw3 = r#"{$var ?? "'Nested'"}"#;
+    let t3 = Template::compile(raw3).expect("Failed to compile template");
+    if let Token::VariableRef { fallback, .. } = &t3.tokens[0] {
+        assert_eq!(fallback.as_deref(), Some("'Nested'"));
+    } else {
+        panic!("Expected VariableRef");
+    }
+
+    // 4. Single quoted fallback strings with internal braces
+    let raw4 = r#"{$var ?? 'a } b'}"#;
+    let t4 = Template::compile(raw4).expect("Failed to compile template");
+    if let Token::VariableRef { fallback, .. } = &t4.tokens[0] {
+        assert_eq!(fallback.as_deref(), Some("a } b"));
+    } else {
+        panic!("Expected VariableRef");
+    }
+
+    // 5. To include a trailing backslash, the backslash itself must be escaped
+    let raw5 = r#"{$var ?? "trailing\\"}"#;
+    let t5 = Template::compile(raw5).expect("Failed to compile template");
+    if let Token::VariableRef { fallback, .. } = &t5.tokens[0] {
+        assert_eq!(fallback.as_deref(), Some("trailing\\"));
+    } else {
+        panic!("Expected VariableRef");
+    }
+
+    // 6. An unescaped quote at the end means the string never closed!
+    let raw6 = r#"{$var ?? "trailing\"}"#;
+    let err6 = Template::compile(raw6).expect_err("Expected compilation to fail");
+    assert_eq!(err6, "Unclosed entity tag starting at index 0");
+}
+
+#[test]
+fn test_literal_unicode_escapes() {
+    // 1. Standard unicode escape inside literal text
+    let t1 = Template::compile(r"I love \u{2764} MUDs!").expect("Failed to compile template");
+    if let Token::Literal(ref l) = t1.tokens[0] {
+        assert_eq!(l, "I love ❤ MUDs!");
+    } else {
+        panic!("Expected Literal token");
+    }
+
+    // 2. Sequential unicode escapes
+    let t2 = Template::compile(r"\u{1F525}\u{1F525}").expect("Failed to compile template");
+    if let Token::Literal(ref l) = t2.tokens[0] {
+        assert_eq!(l, "🔥🔥");
+    } else {
+        panic!("Expected Literal token");
     }
 }

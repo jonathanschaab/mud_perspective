@@ -1209,6 +1209,129 @@ fn test_dynamic_future_tense_force_director_stance() {
 }
 
 #[test]
+fn test_dynamic_verb_injection() {
+    let player = MockEntity {
+        id: "char_1".to_string(),
+        name: "Aldran".to_string(),
+        gender: Gender::Male,
+        is_plural: false,
+        is_proper_noun: true,
+    };
+
+    let cache = TemplateCache::new(100);
+    let template = cache
+        .get_or_compile("{*A:source:subj} [source:$action].")
+        .expect("Failed to compile template");
+    let template_cap = cache
+        .get_or_compile("{*A:source:subj} [source:$Action].")
+        .expect("Failed to compile template");
+
+    // 1. Single dynamic verb
+    let ctx1 = RenderContext::new("char_2")
+        .with_entity("source", &player)
+        .with_variable("action", "smile");
+    assert_eq!(
+        PerspectiveEngine::render(&template, &ctx1).expect("Failed to render template"),
+        "Aldran smiles."
+    );
+    assert_eq!(
+        PerspectiveEngine::render(&template_cap, &ctx1).expect("Failed to render template"),
+        "Aldran Smiles."
+    );
+
+    // 2. Multiple dynamic verbs (Oxford comma formatting)
+    let ctx2 = RenderContext::new("char_2")
+        .with_entity("source", &player)
+        .with_variables("action", ["smile", "wave", "dance"]);
+    assert_eq!(
+        PerspectiveEngine::render(&template, &ctx2).expect("Failed to render template"),
+        "Aldran smiles, waves, and dances."
+    );
+
+    // 3. Tense shifting on dynamic verbs natively applies to all list members
+    let ctx3 = RenderContext::new("char_2")
+        .with_entity("source", &player)
+        .with_tense(crate::models::Tense::Past)
+        .with_variables("action", ["run", "jump"]);
+    assert_eq!(
+        PerspectiveEngine::render(&template, &ctx3).expect("Failed to render template"),
+        "Aldran ran and jumped."
+    );
+
+    // 4. Missing variable fails gracefully
+    let ctx4 = RenderContext::new("char_2").with_entity("source", &player);
+    assert!(PerspectiveEngine::render(&template, &ctx4).is_err());
+
+    // 5. Forced conjugations on dynamic verbs
+    let t_forced = cache
+        .get_or_compile("{*A:source:subj} [source:$action|am|are|is].")
+        .expect("Failed to compile template");
+    let ctx5 = RenderContext::new("char_2")
+        .with_entity("source", &player)
+        .with_variable("action", "smile"); // Base verb won't matter because of override
+    assert_eq!(
+        PerspectiveEngine::render(&t_forced, &ctx5).expect("Failed to render template"),
+        "Aldran is."
+    );
+
+    let ctx6 = RenderContext::new("char_1")
+        .with_stance(crate::models::ActorStance::FirstPerson)
+        .with_entity("source", &player)
+        .with_variable("action", "smile");
+    assert_eq!(
+        PerspectiveEngine::render(&t_forced, &ctx6).expect("Failed to render template"),
+        "I am."
+    );
+}
+
+#[test]
+fn test_dynamic_variable_injection() {
+    let cache = TemplateCache::new(100);
+
+    // 1. Single variable insertion
+    let t1 = cache
+        .get_or_compile("It is {$weather} today.")
+        .expect("Failed to compile template");
+    let ctx1 = RenderContext::new("viewer").with_variable("weather", "raining");
+    assert_eq!(
+        PerspectiveEngine::render(&t1, &ctx1).expect("Failed to render template"),
+        "It is raining today."
+    );
+
+    // 2. Capitalization and Oxford Comma listing
+    let t2 = cache
+        .get_or_compile("{$Colors} are my favorite.")
+        .expect("Failed to compile template");
+    let ctx2 = RenderContext::new("viewer").with_variables("colors", ["red", "green", "blue"]);
+    assert_eq!(
+        PerspectiveEngine::render(&t2, &ctx2).expect("Failed to render template"),
+        "Red, green, and blue are my favorite."
+    );
+
+    // 3. All Caps
+    let t3 = cache
+        .get_or_compile("IT IS {$WEATHER}!")
+        .expect("Failed to compile template");
+    assert_eq!(
+        PerspectiveEngine::render(&t3, &ctx1).expect("Failed to render template"),
+        "IT IS RAINING!"
+    );
+
+    // 4. Missing variable fails gracefully
+    let ctx_empty = RenderContext::new("viewer");
+    assert!(PerspectiveEngine::render(&t1, &ctx_empty).is_err());
+
+    // 5. Spacing resilience
+    let t4 = cache
+        .get_or_compile("It is { $weather } today.")
+        .expect("Failed to compile template");
+    assert_eq!(
+        PerspectiveEngine::render(&t4, &ctx1).expect("Failed to render template"),
+        "It is raining today."
+    );
+}
+
+#[test]
 fn test_all_twelve_english_tenses() {
     let player = MockEntity {
         id: "char_1".to_string(),
@@ -1399,17 +1522,19 @@ fn test_modal_verbs_perspectives() {
     // --- TEST 1: The modal verb "must" ---
     let template_must = cache
         .get_or_compile("{*A:source:subj} [source:must] flee from {*the:target:obj}!")
-        .unwrap();
+        .expect("Failed to compile template");
 
     // Actor Stance (Player is the one fleeing)
     let actor_must =
-        render_msg!("char_1", &template_must, "source" => &player, "target" => &goblin).unwrap();
+        render_msg!("char_1", &template_must, "source" => &player, "target" => &goblin)
+            .expect("Failed to render template");
     assert_eq!(actor_must, "You must flee from the Goblin!");
 
     // Director Stance (A bystander is watching the Player flee)
     // The engine should output "must", NOT "musts"
     let director_must =
-        render_msg!("char_3", &template_must, "source" => &player, "target" => &goblin).unwrap();
+        render_msg!("char_3", &template_must, "source" => &player, "target" => &goblin)
+            .expect("Failed to render template");
     assert_eq!(director_must, "Aldran must flee from the Goblin!");
 
     // --- TEST 2: Multiple modal verbs ("can" and "will") in a complex sentence ---
@@ -1417,17 +1542,18 @@ fn test_modal_verbs_perspectives() {
         .get_or_compile(
             "if {*a:source:subj} [source:can] catch {*the:target:obj}, {a:source:subj} [source:will] win.",
         )
-        .unwrap();
+        .expect("Failed to compile template");
 
     // Actor Stance
-    let actor_can =
-        render_msg!("char_1", &template_can, "source" => &player, "target" => &goblin).unwrap();
+    let actor_can = render_msg!("char_1", &template_can, "source" => &player, "target" => &goblin)
+        .expect("Failed to render template");
     assert_eq!(actor_can, "If you can catch the Goblin, you will win.");
 
     // Director Stance
     // The engine should output "can" and "will", NOT "cans" and "wills"
     let director_can =
-        render_msg!("char_3", &template_can, "source" => &player, "target" => &goblin).unwrap();
+        render_msg!("char_3", &template_can, "source" => &player, "target" => &goblin)
+            .expect("Failed to render template");
     assert_eq!(director_can, "If Aldran can catch the Goblin, he will win.");
 
     // --- TEST 3: Modal verbs interacting with plural targets ---
@@ -1676,22 +1802,25 @@ fn test_absolute_possessive_pronouns() {
     let cache = TemplateCache::new(100);
     let template = cache
         .get_or_compile("The victory is {:source:abs_poss}!")
-        .unwrap();
+        .expect("Failed to compile template");
 
-    let out_actor = render_msg!("char_1", &template, "source" => &player).unwrap();
+    let out_actor =
+        render_msg!("char_1", &template, "source" => &player).expect("Failed to render template");
     assert_eq!(out_actor, "The victory is yours!");
 
     // Seed the anaphora memory so it evaluates the pronoun instead of falling back to "Aldran's"
     let ctx_director = RenderContext::new("char_2")
         .with_entity("source", &player)
         .with_last_mentioned("source");
-    let out_director = PerspectiveEngine::render(&template, &ctx_director).unwrap();
+    let out_director =
+        PerspectiveEngine::render(&template, &ctx_director).expect("Failed to render template");
     assert_eq!(out_director, "The victory is his!");
 
     let ctx_plural = RenderContext::new("char_2")
         .with_entity("source", &wolves)
         .with_last_mentioned("source");
-    let out_plural = PerspectiveEngine::render(&template, &ctx_plural).unwrap();
+    let out_plural =
+        PerspectiveEngine::render(&template, &ctx_plural).expect("Failed to render template");
     assert_eq!(out_plural, "The victory is theirs!");
 }
 
@@ -1735,37 +1864,43 @@ fn test_dynamic_possessive_nouns() {
     let cache = TemplateCache::new(100);
     let template = cache
         .get_or_compile("You take {*the:target's:poss} gold.")
-        .unwrap();
+        .expect("Failed to compile template");
 
     // 1. Viewer
-    let out_viewer = render_msg!("char_1", &template, "target" => &player).unwrap();
+    let out_viewer =
+        render_msg!("char_1", &template, "target" => &player).expect("Failed to render template");
     assert_eq!(out_viewer, "You take your gold.");
 
     // 2. Singular Proper Noun
-    let out_proper = render_msg!("char_2", &template, "target" => &player).unwrap();
+    let out_proper =
+        render_msg!("char_2", &template, "target" => &player).expect("Failed to render template");
     assert_eq!(out_proper, "You take Aldran's gold.");
 
     // 3. Plural common noun ending in 's'
-    let out_plural = render_msg!("char_2", &template, "target" => &wolves).unwrap();
+    let out_plural =
+        render_msg!("char_2", &template, "target" => &wolves).expect("Failed to render template");
     assert_eq!(out_plural, "You take the wolves' gold.");
 
     // 4. Singular common noun ending in 's'
-    let out_boss = render_msg!("char_2", &template, "target" => &boss).unwrap();
+    let out_boss =
+        render_msg!("char_2", &template, "target" => &boss).expect("Failed to render template");
     assert_eq!(out_boss, "You take the boss's gold.");
 
     // 5. Group Entities with possessive suffixes
     // English attaches joint possessives to the final noun. The engine natively looks
     // at the end of the formatted list to determine if it should use 's or just '.
     let wolf_party = GroupEntity::new(vec![&player, &wolves]);
-    let out_wolf_party = render_msg!("char_2", &template, "target" => &wolf_party).unwrap();
+    let out_wolf_party = render_msg!("char_2", &template, "target" => &wolf_party)
+        .expect("Failed to render template");
     assert_eq!(out_wolf_party, "You take Aldran and the wolves' gold.");
 
     // 6. Forced Director Stance with Possessive Suffixes
     let template_forced = cache
         .get_or_compile("You take {*a:+target's:poss} gold.")
-        .unwrap();
+        .expect("Failed to compile template");
     // Even though the viewer is char_1 (the player), the + prefix overrides "your" to "Aldran's"
-    let out_forced = render_msg!("char_1", &template_forced, "target" => &player).unwrap();
+    let out_forced = render_msg!("char_1", &template_forced, "target" => &player)
+        .expect("Failed to render template");
     assert_eq!(out_forced, "You take Aldran's gold.");
 }
 

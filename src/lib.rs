@@ -26,6 +26,8 @@ pub mod cache;
 pub mod debug;
 /// The core AST and template rendering engine.
 pub mod engine;
+/// AST evaluation and variable resolution logic.
+pub mod evaluator;
 /// Grammar rules and NLP helpers for English.
 pub mod grammar;
 /// Core data structures and traits for perspective rendering.
