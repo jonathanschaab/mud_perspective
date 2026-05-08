@@ -755,4 +755,13 @@ fn test_tag_internal_escapes() {
     } else {
         panic!("Expected VariableRef");
     }
+
+    // 4. Single quoted fallback strings with internal braces
+    let raw4 = r#"{$var ?? 'a } b'}"#;
+    let t4 = Template::compile(raw4).expect("Failed to compile template");
+    if let Token::VariableRef { fallback, .. } = &t4.tokens[0] {
+        assert_eq!(fallback.as_deref(), Some("a } b"));
+    } else {
+        panic!("Expected VariableRef");
+    }
 }

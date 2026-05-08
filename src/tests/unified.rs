@@ -2982,9 +2982,18 @@ fn test_null_coalescing_fallback() {
         "Aldran punches!"
     );
 
-    // 4. Missing without fallback still fails
+    // 4. Fallback on Verb Conjugation via Entity Property!
     let t4 = cache
+        .get_or_compile("{*A:source:subj} [source:$source.missing_action ?? \"smash\"]!")
+        .expect("Failed to compile template");
+    assert_eq!(
+        PerspectiveEngine::render(&t4, &ctx).expect("Failed to render template"),
+        "Aldran smashes!"
+    );
+
+    // 5. Missing without fallback still fails
+    let t5 = cache
         .get_or_compile("It is {$weather}.")
         .expect("Failed to compile template");
-    assert!(PerspectiveEngine::render(&t4, &ctx).is_err());
+    assert!(PerspectiveEngine::render(&t5, &ctx).is_err());
 }
