@@ -4,7 +4,6 @@ use std::collections::HashMap;
 use crate::engine::{EntityRefParams, PerspectiveEngine};
 use crate::grammar::{resolve_article, resolve_pronoun};
 use crate::models::{RenderContext, TemplateEntity, is_same_entity};
-use crate::parser::TagFlags;
 
 bitflags::bitflags! {
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -343,11 +342,7 @@ fn format_group_member<'a>(
         && let Some(adj) = params.adjectives
         && !adj.is_empty()
     {
-        if params.flags.contains(TagFlags::ALL_CAPS) {
-            crate::typography::apply_all_caps(adj, &mut adj_prefix);
-        } else {
-            adj_prefix.push_str(adj);
-        }
+        adj_prefix.push_str(adj);
         adj_prefix.push(' ');
     }
 

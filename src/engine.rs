@@ -850,17 +850,10 @@ impl PerspectiveEngine {
         if let Some(adj) = active_params.adjectives
             && !adj.is_empty()
         {
-            let mut formatted_adj = String::new();
-            if active_params.flags.contains(TagFlags::ALL_CAPS) {
-                crate::typography::apply_all_caps(adj, &mut formatted_adj);
-            } else {
-                formatted_adj.push_str(adj);
-            }
-
             if !article_printed && cap_whole && !after_possessive {
-                raw_output.push_str(&crate::grammar::capitalize_first(&formatted_adj));
+                raw_output.push_str(&crate::grammar::capitalize_first(adj));
             } else {
-                raw_output.push_str(&formatted_adj);
+                raw_output.push_str(adj);
             }
             raw_output.push(' ');
             adj_printed = true;
